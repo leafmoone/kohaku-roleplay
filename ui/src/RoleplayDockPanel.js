@@ -5,19 +5,21 @@ import {
   collectGreetings,
   expandPlaceholders,
   extractSafePersonaDraft,
+  normalizeStateFields,
   projectNovelView,
 } from "./helpers.js";
 import { PortraitFrame } from "./PortraitFrame.js";
+import { StateFieldsView } from "./StateFieldsView.js";
 import { useRoleplayText } from "./strings.js";
 
 /**
  * Creature-scoped session dock panel for plugin:roleplay.
- * Switches between Persona Attachment, Tavern Play, and Novel Reader Projection
+ * Switches between Persona Attachment, Tavern Play, Novel Reader Projection, and NPC Actor
  * purely from owner.state; opening never advances any turn or writes state.
  */
 export const RoleplayDockPanel = {
   name: "RoleplayDockPanel",
-  components: { ActionButton, PortraitFrame },
+  components: { ActionButton, PortraitFrame, StateFieldsView },
   setup() {
     const owner = useOwner();
     const t = useRoleplayText();
@@ -49,6 +51,8 @@ export const RoleplayDockPanel = {
     const notesDirty = ref(false);
     const worldbookInput = ref(null);
     const worldbookError = ref("");
+    const resumingScene = ref(false);
+    const resumeError = ref("");
 
     const state = computed(() => owner.state.value || {});
     const mode = computed(() => {
@@ -71,6 +75,7 @@ export const RoleplayDockPanel = {
     const activeCardSummary = computed(
       () => cards.value.find((card) => card.id === state.value.cardId) || null,
     );
+    const tavernStateFields = computed(() => normalizeStateFields(state.value.stateFields));
     const novelView = computed(() => projectNovelView(state.value));
 
     async function loadCards() {
@@ -150,7 +155,11 @@ export const RoleplayDockPanel = {
     watch(
       () => state.value,
       (next) => {
-        if (next?.mode === "npc" || next?.mode === "novel") {
+        if (next?.mode === "novel") {
+          resumeError.value = "";
+          return;
+        }
+        if (next?.mode === "npc") {
           return;
         }
         if (next.cardId && !selectedCardId.value) {
@@ -312,6 +321,22 @@ export const RoleplayDockPanel = {
       }
     }
 
+    async function resumePendingScene() {
+      const pending = novelView.value.pendingScene;
+      if (!pending || busy.value || resumingScene.value) return;
+      resumingScene.value = true;
+      resumeError.value = "";
+      try {
+        await owner.call("resume_scene", { scene: pending.number });
+        await owner.refresh();
+        notify(t("novelResumeSentToast", { number: pending.number }), "info");
+      } catch (err) {
+        resumeError.value = err?.message || String(err);
+      } finally {
+        resumingScene.value = false;
+      }
+    }
+
     function openLibrarySettings() {
       try {
         openTab({ kind: "settings", id: "settings", section: "ext:kohaku-roleplay/library" });
@@ -352,6 +377,9 @@ export const RoleplayDockPanel = {
       notesDirty,
       worldbookInput,
       worldbookError,
+      tavernStateFields,
+      resumingScene,
+      resumeError,
       novelView,
       busy,
       actionError,
@@ -364,6 +392,7 @@ export const RoleplayDockPanel = {
       triggerWorldbookUpload,
       handleWorldbookFileChange,
       clearSessionWorldbook,
+      resumePendingScene,
       openLibrarySettings,
     };
   },
@@ -443,9 +472,28 @@ export const RoleplayDockPanel = {
             </div>
 
             <div v-if="novelView.pendingScene" class="ktrp-card-box" data-testid="kt-rp-novel-pending">
-              <p class="ktrp-muted">
-                {{ t('novelScenePending', { number: novelView.pendingScene.number }) }}
-              </p>
+              <div class="ktrp-row-between">
+                <p class="ktrp-muted">
+                  {{ t('novelScenePending', { number: novelView.pendingScene.number }) }}
+                </p>
+                <ActionButton
+                  size="sm"
+                  :disabled="busy || resumingScene"
+                  data-testid="kt-rp-novel-resume-btn"
+                  @click="resumePendingScene"
+                >
+                  {{ resumingScene ? t('novelResumingBtn') : t('novelResumeBtn') }}
+                </ActionButton>
+              </div>
+              <p class="ktrp-muted">{{ t('novelResumeHint') }}</p>
+              <div
+                v-if="resumeError"
+                class="ktrp-banner ktrp-banner--error"
+                role="alert"
+                data-testid="kt-rp-novel-resume-error"
+              >
+                <span>{{ resumeError }}</span>
+              </div>
             </div>
 
             <div class="ktrp-field-block">
@@ -470,7 +518,13 @@ export const RoleplayDockPanel = {
                       <strong>{{ actor.name }}</strong>
                       <span v-if="actor.role" class="ktrp-chip">{{ actor.role }}</span>
                     </div>
-                    <div class="ktrp-chip-row">
+                    <StateFieldsView
+                      v-if="actor.stateFields.length"
+                      :fields="actor.stateFields"
+                      compact
+                      :test-id="'kt-rp-novel-cast-state-' + actor.name"
+                    />
+                    <div v-if="Object.keys(actor.visibleStatus).length" class="ktrp-chip-row">
                       <span v-for="(val, key) in actor.visibleStatus" :key="key" class="ktrp-chip">
                         {{ key }}: {{ val }}
                       </span>
@@ -508,6 +562,15 @@ export const RoleplayDockPanel = {
                 {{ t('tavernOpeningSent') }}
               </span>
             </div>
+          </div>
+
+          <div
+            v-if="tavernStateFields.length"
+            class="ktrp-card-box"
+            data-testid="kt-rp-tavern-state-card"
+          >
+            <div class="ktrp-box-head">{{ t('cardStateTitle') }}</div>
+            <StateFieldsView :fields="tavernStateFields" test-id="kt-rp-tavern-state-fields" />
           </div>
 
           <div class="ktrp-card-box" data-testid="kt-rp-tavern-worldbook">

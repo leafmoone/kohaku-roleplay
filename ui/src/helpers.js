@@ -132,11 +132,47 @@ export function parseChoiceFence(source) {
 }
 
 /**
+ * Normalize public card-authored state fields from backend stateFields array.
+ * Strictly allowlists public display properties (never forwards options/private fields).
+ */
+export function normalizeStateFields(rawFields) {
+  if (!Array.isArray(rawFields)) return [];
+  const out = [];
+  for (const item of rawFields) {
+    if (!item || typeof item !== "object") continue;
+    const key = typeof item.key === "string" ? item.key.trim() : "";
+    const label = typeof item.label === "string" ? item.label.trim() : "";
+    const type = item.type;
+    if (!key || !label) continue;
+    if (type === "number") {
+      if (typeof item.value !== "number" || !Number.isFinite(item.value)) continue;
+      const entry = { key, label, type, value: item.value };
+      if (typeof item.min === "number" && Number.isFinite(item.min)) entry.min = item.min;
+      if (typeof item.max === "number" && Number.isFinite(item.max)) entry.max = item.max;
+      out.push(entry);
+    } else if (type === "list") {
+      const listVal = Array.isArray(item.value)
+        ? item.value.filter((v) => typeof v === "string")
+        : [];
+      out.push({ key, label, type, value: listVal });
+    } else if (type === "enum" || type === "text") {
+      out.push({
+        key,
+        label,
+        type,
+        value: typeof item.value === "string" ? item.value : String(item.value ?? ""),
+      });
+    }
+  }
+  return out;
+}
+
+/**
  * Strict allowlist projection for novel player view.
  * Aligns strictly to backend public schema:
  * - pendingScene: { number } only (never maps actor names / reports)
  * - latestProse: string (never reads private facts)
- * - cast: [{ name, cardId, hasPortrait, visibleStatus }]
+ * - cast: [{ name, cardId, hasPortrait, visibleStatus, stateFields }]
  */
 export function projectNovelView(state) {
   const src = state && typeof state === "object" ? state : {};
@@ -162,6 +198,7 @@ export function projectNovelView(state) {
         cardId: typeof entry.cardId === "string" ? entry.cardId : "",
         hasPortrait: Boolean(entry.hasPortrait),
         visibleStatus: visible,
+        stateFields: normalizeStateFields(entry.stateFields),
       };
     })
     .filter((entry) => entry.name);

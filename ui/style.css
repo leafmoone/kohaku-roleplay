@@ -400,6 +400,79 @@
   gap: 0.4rem;
 }
 
+.ktrp-state-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ktrp-state-list--compact {
+  gap: 0.35rem;
+  margin-top: 0.2rem;
+}
+
+.ktrp-state-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.4rem;
+  background: var(--color-bg);
+}
+
+.ktrp-state-list--compact .ktrp-state-item {
+  padding: 0.3rem 0.45rem;
+}
+
+.ktrp-state-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.ktrp-state-label {
+  font-size: var(--kt-fs-xs, 0.8125rem);
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.ktrp-state-num-wrap {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+}
+
+.ktrp-state-num {
+  font-size: var(--kt-fs-sm, 0.875rem);
+  font-variant-numeric: tabular-nums;
+}
+
+.ktrp-state-bounds {
+  color: var(--color-text-faint);
+  font-size: var(--kt-fs-2xs, 0.72rem);
+}
+
+.ktrp-state-meter {
+  height: 0.35rem;
+  width: 100%;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+}
+
+.ktrp-state-meter-fill {
+  height: 100%;
+  background: var(--color-accent, var(--color-text));
+  transition: width 160ms ease;
+}
+
+.ktrp-state-text {
+  font-size: var(--kt-fs-xs, 0.8125rem);
+}
+
 .ktrp-error-inline {
   margin: 0;
   color: var(--color-danger, #c45454);
