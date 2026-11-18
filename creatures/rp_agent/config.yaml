@@ -1,0 +1,16 @@
+name: rp_agent
+version: '1.0'
+system_prompt_file: system.md
+input:
+  type: cli
+output:
+  type: stdout
+  controller_direct: true
+fork_enabled: false
+plugins:
+  - name: roleplay
+    type: package
+    module: kt_roleplay.runtime
+    class: RoleplayPlugin
+    options:
+      mode: tavern
