@@ -461,6 +461,11 @@
   cursor: pointer;
 }
 
+.ktrp-cast-check.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .ktrp-box-head {
   font-weight: 600;
   font-size: var(--kt-fs-xs, 0.8125rem);

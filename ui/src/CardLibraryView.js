@@ -29,6 +29,8 @@ import { useRoleplayText } from "./strings.js";
  * and the standalone Roleplay Studio workspace tab.
  * When `mode === 'tab'`, also exposes Tavern & Novel launch actions via `kt.api.post(...)`.
  */
+const NOVEL_CAST_LIMIT = 32;
+
 export const CardLibraryView = {
   name: "RoleplayCardLibraryView",
   components: { ActionButton, SettingsGroup, SettingsRow, PortraitFrame, CardCopyEditor, PortraitRuleEditor },
@@ -86,6 +88,24 @@ export const CardLibraryView = {
     const tags = computed(() =>
       Array.isArray(detail.value?.fields?.tags) ? detail.value.fields.tags.filter(Boolean) : [],
     );
+    const novelCastSummary = computed(() => {
+      if (!novelCastIds.value.length) return "";
+      const byId = new Map(cards.value.map((c) => [c.id, c.name || c.id]));
+      const names = novelCastIds.value.map((id) => byId.get(id) || id);
+      const preview = names.slice(0, 3).join(", ");
+      return names.length > 3 ? `${preview} +${names.length - 3}` : preview;
+    });
+    const quickLaunchNovelHint = computed(() => {
+      if (novelCastIds.value.length) {
+        return t("quickLaunchNovelCastHint", {
+          count: novelCastIds.value.length,
+          names: novelCastSummary.value,
+        });
+      }
+      const fallbackName = selectedCard.value?.name || cards.value[0]?.name || "";
+      return t("quickLaunchNovelSelectedHint", { name: fallbackName });
+    });
+    const novelCastAtLimit = computed(() => novelCastIds.value.length >= NOVEL_CAST_LIMIT);
 
     watch(
       cards,
@@ -328,6 +348,7 @@ export const CardLibraryView = {
     async function launchTavernFromCard() {
       const card = selectedCard.value;
       if (!card || busy.value) return;
+      const launchLabel = card.name;
       busy.value = true;
       actionError.value = "";
       try {
@@ -344,7 +365,7 @@ export const CardLibraryView = {
           kind: "tavern",
           sessionId: data.sessionId || "",
           creatureId: data.creatureId || "",
-          label: detail.value?.fields?.name || card.name,
+          label: launchLabel,
         };
         notify(t("launchCreatedToast"), "success");
       } catch (err) {
@@ -358,25 +379,25 @@ export const CardLibraryView = {
       const idx = novelCastIds.value.indexOf(cardId);
       if (idx >= 0) {
         novelCastIds.value.splice(idx, 1);
-      } else if (novelCastIds.value.length < 32) {
+      } else if (novelCastIds.value.length < NOVEL_CAST_LIMIT) {
         novelCastIds.value.push(cardId);
       }
     }
 
-    async function launchNovelFromCast() {
-      if (!novelCastIds.value.length || busy.value) return;
+    async function launchNovelWithIds(cardIds) {
+      if (!cardIds.length || busy.value) return;
+      const resolvedName = novelTitle.value.trim() || t("novelDefaultTitle");
       busy.value = true;
       actionError.value = "";
       try {
-        const payload = { cardIds: [...novelCastIds.value] };
-        if (novelTitle.value.trim()) payload.name = novelTitle.value.trim();
+        const payload = { cardIds: [...cardIds], name: resolvedName };
         const resp = await kt.api.post("novels", payload);
         const data = resp?.data || resp || {};
         launchedSession.value = {
           kind: "novel",
           sessionId: data.sessionId || "",
           creatureId: data.creatureId || "",
-          label: payload.name || t("novelDefaultTitle"),
+          label: resolvedName,
         };
         notify(t("launchCreatedToast"), "success");
       } catch (err) {
@@ -386,12 +407,19 @@ export const CardLibraryView = {
       }
     }
 
+    async function launchNovelFromCast() {
+      await launchNovelWithIds(novelCastIds.value);
+    }
+
     async function launchNovelQuick() {
-      if (!novelCastIds.value.length) {
-        const fallbackId = selectedCard.value?.id || cards.value[0]?.id;
-        if (fallbackId) novelCastIds.value = [fallbackId];
+      if (novelCastIds.value.length) {
+        await launchNovelWithIds(novelCastIds.value);
+        return;
       }
-      await launchNovelFromCast();
+      const fallbackId = selectedCard.value?.id || cards.value[0]?.id;
+      if (fallbackId) {
+        await launchNovelWithIds([fallbackId]);
+      }
     }
 
     async function refreshLibrary() {
@@ -451,6 +479,9 @@ export const CardLibraryView = {
       tavernLaunchGreetingIndex,
       launchGreetingPreview,
       novelCastIds,
+      novelCastLimit: NOVEL_CAST_LIMIT,
+      novelCastAtLimit,
+      quickLaunchNovelHint,
       novelTitle,
       launchedSession,
       launchTavernFromCard,
@@ -581,7 +612,12 @@ export const CardLibraryView = {
           >
             <div class="ktrp-quick-launch-copy">
               <strong>{{ t('quickLaunchBarTitle') }}</strong>
-              <span class="ktrp-muted">{{ t('quickLaunchBarHint', { name: selectedCard?.name || cards[0]?.name || '' }) }}</span>
+              <span class="ktrp-muted" data-testid="kt-rp-quick-launch-tavern-hint">
+                {{ t('quickLaunchTavernHint', { name: selectedCard?.name || cards[0]?.name || '' }) }}
+              </span>
+              <span class="ktrp-muted" data-testid="kt-rp-quick-launch-novel-hint">
+                {{ quickLaunchNovelHint }}
+              </span>
             </div>
             <div class="ktrp-quick-launch-actions">
               <ActionButton
@@ -969,10 +1005,15 @@ export const CardLibraryView = {
           <div class="ktrp-row-between">
             <div>
               <h4>{{ t('studioLaunchNovelTitle') }}</h4>
-              <p class="ktrp-muted">{{ t('studioLaunchNovelHint') }}</p>
+              <p class="ktrp-muted">{{ t('studioLaunchNovelHint', { max: novelCastLimit }) }}</p>
             </div>
-            <span class="ktrp-chip">{{ t('studioNovelSelectedCount', { count: novelCastIds.length }) }}</span>
+            <span class="ktrp-chip" :class="{ 'ktrp-chip--accent': novelCastAtLimit }" data-testid="kt-rp-novel-cast-count">
+              {{ t('studioNovelSelectedCount', { count: novelCastIds.length, max: novelCastLimit }) }}
+            </span>
           </div>
+          <p v-if="novelCastAtLimit" class="ktrp-muted" data-testid="kt-rp-novel-cast-limit-hint">
+            {{ t('studioNovelLimitReached', { max: novelCastLimit }) }}
+          </p>
           <div class="ktrp-field-block">
             <label class="ktrp-label" for="ktrp-studio-novel-name">{{ t('studioNovelNameLabel') }}</label>
             <input
@@ -989,11 +1030,13 @@ export const CardLibraryView = {
               v-for="card in cards"
               :key="card.id"
               class="ktrp-cast-check"
+              :class="{ 'is-disabled': novelCastAtLimit && !novelCastIds.includes(card.id) }"
               :data-testid="'kt-rp-novel-pick-' + card.id"
             >
               <input
                 type="checkbox"
                 :checked="novelCastIds.includes(card.id)"
+                :disabled="novelCastAtLimit && !novelCastIds.includes(card.id)"
                 @change="toggleNovelCast(card.id)"
               />
               <span>{{ card.name }}</span>
