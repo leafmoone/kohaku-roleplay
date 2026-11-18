@@ -9,6 +9,7 @@ export const PortraitFrame = {
     cardId: { type: String, default: "" },
     name: { type: String, default: "" },
     hasPortrait: { type: Boolean, default: false },
+    variant: { type: String, default: "" },
     argKey: { type: String, default: "id" },
     size: { type: String, default: "md" },
     revision: { type: Number, default: 0 },
@@ -26,7 +27,14 @@ export const PortraitFrame = {
     const sizeClass = computed(() => `ktrp-portrait--${props.size}`);
 
     watch(
-      () => [props.cardId, props.hasPortrait, props.argKey, props.revision, owner.status.value],
+      () => [
+        props.cardId,
+        props.hasPortrait,
+        props.variant,
+        props.argKey,
+        props.revision,
+        owner.status.value,
+      ],
       async (_, __, onCleanup) => {
         let stale = false;
         onCleanup(() => {
@@ -34,7 +42,8 @@ export const PortraitFrame = {
         });
         url.value = "";
         if (!props.cardId || !props.hasPortrait || owner.status.value !== "ready") return;
-        const cacheKey = `${owner.owner}|${props.cardId}|${props.revision}`;
+        const variantKey = String(props.variant || "");
+        const cacheKey = `${owner.owner}|${props.cardId}|${variantKey}|${props.revision}`;
         if (portraitCache.has(cacheKey)) {
           url.value = portraitCache.get(cacheKey) || "";
           return;
@@ -42,6 +51,9 @@ export const PortraitFrame = {
         loading.value = true;
         try {
           const payload = props.argKey === "cardId" ? { cardId: props.cardId } : { id: props.cardId };
+          if (variantKey) {
+            payload.variant = variantKey;
+          }
           const result = await owner.call("portrait", payload);
           const resolved = typeof result === "string" ? result : result?.url || "";
           if (!stale) {
@@ -60,7 +72,12 @@ export const PortraitFrame = {
     return { url, loading, monogram, sizeClass };
   },
   template: `
-    <div class="ktrp-portrait" :class="sizeClass" :data-has-image="Boolean(url)">
+    <div
+      class="ktrp-portrait"
+      :class="sizeClass"
+      :data-has-image="Boolean(url)"
+      :data-variant="variant || ''"
+    >
       <img v-if="url" :src="url" :alt="name || 'Character portrait'" class="ktrp-portrait-img" @error="url = ''" />
       <span v-else class="ktrp-portrait-monogram" aria-hidden="true">{{ monogram }}</span>
     </div>

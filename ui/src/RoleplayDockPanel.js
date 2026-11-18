@@ -510,6 +510,7 @@ export const RoleplayDockPanel = {
                     :card-id="actor.cardId"
                     :name="actor.name"
                     :has-portrait="actor.hasPortrait"
+                    :variant="actor.portraitKey"
                     arg-key="id"
                     size="sm"
                   />
@@ -548,6 +549,7 @@ export const RoleplayDockPanel = {
               :card-id="state.cardId || ''"
               :name="state.name || ''"
               :has-portrait="Boolean(state.hasPortrait ?? activeCardSummary?.hasPortrait ?? true)"
+              :variant="state.portraitKey || ''"
               arg-key="id"
               size="md"
             />

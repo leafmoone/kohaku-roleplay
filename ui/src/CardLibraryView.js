@@ -21,6 +21,7 @@ import {
 } from "./helpers.js";
 import { CardCopyEditor } from "./CardCopyEditor.js";
 import { PortraitFrame } from "./PortraitFrame.js";
+import { PortraitRuleEditor } from "./PortraitRuleEditor.js";
 import { useRoleplayText } from "./strings.js";
 
 /**
@@ -30,7 +31,7 @@ import { useRoleplayText } from "./strings.js";
  */
 export const CardLibraryView = {
   name: "RoleplayCardLibraryView",
-  components: { ActionButton, SettingsGroup, SettingsRow, PortraitFrame, CardCopyEditor },
+  components: { ActionButton, SettingsGroup, SettingsRow, PortraitFrame, CardCopyEditor, PortraitRuleEditor },
   props: {
     mode: { type: String, default: "settings" },
   },
@@ -49,6 +50,7 @@ export const CardLibraryView = {
     const actionError = ref("");
     const portraitRevision = ref(0);
     const editingCopy = ref(false);
+    const editingPortraits = ref(false);
     const savedCopyBanner = ref(false);
     const exporting = ref(false);
 
@@ -104,6 +106,7 @@ export const CardLibraryView = {
     watch(selectedId, () => {
       tavernLaunchGreetingIndex.value = 0;
       editingCopy.value = false;
+      editingPortraits.value = false;
     });
 
     let detailSeq = 0;
@@ -149,15 +152,29 @@ export const CardLibraryView = {
       if (!selectedCard.value || busy.value) return;
       actionError.value = "";
       savedCopyBanner.value = false;
-      editingCopy.value = true;
+      editingPortraits.value = false;
+      editingCopy.value = !editingCopy.value;
     }
 
     function cancelCopyEditor() {
       editingCopy.value = false;
     }
 
+    function openPortraitsEditor() {
+      if (!selectedCard.value || busy.value) return;
+      actionError.value = "";
+      savedCopyBanner.value = false;
+      editingCopy.value = false;
+      editingPortraits.value = !editingPortraits.value;
+    }
+
+    function cancelPortraitsEditor() {
+      editingPortraits.value = false;
+    }
+
     async function handleCopySaved(created) {
       editingCopy.value = false;
+      editingPortraits.value = false;
       actionError.value = "";
       try {
         await owner.refresh();
@@ -359,8 +376,10 @@ export const CardLibraryView = {
       actionError,
       portraitRevision,
       editingCopy,
+      editingPortraits,
       savedCopyBanner,
       exporting,
+      maxCardBytes,
       maxMiB,
       cards,
       filteredCards,
@@ -369,6 +388,8 @@ export const CardLibraryView = {
       selectCard,
       openCopyEditor,
       cancelCopyEditor,
+      openPortraitsEditor,
+      cancelPortraitsEditor,
       handleCopySaved,
       exportSelectedCard,
       triggerImport,
@@ -543,6 +564,14 @@ export const CardLibraryView = {
                   <ActionButton
                     size="sm"
                     :disabled="busy || exporting"
+                    data-testid="kt-rp-edit-portraits-btn"
+                    @click="openPortraitsEditor"
+                  >
+                    {{ editingPortraits ? t('editorCancelBtn') : t('editPortraitsBtn') }}
+                  </ActionButton>
+                  <ActionButton
+                    size="sm"
+                    :disabled="busy || exporting"
                     data-testid="kt-rp-export-card-btn"
                     @click="exportSelectedCard"
                   >
@@ -577,6 +606,15 @@ export const CardLibraryView = {
                 :card-id="detail.id"
                 :card-name="detail.fields?.name || selectedCard.name"
                 @cancel="cancelCopyEditor"
+                @saved="handleCopySaved"
+              />
+
+              <PortraitRuleEditor
+                v-else-if="editingPortraits"
+                :card-id="detail.id"
+                :card-name="detail.fields?.name || selectedCard.name"
+                :max-bytes="maxCardBytes"
+                @cancel="cancelPortraitsEditor"
                 @saved="handleCopySaved"
               />
 

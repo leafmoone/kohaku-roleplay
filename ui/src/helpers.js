@@ -409,11 +409,153 @@ export function areStateDefinitionsEqual(origDefs, nextDefs) {
 }
 
 /**
+ * Validate a selected PNG file for local portrait asset embedding.
+ */
+export function validatePortraitPngFile(file, maxBytes = DEFAULT_MAX_CARD_BYTES) {
+  if (!file || typeof file.size !== "number" || file.size <= 0 || file.size > maxBytes) {
+    return { ok: false, code: "size" };
+  }
+  const name = String(file.name || "").toLowerCase();
+  const mime = String(file.type || "").toLowerCase();
+  if (!name.endsWith(".png") && mime !== "image/png") {
+    return { ok: false, code: "type" };
+  }
+  return { ok: true };
+}
+
+/**
+ * Filter card state definitions strictly to public text/enum/number fields
+ * eligible for portrait matching rules (never exposes private or list fields).
+ */
+export function extractPublicPortraitFields(stateDefinitions) {
+  if (!Array.isArray(stateDefinitions)) return [];
+  return stateDefinitions
+    .filter(
+      (f) =>
+        f &&
+        typeof f === "object" &&
+        f.visibility === "public" &&
+        (f.type === "text" || f.type === "number" || f.type === "enum") &&
+        typeof f.key === "string" &&
+        f.key.trim(),
+    )
+    .map((f) => ({
+      key: f.key,
+      label: String(f.label || f.key),
+      type: f.type,
+      min: typeof f.min === "number" && Number.isFinite(f.min) ? f.min : undefined,
+      max: typeof f.max === "number" && Number.isFinite(f.max) ? f.max : undefined,
+      options: f.type === "enum" && Array.isArray(f.options) ? f.options.map(String) : [],
+    }));
+}
+
+/**
+ * Convert backend portrait_draft.portraits into interactive form rows.
+ */
+export function clonePortraitsToForm(rawPortraits, publicFields = []) {
+  if (!Array.isArray(rawPortraits)) return [];
+  const fallbackField = publicFields[0]?.key || "";
+  return rawPortraits.map((item) => {
+    const hasField = typeof item?.field === "string" && item.field.length > 0;
+    return {
+      key: String(item?.key || ""),
+      isDefault: !hasField,
+      field: hasField ? item.field : fallbackField,
+      equalsText:
+        hasField && item?.equals !== undefined && item?.equals !== null ? String(item.equals) : "",
+      data: typeof item?.data === "string" ? item.data : "",
+    };
+  });
+}
+
+/**
+ * Validate portrait editor rows against backend PortraitAsset rules and build payload.
+ * Returns { ok: true, portraits } or { ok: false, code, index, key }.
+ */
+export function buildPortraitsPayload(rows, publicFields = [], maxBytes = DEFAULT_MAX_CARD_BYTES) {
+  if (!Array.isArray(rows)) return { ok: true, portraits: [] };
+  const fieldMap = new Map(publicFields.map((f) => [f.key, f]));
+  const seenKeys = new Set();
+  const seenConditions = new Set();
+  const portraits = [];
+  let totalBase64Len = 0;
+
+  for (let idx = 0; idx < rows.length; idx += 1) {
+    const row = rows[idx] || {};
+    const key = String(row.key ?? "").trim();
+    if (!STATE_KEY_RE.test(key)) {
+      return { ok: false, code: "key", index: idx, key };
+    }
+    if (seenKeys.has(key)) {
+      return { ok: false, code: "duplicateKey", index: idx, key };
+    }
+    seenKeys.add(key);
+
+    const data = typeof row.data === "string" ? row.data.trim() : "";
+    if (!data) {
+      return { ok: false, code: "missingImage", index: idx, key };
+    }
+    totalBase64Len += data.length;
+    if (totalBase64Len > 4 * Math.ceil(maxBytes / 3)) {
+      return { ok: false, code: "totalSize", index: idx, key };
+    }
+
+    if (row.isDefault) {
+      if (seenConditions.has("__DEFAULT__")) {
+        return { ok: false, code: "duplicateDefault", index: idx, key };
+      }
+      seenConditions.add("__DEFAULT__");
+      portraits.push({ key, data });
+      continue;
+    }
+
+    const fieldKey = String(row.field || "").trim();
+    const fieldDef = fieldMap.get(fieldKey);
+    if (!fieldDef) {
+      return { ok: false, code: "invalidField", index: idx, key };
+    }
+
+    let equalsValue;
+    if (fieldDef.type === "number") {
+      const raw = String(row.equalsText ?? "").trim();
+      const num = Number(raw);
+      if (!raw || !Number.isFinite(num)) {
+        return { ok: false, code: "invalidNumber", index: idx, key };
+      }
+      if (
+        (fieldDef.min !== undefined && num < fieldDef.min) ||
+        (fieldDef.max !== undefined && num > fieldDef.max)
+      ) {
+        return { ok: false, code: "numberOutOfBounds", index: idx, key };
+      }
+      equalsValue = num;
+    } else if (fieldDef.type === "enum") {
+      const val = String(row.equalsText ?? "");
+      if (!fieldDef.options.includes(val)) {
+        return { ok: false, code: "invalidEnum", index: idx, key };
+      }
+      equalsValue = val;
+    } else {
+      equalsValue = String(row.equalsText ?? "");
+    }
+
+    const condSig = `${fieldKey}\u0000${typeof equalsValue}:${String(equalsValue)}`;
+    if (seenConditions.has(condSig)) {
+      return { ok: false, code: "duplicateCondition", index: idx, key };
+    }
+    seenConditions.add(condSig);
+    portraits.push({ key, field: fieldKey, equals: equalsValue, data });
+  }
+
+  return { ok: true, portraits };
+}
+
+/**
  * Strict allowlist projection for novel player view.
  * Aligns strictly to backend public schema:
  * - pendingScene: { number } only (never maps actor names / reports)
  * - latestProse: string (never reads private facts)
- * - cast: [{ name, cardId, hasPortrait, visibleStatus, stateFields }]
+ * - cast: [{ name, cardId, hasPortrait, portraitKey, visibleStatus, stateFields }]
  */
 export function projectNovelView(state) {
   const src = state && typeof state === "object" ? state : {};
@@ -438,6 +580,7 @@ export function projectNovelView(state) {
         name: String(entry.name || ""),
         cardId: typeof entry.cardId === "string" ? entry.cardId : "",
         hasPortrait: Boolean(entry.hasPortrait),
+        portraitKey: typeof entry.portraitKey === "string" ? entry.portraitKey : "",
         visibleStatus: visible,
         stateFields: normalizeStateFields(entry.stateFields),
       };
