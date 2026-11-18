@@ -4,7 +4,9 @@
 
 ## 使用
 
-在插件仓库执行 `kt install . -e --no-deps` 安装到目标 KT 主机，再重载桌面。只在工作区做开发验证时使用工作区专属虚拟环境及 `KT_CONFIG_DIR`，不要将测试卡装入日用 KT。
+在插件仓库执行 `kt install . --no-deps` 复制安装到 KT 2.2.2，再重新启动目标 Studio。开发时可用 `kt install . -e --no-deps` 做 editable 安装；仅在工作区专属虚拟环境和 `KT_CONFIG_DIR` 下做开发验证，不要将测试卡装入日用 KT。
+
+`0.4.0` 纳入大型世界书诊断、CHARX 本地素材和酒馆 MVU 变量。由早期 `0.3.0` 升级时，先停止目标 Studio，再在同一 KT 配置下按同名包更新，重启后从 History 恢复旧会话；不要清空 KT 配置目录或角色库。
 
 - 角色库：在 Studio 的「新建标签」菜单打开 **Roleplay Library**，也可从设置里的 **Roleplay Cards** 跳转到该标签页。导入并选中卡片后，使用顶部的开局按钮。
 - 会话面板：展开聊天里的浮动工具栏，打开 `role` 面板，再用标题栏的固定按钮将它移到右侧。原版 KT 2.2.2 可能只在悬停时显示 `role`；支持扩展按钮文字的界面会直接显示它。未加载 `roleplay` 的 creature 不会应用角色卡。
