@@ -31,7 +31,8 @@ from .library_view import card_detail, cards_view, media_summary, media_view, po
 from .library import CardNotFound, get_card
 from .lore import LoreBook, active_entries
 from .mvu import MvuChange, MvuInit, apply_changes, inspect_initializers, is_initializer, public_options, public_values
-from .mvu_tool import UpdateMvu
+from .mvu_legacy import apply_literal_update, split_opening
+from .mvu_tool import ApplyMvuUpdate, UpdateMvu
 from .panels import ChoicePanel, NativePanel, public_panels
 from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context
 from .worldbook import read_worldbook
@@ -88,6 +89,7 @@ class TavernSession(Arguments):
     invalid_native_panels: int = 0
     mvu: MvuInit | None = None
     mvu_public: list[str] = Field(default_factory=list)
+    mvu_legacy: bool = False
 
 
 def library_dir() -> Path:
@@ -245,6 +247,8 @@ class RoleplayPlugin(BasePlugin):
             allowed = {"rp_set_card_state"} if record and record.get("state_fields") else set()
             if record and (record.get("mvu") or {}).get("values"):
                 allowed.add("rp_update_mvu")
+                if record.get("mvu_legacy"):
+                    allowed.add("rp_apply_mvu_update")
             return ToolVisibility(allowed_tools=frozenset(allowed), allowed_subagents=frozenset())
         if self.novel is None:
             return None
@@ -274,7 +278,7 @@ class RoleplayPlugin(BasePlugin):
 
     def contribute_tools(self):
         if self.mode == "tavern":
-            return [SetCardState(self), UpdateMvu(self)]
+            return [SetCardState(self), UpdateMvu(self), ApplyMvuUpdate(self)]
         return self.novel.tools(self) if self.novel else []
 
     def apply_card_changes(self, changes: list[FieldUpdate]) -> None:
@@ -286,13 +290,19 @@ class RoleplayPlugin(BasePlugin):
         self.ui_emit("state", self.ui_state())
 
     def apply_mvu_changes(self, changes: list[MvuChange]) -> None:
+        self._update_mvu(lambda values: apply_changes(values, changes))
+
+    def apply_mvu_legacy(self, update: str) -> None:
+        self._update_mvu(lambda values: apply_literal_update(values, update), legacy=True)
+
+    def _update_mvu(self, calculate, *, legacy: bool = False) -> None:
         if self.mode != "tavern" or (record := self._record()) is None:
             raise SceneError("Bind a card in a tavern session before changing variables")
         play = TavernSession.model_validate(record)
-        if play.mvu is None or not play.mvu.values:
-            raise SceneError("The card has no initialized variables")
+        if play.mvu is None or not play.mvu.values or (legacy and not play.mvu_legacy):
+            raise SceneError("This tavern has no initialized variables for this update format")
         try:
-            values = apply_changes(play.mvu.values, changes)
+            values = calculate(play.mvu.values)
         except ValueError as exc:
             raise SceneError(str(exc)) from exc
         mvu = play.mvu.model_copy(update={"values": values})
@@ -377,6 +387,7 @@ class RoleplayPlugin(BasePlugin):
             view["invalidNativePanels"] = play.invalid_native_panels
         if play.mvu is not None:
             view["mvu"] = {"invalidInitializers": play.mvu.issues.get("invalid_initializer", 0),
+                           "invalidOpeningUpdates": play.mvu.issues.get("invalid_opening_update", 0),
                            "options": public_options(play.mvu.values), "selected": play.mvu_public,
                            "values": public_values(play.mvu.values, play.mvu_public)}
         return view
@@ -461,13 +472,27 @@ class RoleplayPlugin(BasePlugin):
                         entry.model_copy(update={"enabled": False}) if is_initializer(entry.comment, entry.name) else entry
                         for entry in lore.entries
                     ]})
+                opening = greetings[choice.greetingIndex]
+                legacy_mvu = False
+                if mvu is not None and mvu.values:
+                    prose, block = split_opening(opening)
+                    directions = [card.fields.mes_example, card.fields.system_prompt, card.fields.post_history_instructions]
+                    if lore is not None:
+                        directions.extend(entry.content for entry in lore.entries if entry.enabled)
+                    legacy_mvu = block is not None or any("<UpdateVariable>" in text and "_." in text for text in directions)
+                    if block is not None:
+                        opening = prose
+                        try:
+                            mvu = mvu.model_copy(update={"values": apply_literal_update(mvu.values, block)})
+                        except (ValueError, RecursionError):
+                            mvu = mvu.model_copy(update={"issues": {**mvu.issues, "invalid_opening_update": 1}})
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player,
-                                     greeting=expand(greetings[choice.greetingIndex], card.fields.name, choice.player.name, ""),
+                                     greeting=expand(opening, card.fields.name, choice.player.name, ""),
                                      lore=lore, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
                                      portrait_rules=rules_for(card.portraits), state_fields=card.state_fields,
                                      media=card.media, media_issues=card.media_issues,
                                      scene_media_rules=card.scene_media_rules, native_panels=card.native_panels,
-                                     invalid_native_panels=card.invalid_native_panels, mvu=mvu)
+                                     invalid_native_panels=card.invalid_native_panels, mvu=mvu, mvu_legacy=legacy_mvu)
                 self._save(play.model_dump())
                 if play.greeting:
                     await self.publish_opening(play.greeting)
@@ -554,6 +579,8 @@ class RoleplayPlugin(BasePlugin):
                             "their values into prose.\n" + json.dumps({"mvu_variables": play.mvu.values,
                                                                        "mvu_displayed_paths": [json.loads(key) for key in play.mvu_public]},
                                                                       ensure_ascii=False))
+            if play.mvu_legacy:
+                content += "\nIf the card requests literal <UpdateVariable> commands, call rp_apply_mvu_update instead of printing the block. Do not apply the same change through both update tools."
             if books and self.binding:
                 lore_view = {"totalEntries": sum(len(book.entries) for book in books), "activeTitles": [e.name or e.comment or ", ".join(e.keys) for e in entries], "usedTokens": 2048 - remaining, "budgetTokens": min(2048, sum(book.token_budget for book in books))}
                 if self.binding.get_state("loreView") != lore_view:

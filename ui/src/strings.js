@@ -265,6 +265,7 @@ const EN_FALLBACK = {
   notesSaved: "Session notes saved.",
   mvuTitle: "MVU variables",
   mvuInvalidInitializers: "Invalid MVU initializers skipped: {count}",
+  mvuInvalidOpeningUpdates: "Opening updates were skipped because they are unsupported or do not match the initial values.",
   mvuSelectionHint: "Select the variable paths to show in this panel, then save your selection.",
   mvuOptions: "Variable paths",
   mvuNoOptions: "No MVU variable paths are available.",

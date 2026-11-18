@@ -15,6 +15,7 @@ class MvuChanges(BaseModel):
 
 class MvuHost(Protocol):
     def apply_mvu_changes(self, changes: list[MvuChange]) -> None: ...
+    def apply_mvu_legacy(self, update: str) -> None: ...
 
 
 class UpdateMvu(BaseTool):
@@ -36,3 +37,24 @@ class UpdateMvu(BaseTool):
     async def _execute(self, args: dict) -> ToolResult:
         self.host.apply_mvu_changes(MvuChanges.model_validate(args).changes)
         return ToolResult(output="Updated session variables. Continue the story without repeating the update.")
+
+
+class MvuLegacyArgs(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    update: str = Field(min_length=1, max_length=16_384)
+
+
+class ApplyMvuUpdate(UpdateMvu):
+    tool_name = "rp_apply_mvu_update"
+    description = (
+        "Apply one literal <UpdateVariable> block for a card that expects MagVarUpdate format. "
+        "Use _.set('path', new) or _.set('path', old, new) and _.add('path', delta), one command per line. "
+        "Do not duplicate the same updates with rp_update_mvu or print the block in the story."
+    )
+
+    def get_parameters_schema(self) -> dict:
+        return MvuLegacyArgs.model_json_schema()
+
+    async def _execute(self, args: dict) -> ToolResult:
+        self.host.apply_mvu_legacy(MvuLegacyArgs.model_validate(args).update)
+        return ToolResult(output="Applied the literal update to this session. Continue the story without repeating it.")

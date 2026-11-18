@@ -87,6 +87,13 @@ export const MvuPanel = {
       <p v-if="mvu.invalidInitializers > 0" class="ktrp-muted" data-testid="kt-rp-mvu-invalid-initializers">
         {{ t('mvuInvalidInitializers', { count: mvu.invalidInitializers }) }}
       </p>
+      <p
+        v-if="Number.isInteger(mvu.invalidOpeningUpdates) && mvu.invalidOpeningUpdates > 0"
+        class="ktrp-muted"
+        data-testid="kt-rp-mvu-invalid-opening-updates"
+      >
+        {{ t('mvuInvalidOpeningUpdates') }}
+      </p>
 
       <template v-if="options.length">
         <p class="ktrp-muted">{{ t('mvuSelectionHint') }}</p>

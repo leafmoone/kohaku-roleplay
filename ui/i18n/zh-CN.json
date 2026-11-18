@@ -240,6 +240,7 @@
   "notesSaved": "会话笔记已保存。",
   "mvuTitle": "MVU 变量",
   "mvuInvalidInitializers": "已跳过无效的 MVU 初始化项：{count}",
+  "mvuInvalidOpeningUpdates": "开场更新不受支持或与初值不符，已跳过",
   "mvuSelectionHint": "勾选要在此面板显示的变量路径，然后保存选择。",
   "mvuOptions": "变量路径",
   "mvuNoOptions": "没有可选的 MVU 变量路径。",
