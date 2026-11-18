@@ -368,6 +368,9 @@ class RoleplayPlugin(BasePlugin):
             elif action == "start_tavern" and self.mode == "tavern":
                 if self._record() is not None:
                     raise OwnerArgumentError("This session already has an opening; start a new session for another game")
+                agent = self.binding.host_agent
+                if agent is not None and agent.is_processing:
+                    raise OwnerArgumentError("Wait for the session to become idle before setting its opening")
                 choice = Play.model_validate(args)
                 card = get_card(library_dir(), choice.cardId)
                 greetings = [card.fields.first_mes, *card.fields.alternate_greetings]
@@ -400,7 +403,27 @@ class RoleplayPlugin(BasePlugin):
     async def publish_opening(self, text: str) -> None:
         if self.binding is None or self.binding.controller is None:
             raise OwnerArgumentError("Publishing requires a live controller")
-        await self._publish_assistant(self.binding.controller, text)
+        controller = self.binding.controller
+        agent = self.binding.host_agent
+        history = getattr(agent, "_session_output", None)
+        if history is None:
+            await self._publish_assistant(controller, text)
+            return
+
+        # KT 2.2.2 treats every live text frame as model streaming, and a
+        # synthetic processing_end would also activate Studio's summary hook.
+        # Persist the opening first, then refresh attached chats as already idle.
+        from kohakuterrarium.studio.attach._event_stream import StreamOutput
+
+        await self.binding.emit(OutputEvent(type="assistant_round_start"))
+        message = controller.conversation.append("assistant", text)
+        await history.emit(OutputEvent(type="text", content=text))
+        await self.binding.emit(OutputEvent(type="assistant_message", payload={"message": message.to_dict()}))
+        await history.drain()
+        if not agent.is_processing:
+            for output in agent.output_router._secondary_outputs:
+                if isinstance(output, StreamOutput):
+                    output._put({"type": "idle"})
 
     async def _publish_assistant(self, controller, text: str) -> None:
         await self.binding.emit(OutputEvent(type="assistant_round_start"))
