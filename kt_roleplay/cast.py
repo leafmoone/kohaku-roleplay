@@ -33,7 +33,7 @@ def cast_recipe(directory: Path, members: list[CastMember]) -> Path:
     def spec(mode: str) -> dict:
         return {"fork_enabled": False, "output": {"type": "stdout", "controller_direct": True}, "plugins": [{"name": "roleplay", "type": "package", "options": {"mode": mode}}]}
     director = spec("novel")
-    director["system_prompt"] = "You are the omniscient novelist. Start a player turn with rp_dispatch_scene. Choose recipients from the current cast and scene. Send each recipient only information that character can perceive; do not contact other characters. Reports arrive automatically. While waiting, end the turn without polling or publishing prose. When the director state says ready, use rp_commit_scene immediately; never invent missing reports. Then present only the approved chapter. On a delayed notification for an already finished scene, do not open another. Preserve the player's agency."
+    director["system_prompt"] = "You are the omniscient novelist. Start a player turn with rp_dispatch_scene. Choose recipients from the current cast and scene. Send each recipient only information that character can perceive; do not contact other characters. Reports arrive automatically. While waiting, end the turn without polling or publishing prose. When the director state says ready, use rp_commit_scene immediately; never invent missing reports. Put the complete reader chapter in the commit; the host publishes it. On a delayed notification for an already finished scene, do not open another. Preserve the player's agency."
     creatures = []
     for member in members:
         cfg = spec("npc")

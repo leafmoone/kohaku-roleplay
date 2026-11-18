@@ -1,14 +1,14 @@
 """Bind confirmed character data to a live KT creature without mutating its config."""
 
+from asyncio import current_task
 from collections.abc import Callable
-from contextlib import aclosing
 import json
 from pathlib import Path
 from typing import Literal
 
 from kohakuterrarium.builtins.plugins.ui_declarative.plugin import attached_renderers
 from kohakuterrarium.modules.output.event import OutputEvent
-from kohakuterrarium.parsing.events import AssistantImageEvent, TextEvent
+from kohakuterrarium.core.events import TriggerEvent
 from kohakuterrarium.modules.tool.base import ToolContext
 from kohakuterrarium.terrarium.tools.context import resolve_group_context, resolve_group_target
 from pydantic import TypeAdapter
@@ -102,36 +102,79 @@ class RoleplayPlugin(BasePlugin):
         self.report_watch = None
         self.can_open_scene = False
         self._committed_prose: str | None = None
-        self._narration_round: str | None = None
-        self._restore_completion: Callable[[], None] | None = None
+        self._restore_feedback: Callable[[], None] | None = None
 
     async def on_load(self, context: PluginContext) -> None:
         self.binding = context
-        controller = context.controller
-        if self.mode == "novel" and controller is not None:
-            # KT 2.2.2 streams parse events before post_llm_call can rewrite
-            # history. Gate only the director's committed continuation.
-            original = controller.run_once
+        agent = context.host_agent
+        if self.mode != "novel" or agent is None:
+            return
+        original = agent._collect_and_push_feedback
 
-            async def run_once():
-                show_committed = self._committed_prose is not None
-                async with aclosing(original()) as events:
-                    async for event in events:
-                        if not show_committed or not isinstance(event, (TextEvent, AssistantImageEvent)):
-                            yield event
+        async def finish_feedback(controller, handles, handle_order, native_tool_call_ids, native_mode) -> bool:
+            # KT 2.2.2 appends native results before draining input and queuing
+            # feedback. Keep that settlement; defer queued player turns only
+            # when a successful adjudication replaces the model continuation.
+            drain, push = agent._drain_mid_turn_pending_inputs, controller.push_event
+            owner = current_task()
+            settled_prose: str | None = None
+            withheld = False
 
-            def restore() -> None:
-                if controller.run_once is run_once:
-                    controller.run_once = original
+            async def drain_input(active_controller) -> int:
+                nonlocal settled_prose
+                prose = self._committed_prose
+                if current_task() is owner and active_controller is context.controller and prose is not None and handles:
+                    if not native_mode or self._has_commit_result(controller.conversation.get_messages(), native_tool_call_ids.values(), prose):
+                        settled_prose = prose
+                        return 0
+                return await drain(active_controller)
 
-            controller.run_once = run_once
-            self._restore_completion = restore
+            async def push_feedback(event: TriggerEvent) -> None:
+                nonlocal withheld
+                if current_task() is owner and settled_prose is not None and event.type == "tool_complete":
+                    withheld = True
+                else:
+                    await push(event)
+
+            agent._drain_mid_turn_pending_inputs = drain_input
+            controller.push_event = push_feedback
+            try:
+                again = await original(controller, handles, handle_order, native_tool_call_ids, native_mode)
+            finally:
+                agent._drain_mid_turn_pending_inputs = drain
+                controller.push_event = push
+            if not withheld or settled_prose is None:
+                return again
+            await self._publish_assistant(controller, settled_prose)
+            self._committed_prose = None
+            return False
+
+        def restore() -> None:
+            if agent._collect_and_push_feedback is finish_feedback:
+                agent._collect_and_push_feedback = original
+
+        agent._collect_and_push_feedback = finish_feedback
+        self._restore_feedback = restore
+
+    @staticmethod
+    def _has_commit_result(messages, current_ids, prose: str) -> bool:
+        """Match the native result to the current assistant tool announcement."""
+        result_ids = set()
+        for message in reversed(messages):
+            if message.role == "assistant":
+                return any(
+                    call["id"] in result_ids and call["function"]["name"] == "rp_commit_scene"
+                    for call in message.tool_calls or ()
+                )
+            if message.role == "tool" and message.tool_call_id in current_ids and message.get_text_content() == prose:
+                result_ids.add(message.tool_call_id)
+        return False
 
     async def on_event(self, event) -> None:
         if self.mode == "novel" and event.type == "user_input":
             self.can_open_scene = True
             # Never apply an interrupted continuation to a new player turn.
-            self._committed_prose = self._narration_round = None
+            self._committed_prose = None
         if self.mode == "npc" and event.type == "channel_message" and self.binding is not None:
             raw = event.context.get("raw_content")
             if event.context.get("channel") == self.binding.agent_name and isinstance(raw, str):
@@ -165,9 +208,9 @@ class RoleplayPlugin(BasePlugin):
 
     async def on_unload(self) -> None:
         self._unwatch_reports()
-        if self._restore_completion is not None:
-            self._restore_completion()
-            self._restore_completion = None
+        if self._restore_feedback is not None:
+            self._restore_feedback()
+            self._restore_feedback = None
 
     def presentation_contribution(self, context: PluginContext) -> str | None:
         if self.mode not in ("tavern", "novel") or "kt_roleplay.choices" not in attached_renderers(context.host_agent):
@@ -356,17 +399,19 @@ class RoleplayPlugin(BasePlugin):
 
     async def publish_opening(self, text: str) -> None:
         if self.binding is None or self.binding.controller is None:
-            raise OwnerArgumentError("Opening requires a live controller")
+            raise OwnerArgumentError("Publishing requires a live controller")
+        await self._publish_assistant(self.binding.controller, text)
+
+    async def _publish_assistant(self, controller, text: str) -> None:
         await self.binding.emit(OutputEvent(type="assistant_round_start"))
-        self.binding.controller.conversation.append("assistant", text)
+        message = controller.conversation.append("assistant", text)
         await self.binding.emit(OutputEvent(type="text", content=text))
-        await self.binding.emit(OutputEvent(type="assistant_message", payload={"message": {"role": "assistant", "content": text}}))
+        await self.binding.emit(OutputEvent(type="assistant_message", payload={"message": message.to_dict()}))
 
     async def pre_llm_call(self, messages: list[dict], **kwargs: object) -> list[dict] | None:
         record = self._record()
         if self.novel:
             content = self.novel.prompt(self.binding)
-            self._narration_round = self._committed_prose
         elif record is None:
             return None
         elif self.mode == "persona":
@@ -391,18 +436,3 @@ class RoleplayPlugin(BasePlugin):
                     self.ui_emit("state", self.ui_state())
         index = next((i for i, message in enumerate(messages) if message.get("role") not in ("system", "developer")), len(messages))
         return [*messages[:index], {"role": "user", "content": content}, *messages[index:]]
-
-    async def post_llm_call(self, messages: list[dict], response: str, usage: dict, **kwargs: object) -> str | None:
-        """Keep the terminal assistant message tied to the already committed prose."""
-        prose, self._narration_round = self._narration_round, None
-        if prose is None or self._committed_prose is None:
-            return None
-        # Update this round before KT records it. Returning rewritten text here
-        # would expose the withheld draft in KT's assistant_message_edited preview.
-        last = self.binding.controller.conversation.get_last_assistant_message()
-        if last is None:
-            raise SceneError("Cannot publish a scene without a completed assistant round")
-        last.content = prose
-        await self.binding.emit(OutputEvent(type="text", content=prose))
-        self._committed_prose = None
-        return None
