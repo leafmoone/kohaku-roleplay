@@ -3,6 +3,7 @@
 import base64
 import binascii
 import json
+from functools import cached_property
 from io import BytesIO
 from typing import Literal
 
@@ -11,8 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from .card_state import StateField, decode_fields
 from .errors import CardError
-from .lore import load_book
+from .lore import LoreBook
 from .portraits import PortraitAsset, read_portraits
+from .worldbook import read_worldbook
 
 MAX_CARD_BYTES = 12 * 1024 * 1024
 PNG_HEADER = b"\x89PNG\r\n\x1a\n"
@@ -49,6 +51,10 @@ class ParsedCard(BaseModel):
     state_fields: list[StateField] = Field(default_factory=list)
     portraits: list[PortraitAsset] = Field(default_factory=list)
     portrait: bytes | None = None
+
+    @cached_property
+    def lore(self) -> LoreBook | None:
+        return read_worldbook(self.book) if self.book is not None else None
 
 
 def _png_payload(raw: bytes) -> tuple[bytes, bytes]:
@@ -109,8 +115,6 @@ def parse_card(raw: bytes) -> ParsedCard:
     book = data.get("character_book")
     if book is not None and not isinstance(book, dict):
         raise CardError("character_book must be an object")
-    if book is not None:
-        load_book(book)
     warnings = []
     extensions = data.get("extensions")
     definitions = decode_fields(extensions)
@@ -123,5 +127,8 @@ def parse_card(raw: bytes) -> ParsedCard:
     cover = next((p for p in portraits if p.field is None), None)
     if cover is not None:
         portrait = base64.b64decode(cover.data)
-    return ParsedCard(version=version, fields=fields, book=book, warnings=warnings,
+    card = ParsedCard(version=version, fields=fields, book=book, warnings=warnings,
                       portrait=portrait, state_fields=definitions, portraits=portraits)
+    if book is not None:
+        _ = card.lore
+    return card

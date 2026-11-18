@@ -5,7 +5,6 @@ from pathlib import Path
 
 from .errors import CardError
 from .library import get_card, list_cards
-from .lore import load_book
 
 
 def cards_view(directory: Path) -> dict:
@@ -14,8 +13,13 @@ def cards_view(directory: Path) -> dict:
 
 def card_detail(directory: Path, key: str) -> dict:
     card = get_card(directory, key)
-    book = load_book(card.book) if card.book is not None else None
-    return {"id": key, "version": card.version, "fields": card.fields.model_dump(), "warnings": card.warnings, "hasPortrait": card.portrait is not None, "hasWorldbook": book is not None, "bookSummary": {"entryCount": len(book.entries), "scanDepth": book.scan_depth, "tokenBudget": book.token_budget} if book is not None else None}
+    book = card.lore
+    summary = None
+    if book is not None:
+        diagnostics = book.diagnostics()
+        summary = {"entryCount": diagnostics["totalEntries"], "scanDepth": book.scan_depth,
+                   "tokenBudget": book.token_budget, "diagnostics": diagnostics}
+    return {"id": key, "version": card.version, "fields": card.fields.model_dump(), "warnings": card.warnings, "hasPortrait": card.portrait is not None, "hasWorldbook": book is not None, "bookSummary": summary}
 
 
 def portrait_view(directory: Path, key: str, variant: str | None) -> dict:

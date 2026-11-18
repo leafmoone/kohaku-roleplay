@@ -28,8 +28,8 @@ from .state_tool import SetCardState
 from .portraits import PortraitRule, chosen_key, rules_for
 from .library_view import card_detail, cards_view, portrait_view
 from .library import CardNotFound, get_card
-from .lore import LoreBook, active_entries, load_book
-from .projections import Persona, Player, expand, persona_context, story_context
+from .lore import LoreBook, active_entries
+from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context
 from .worldbook import read_worldbook
 from .scene_tools import ingest_report
 from .recovery import resume_scene
@@ -323,6 +323,8 @@ class RoleplayPlugin(BasePlugin):
                 "player": play.player.model_dump(), "greeting": play.greeting, "greetingIndex": play.greetingIndex,
                 "openingSent": play.openingSent, "hasPortrait": play.hasPortrait, "notes": play.notes,
                 "worldbookEntries": len(play.worldbook.entries) if play.worldbook else None,
+                "worldbookDiagnostics": play.worldbook.diagnostics() if play.worldbook else None,
+                "cardLoreDiagnostics": play.lore.diagnostics() if play.lore else None,
                 "lore": self.binding.get_state("loreView") if self.binding else None}
         selected = chosen_key(play.portrait_rules, play.state_fields, play.values)
         if selected is not None:
@@ -376,7 +378,7 @@ class RoleplayPlugin(BasePlugin):
                 greetings = [card.fields.first_mes, *card.fields.alternate_greetings]
                 if choice.greetingIndex >= len(greetings):
                     raise OwnerArgumentError("Opening index is out of range")
-                play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player, greeting=expand(greetings[choice.greetingIndex], card.fields.name, choice.player.name, ""), lore=load_book(card.book) if card.book is not None else None, notes="")
+                play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player, greeting=expand(greetings[choice.greetingIndex], card.fields.name, choice.player.name, ""), lore=card.lore, notes="")
                 play = play.model_copy(update={"greetingIndex": choice.greetingIndex, "hasPortrait": card.portrait is not None, "portrait_rules": rules_for(card.portraits), "state_fields": card.state_fields})
                 self._save(play.model_dump())
                 if play.greeting:
@@ -445,11 +447,16 @@ class RoleplayPlugin(BasePlugin):
             books = [book for book in (play.lore, play.worldbook) if book is not None]
             entries = []
             remaining = 2048
+
+            def lore_cost(text: str) -> int:
+                return _cost(render_tavern_text(text, play.card, play.player))
+
             for book in books:
-                chosen = active_entries(book, history, _cost, remaining)
+                chosen = active_entries(book, history, lore_cost, remaining)
                 entries.extend(chosen)
-                remaining -= sum(_cost(e.content) for e in chosen)
+                remaining -= sum(lore_cost(e.content) for e in chosen)
             content = story_context(play.card, play.player, entries, play.notes)
+            messages = insert_depth_lore(messages, entries, play.card, play.player)
             if play.state_fields:
                 content += "\nUse rp_set_card_state for changed declared fields only. Keep private fields out of prose.\n" + json.dumps(model_fields(play.state_fields, play.values), ensure_ascii=False)
             if books and self.binding:
