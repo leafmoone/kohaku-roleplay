@@ -337,6 +337,14 @@ export const RoleplayDockPanel = {
       }
     }
 
+    function openLibraryTab() {
+      try {
+        openTab("kohaku-roleplay/studio");
+      } catch {
+        openLibrarySettings();
+      }
+    }
+
     function openLibrarySettings() {
       try {
         openTab({ kind: "settings", id: "settings", section: "ext:kohaku-roleplay/library" });
@@ -393,6 +401,7 @@ export const RoleplayDockPanel = {
       handleWorldbookFileChange,
       clearSessionWorldbook,
       resumePendingScene,
+      openLibraryTab,
       openLibrarySettings,
     };
   },
@@ -409,7 +418,7 @@ export const RoleplayDockPanel = {
             variant="ghost"
             icon="i-carbon-book"
             data-testid="kt-rp-open-library-btn"
-            @click="openLibrarySettings"
+            @click="openLibraryTab"
           >
             {{ t('openLibrary') }}
           </ActionButton>
@@ -714,7 +723,7 @@ export const RoleplayDockPanel = {
             <div v-else-if="cardsLoading && !cards.length" class="ktrp-muted">{{ t('loading') }}</div>
             <div v-else-if="!cards.length" class="ktrp-empty" data-testid="kt-rp-panel-no-cards">
               <p>{{ t('noCardsInPanel') }}</p>
-              <ActionButton size="sm" @click="openLibrarySettings">{{ t('openLibrary') }}</ActionButton>
+              <ActionButton size="sm" @click="openLibraryTab">{{ t('openLibrary') }}</ActionButton>
             </div>
             <select
               v-else

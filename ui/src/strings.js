@@ -140,13 +140,25 @@ const EN_FALLBACK = {
   invalidFileType: "Only .json or .png character cards are supported.",
   readFailed: "Could not read the selected file.",
   selectCardHint: "Select a card to inspect its portrait, greetings, and compatibility notices.",
-  usageGuideTitle: "How to play",
+  usageGuideTitle: "How to play & Studio entry points",
   usageGuidePersona:
-    "Attach Persona: Open any creature session → Roleplay dock panel to confirm appearance & voice without altering its task.",
+    "Attach Persona: Open a creature session that has the roleplay plugin enabled → Dock (role) to confirm appearance & voice without altering its task.",
   usageGuideTavern:
-    "Tavern Play: Start a session from Roleplay Library or with @kohaku-roleplay/creatures/rp_agent and open the Roleplay dock panel.",
+    "Tavern Play: Click Start Tavern Session in Roleplay Library (via Settings → Roleplay Cards or the tab + menu → Roleplay Library), or launch @kohaku-roleplay/creatures/rp_agent and open the Dock (role) panel.",
   usageGuideNovel:
-    "Novel Mode: Launch a novel cast from Roleplay Library and open the Roleplay dock panel on root to inspect the reader projection.",
+    "Novel Mode: Pick cast cards in Roleplay Library and click Start Novel Session; open the Dock (role) panel on root to inspect the reader projection.",
+  studioDiscoverHint:
+    "Roleplay Dock (role) only appears on creatures with the roleplay plugin loaded (such as rp_agent or novel root). Open the Roleplay Library tab from the tab + menu or Settings → Roleplay Cards for one-click Tavern & Novel launch.",
+  openStudioLibraryBtn: "Open Roleplay Library Tab",
+  openSettingsLibraryBtn: "Open in Settings",
+  settingsLaunchTitle: "One-click Tavern & Novel launch",
+  settingsLaunchHint:
+    "Open the dedicated Roleplay Library tab to launch Tavern or Novel sessions in one click and jump straight into chat.",
+  quickLaunchBarTitle: "One-click play",
+  quickLaunchBarHint: "Selected card: {name}",
+  quickLaunchNovelFromSelectedBtn: "Start Novel with Selected",
+  expandFieldBtn: "Expand",
+  collapseFieldBtn: "Collapse",
   studioLaunchTavernTitle: "Launch Tavern Session",
   studioLaunchTavernBtn: "Start Tavern Session",
   studioLaunchNovelTitle: "Launch Novel Cast",

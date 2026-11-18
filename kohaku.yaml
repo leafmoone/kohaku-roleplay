@@ -17,5 +17,5 @@ ui:
   contributes:
     - {kind: settings, id: library, label: Roleplay Cards, owner: package, icon: i-carbon-user-avatar}
     - {kind: tab, id: studio, label: Roleplay Library, owner: package, icon: i-carbon-book}
-    - {kind: panel, id: roleplay, label: Roleplay, owner: 'plugin:roleplay', icon: i-carbon-theater, dock: true}
+    - {kind: panel, id: roleplay, label: role, owner: 'plugin:roleplay', icon: i-carbon-theater, dock: true}
     - {kind: message-renderer, id: choices, label: Roleplay Choices, owner: 'plugin:roleplay', renderer: kt_roleplay.choices}

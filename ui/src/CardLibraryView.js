@@ -74,6 +74,8 @@ export const CardLibraryView = {
     const selectedCard = computed(
       () => cards.value.find((card) => card.id === selectedId.value) || null,
     );
+    const expandedDetails = ref({});
+    const greetingsExpanded = ref(false);
     const greetings = computed(() => collectGreetings(detail.value?.fields));
     const launchGreetingPreview = computed(() => {
       const idx = Number(tavernLaunchGreetingIndex.value) || 0;
@@ -107,7 +109,40 @@ export const CardLibraryView = {
       tavernLaunchGreetingIndex.value = 0;
       editingCopy.value = false;
       editingPortraits.value = false;
+      expandedDetails.value = {};
+      greetingsExpanded.value = false;
     });
+
+    function isDetailExpanded(key) {
+      return Boolean(expandedDetails.value[key]);
+    }
+
+    function toggleDetailExpanded(key) {
+      expandedDetails.value = {
+        ...expandedDetails.value,
+        [key]: !expandedDetails.value[key],
+      };
+    }
+
+    function toggleGreetingsExpanded() {
+      greetingsExpanded.value = !greetingsExpanded.value;
+    }
+
+    function openStudioTab() {
+      try {
+        openTab("kohaku-roleplay/studio");
+      } catch (err) {
+        actionError.value = err?.message || String(err);
+      }
+    }
+
+    function openSettingsLibrary() {
+      try {
+        openTab({ kind: "settings", id: "settings", section: "ext:kohaku-roleplay/library" });
+      } catch (err) {
+        actionError.value = err?.message || String(err);
+      }
+    }
 
     let detailSeq = 0;
     watch(
@@ -351,6 +386,14 @@ export const CardLibraryView = {
       }
     }
 
+    async function launchNovelQuick() {
+      if (!novelCastIds.value.length) {
+        const fallbackId = selectedCard.value?.id || cards.value[0]?.id;
+        if (fallbackId) novelCastIds.value = [fallbackId];
+      }
+      await launchNovelFromCast();
+    }
+
     async function refreshLibrary() {
       actionError.value = "";
       try {
@@ -369,6 +412,13 @@ export const CardLibraryView = {
       query,
       selectedId,
       selectedCard,
+      expandedDetails,
+      greetingsExpanded,
+      isDetailExpanded,
+      toggleDetailExpanded,
+      toggleGreetingsExpanded,
+      openStudioTab,
+      openSettingsLibrary,
       detail,
       detailLoading,
       detailError,
@@ -406,6 +456,7 @@ export const CardLibraryView = {
       launchTavernFromCard,
       toggleNovelCast,
       launchNovelFromCast,
+      launchNovelQuick,
       openSessionTab,
     };
   },
@@ -417,7 +468,51 @@ export const CardLibraryView = {
       :aria-busy="busy"
       data-testid="kt-rp-library"
     >
-      <p class="ktrp-muted">{{ t('scope') }}</p>
+      <div class="ktrp-library-banner" data-testid="kt-rp-studio-discovery">
+        <div class="ktrp-library-banner-copy">
+          <p class="ktrp-muted">{{ t('scope') }}</p>
+          <p class="ktrp-muted">{{ t('studioDiscoverHint') }}</p>
+        </div>
+        <div class="ktrp-library-banner-actions">
+          <ActionButton
+            v-if="props.mode === 'settings'"
+            size="sm"
+            variant="primary"
+            icon="i-carbon-book"
+            data-testid="kt-rp-open-studio-tab-btn"
+            @click="openStudioTab"
+          >
+            {{ t('openStudioLibraryBtn') }}
+          </ActionButton>
+          <ActionButton
+            v-else
+            size="sm"
+            variant="ghost"
+            icon="i-carbon-settings"
+            data-testid="kt-rp-open-settings-library-btn"
+            @click="openSettingsLibrary"
+          >
+            {{ t('openSettingsLibraryBtn') }}
+          </ActionButton>
+        </div>
+      </div>
+
+      <div v-if="launchedSession" class="ktrp-banner ktrp-banner--info" data-testid="kt-rp-launch-result">
+        <div>
+          <strong>{{ t('launchReadyTitle', { name: launchedSession.label }) }}</strong>
+          <p class="ktrp-muted">
+            {{ t('launchReadyIds', { sessionId: launchedSession.sessionId, creatureId: launchedSession.creatureId }) }}
+          </p>
+        </div>
+        <ActionButton
+          variant="primary"
+          size="sm"
+          data-testid="kt-rp-launch-open-session-btn"
+          @click="openSessionTab(launchedSession.sessionId)"
+        >
+          {{ t('launchOpenSession') }}
+        </ActionButton>
+      </div>
 
       <div
         v-if="owner.status.value === 'error' || owner.status.value === 'absent'"
@@ -444,33 +539,72 @@ export const CardLibraryView = {
           <ActionButton size="sm" @click="actionError = ''">{{ t('retry') }}</ActionButton>
         </div>
 
-        <SettingsGroup :title="t('library')" :description="t('libraryHint')">
-          <template #action>
-            <ActionButton size="sm" variant="ghost" icon="i-carbon-renew" :disabled="busy" data-testid="kt-rp-refresh-btn" @click="refreshLibrary">
-              {{ t('refresh') }}
-            </ActionButton>
-          </template>
-          <SettingsRow :title="t('importCard')" :hint="t('supportedHint', { mb: maxMiB })">
-            <ActionButton
-              variant="primary"
-              :disabled="busy"
-              data-testid="kt-rp-import-btn"
-              @click="triggerImport"
-            >
-              {{ busy ? t('importing') : t('importCard') }}
-            </ActionButton>
-            <input
-              ref="fileInput"
-              type="file"
-              accept=".json,.png,application/json,image/png"
-              hidden
-              tabindex="-1"
-              :disabled="busy"
-              data-testid="kt-rp-import-input"
-              @change="handleFileChange"
-            />
-          </SettingsRow>
-        </SettingsGroup>
+          <div class="ktrp-row-between">
+            <p class="ktrp-muted">{{ t('supportedHint', { mb: maxMiB }) }}</p>
+            <div class="ktrp-inline-actions">
+              <ActionButton
+                size="sm"
+                variant="ghost"
+                icon="i-carbon-renew"
+                :disabled="busy"
+                data-testid="kt-rp-refresh-btn"
+                @click="refreshLibrary"
+              >
+                {{ t('refresh') }}
+              </ActionButton>
+              <ActionButton
+                variant="primary"
+                size="sm"
+                :disabled="busy"
+                data-testid="kt-rp-import-btn"
+                @click="triggerImport"
+              >
+                {{ busy ? t('importing') : t('importCard') }}
+              </ActionButton>
+              <input
+                ref="fileInput"
+                type="file"
+                accept=".json,.png,application/json,image/png"
+                hidden
+                tabindex="-1"
+                :disabled="busy"
+                data-testid="kt-rp-import-input"
+                @change="handleFileChange"
+              />
+            </div>
+          </div>
+
+          <div
+            v-if="props.mode === 'tab' && cards.length"
+            class="ktrp-quick-launch-bar"
+            data-testid="kt-rp-quick-launch-bar"
+          >
+            <div class="ktrp-quick-launch-copy">
+              <strong>{{ t('quickLaunchBarTitle') }}</strong>
+              <span class="ktrp-muted">{{ t('quickLaunchBarHint', { name: selectedCard?.name || cards[0]?.name || '' }) }}</span>
+            </div>
+            <div class="ktrp-quick-launch-actions">
+              <ActionButton
+                variant="primary"
+                size="sm"
+                icon="i-carbon-chat"
+                :disabled="busy || !selectedCard"
+                data-testid="kt-rp-quick-launch-tavern-btn"
+                @click="launchTavernFromCard"
+              >
+                {{ t('studioLaunchTavernBtn') }}
+              </ActionButton>
+              <ActionButton
+                size="sm"
+                icon="i-carbon-book"
+                :disabled="busy || !cards.length"
+                data-testid="kt-rp-quick-launch-novel-btn"
+                @click="launchNovelQuick"
+              >
+                {{ novelCastIds.length ? t('studioLaunchNovelBtn') : t('quickLaunchNovelFromSelectedBtn') }}
+              </ActionButton>
+            </div>
+          </div>
 
         <div class="ktrp-library-split">
           <div class="ktrp-card-pane">
@@ -533,23 +667,25 @@ export const CardLibraryView = {
             </div>
             <template v-else-if="detail">
               <div class="ktrp-detail-header">
-                <PortraitFrame
-                  :card-id="detail.id"
-                  :name="detail.fields?.name || selectedCard.name"
-                  :has-portrait="detail.hasPortrait"
-                  arg-key="id"
-                  size="lg"
-                  :revision="portraitRevision"
-                />
-                <div class="ktrp-detail-title">
-                  <h3>{{ detail.fields?.name || selectedCard.name }}</h3>
-                  <div class="ktrp-chip-row">
-                    <span class="ktrp-chip">{{ t('versionTag', { version: detail.version }) }}</span>
-                    <span v-if="detail.hasWorldbook" class="ktrp-chip ktrp-chip--accent">{{ t('worldbookTag') }}</span>
-                    <span v-if="detail.fields?.creator" class="ktrp-chip">{{ t('creatorLabel') }}: {{ detail.fields.creator }}</span>
-                  </div>
-                  <div v-if="tags.length" class="ktrp-tag-list">
-                    <span v-for="tag in tags" :key="tag" class="ktrp-tag">{{ tag }}</span>
+                <div class="ktrp-detail-header-top">
+                  <PortraitFrame
+                    :card-id="detail.id"
+                    :name="detail.fields?.name || selectedCard.name"
+                    :has-portrait="detail.hasPortrait"
+                    arg-key="id"
+                    size="lg"
+                    :revision="portraitRevision"
+                  />
+                  <div class="ktrp-detail-title">
+                    <h3>{{ detail.fields?.name || selectedCard.name }}</h3>
+                    <div class="ktrp-chip-row">
+                      <span class="ktrp-chip">{{ t('versionTag', { version: detail.version }) }}</span>
+                      <span v-if="detail.hasWorldbook" class="ktrp-chip ktrp-chip--accent">{{ t('worldbookTag') }}</span>
+                      <span v-if="detail.fields?.creator" class="ktrp-chip">{{ t('creatorLabel') }}: {{ detail.fields.creator }}</span>
+                    </div>
+                    <div v-if="tags.length" class="ktrp-tag-list" data-testid="kt-rp-card-tags">
+                      <span v-for="tag in tags" :key="tag" class="ktrp-tag">{{ tag }}</span>
+                    </div>
                   </div>
                 </div>
                 <div class="ktrp-detail-actions">
@@ -626,29 +762,147 @@ export const CardLibraryView = {
                 </ul>
               </div>
 
-              <div class="ktrp-detail-sections">
-                <div v-if="detail.fields?.description" class="ktrp-field-block">
-                  <h4>{{ t('descriptionLabel') }}</h4>
-                  <p class="ktrp-pre">{{ detail.fields.description }}</p>
+            <div class="ktrp-detail-sections">
+                <div
+                  v-if="detail.fields?.description"
+                  class="ktrp-field-block ktrp-collapsible-block"
+                  data-testid="kt-rp-detail-section-description"
+                >
+                  <button
+                    type="button"
+                    class="ktrp-collapse-toggle"
+                    :aria-expanded="isDetailExpanded('description')"
+                    data-testid="kt-rp-toggle-description"
+                    @click="toggleDetailExpanded('description')"
+                  >
+                    <span class="ktrp-collapse-title">{{ t('descriptionLabel') }}</span>
+                    <span class="ktrp-collapse-meta">
+                      {{ isDetailExpanded('description') ? t('collapseFieldBtn') : t('expandFieldBtn') }}
+                    </span>
+                  </button>
+                  <p
+                    class="ktrp-pre ktrp-collapsible-body"
+                    :class="{ 'is-collapsed': !isDetailExpanded('description') }"
+                  >{{ detail.fields.description }}</p>
                 </div>
-                <div v-if="detail.fields?.personality" class="ktrp-field-block">
-                  <h4>{{ t('personalityLabel') }}</h4>
-                  <p class="ktrp-pre">{{ detail.fields.personality }}</p>
+
+                <div
+                  v-if="detail.fields?.personality"
+                  class="ktrp-field-block ktrp-collapsible-block"
+                  data-testid="kt-rp-detail-section-personality"
+                >
+                  <button
+                    type="button"
+                    class="ktrp-collapse-toggle"
+                    :aria-expanded="isDetailExpanded('personality')"
+                    data-testid="kt-rp-toggle-personality"
+                    @click="toggleDetailExpanded('personality')"
+                  >
+                    <span class="ktrp-collapse-title">{{ t('personalityLabel') }}</span>
+                    <span class="ktrp-collapse-meta">
+                      {{ isDetailExpanded('personality') ? t('collapseFieldBtn') : t('expandFieldBtn') }}
+                    </span>
+                  </button>
+                  <p
+                    class="ktrp-pre ktrp-collapsible-body"
+                    :class="{ 'is-collapsed': !isDetailExpanded('personality') }"
+                  >{{ detail.fields.personality }}</p>
                 </div>
-                <div v-if="detail.fields?.scenario" class="ktrp-field-block">
-                  <h4>{{ t('scenarioLabel') }}</h4>
-                  <p class="ktrp-pre">{{ detail.fields.scenario }}</p>
+
+                <div
+                  v-if="detail.fields?.scenario"
+                  class="ktrp-field-block ktrp-collapsible-block"
+                  data-testid="kt-rp-detail-section-scenario"
+                >
+                  <button
+                    type="button"
+                    class="ktrp-collapse-toggle"
+                    :aria-expanded="isDetailExpanded('scenario')"
+                    data-testid="kt-rp-toggle-scenario"
+                    @click="toggleDetailExpanded('scenario')"
+                  >
+                    <span class="ktrp-collapse-title">{{ t('scenarioLabel') }}</span>
+                    <span class="ktrp-collapse-meta">
+                      {{ isDetailExpanded('scenario') ? t('collapseFieldBtn') : t('expandFieldBtn') }}
+                    </span>
+                  </button>
+                  <p
+                    class="ktrp-pre ktrp-collapsible-body"
+                    :class="{ 'is-collapsed': !isDetailExpanded('scenario') }"
+                  >{{ detail.fields.scenario }}</p>
                 </div>
-                <div v-if="greetings.length" class="ktrp-field-block">
-                  <h4>{{ t('greetingsLabel', { count: greetings.length }) }}</h4>
-                  <div v-for="(greeting, idx) in greetings" :key="idx" class="ktrp-quote-box">
-                    <span class="ktrp-quote-idx">#{{ idx + 1 }}</span>
-                    <p class="ktrp-pre">{{ greeting }}</p>
+
+                <div
+                  v-if="greetings.length"
+                  class="ktrp-field-block ktrp-collapsible-block"
+                  data-testid="kt-rp-detail-section-greetings"
+                >
+                  <button
+                    type="button"
+                    class="ktrp-collapse-toggle"
+                    :aria-expanded="greetingsExpanded"
+                    data-testid="kt-rp-toggle-greetings"
+                    @click="toggleGreetingsExpanded"
+                  >
+                    <span class="ktrp-collapse-title">{{ t('greetingsLabel', { count: greetings.length }) }}</span>
+                    <span class="ktrp-collapse-meta">
+                      {{ greetingsExpanded ? t('collapseFieldBtn') : t('expandFieldBtn') }}
+                    </span>
+                  </button>
+                  <div v-if="greetingsExpanded" class="ktrp-stack">
+                    <div v-for="(greeting, idx) in greetings" :key="idx" class="ktrp-quote-box">
+                      <span class="ktrp-quote-idx">#{{ idx + 1 }}</span>
+                      <p class="ktrp-pre">{{ greeting }}</p>
+                    </div>
+                  </div>
+                  <div v-else class="ktrp-quote-box ktrp-collapsible-preview">
+                    <span class="ktrp-quote-idx">#1</span>
+                    <p class="ktrp-pre ktrp-collapsible-body is-collapsed">{{ greetings[0] }}</p>
                   </div>
                 </div>
-                <div v-if="detail.fields?.creator_notes" class="ktrp-field-block">
-                  <h4>{{ t('creatorNotesLabel') }}</h4>
-                  <p class="ktrp-pre">{{ detail.fields.creator_notes }}</p>
+
+                <div
+                  v-if="detail.fields?.creator_notes"
+                  class="ktrp-field-block ktrp-collapsible-block"
+                  data-testid="kt-rp-detail-section-creator-notes"
+                >
+                  <button
+                    type="button"
+                    class="ktrp-collapse-toggle"
+                    :aria-expanded="isDetailExpanded('creator_notes')"
+                    data-testid="kt-rp-toggle-creator-notes"
+                    @click="toggleDetailExpanded('creator_notes')"
+                  >
+                    <span class="ktrp-collapse-title">{{ t('creatorNotesLabel') }}</span>
+                    <span class="ktrp-collapse-meta">
+                      {{ isDetailExpanded('creator_notes') ? t('collapseFieldBtn') : t('expandFieldBtn') }}
+                    </span>
+                  </button>
+                  <p
+                    class="ktrp-pre ktrp-collapsible-body"
+                    :class="{ 'is-collapsed': !isDetailExpanded('creator_notes') }"
+                  >{{ detail.fields.creator_notes }}</p>
+                </div>
+              </div>
+
+              <!-- Studio quick-launch controls (always visible in tab mode; settings mode shows one-click shortcut to Studio tab) -->
+              <div v-if="props.mode !== 'tab'" class="ktrp-launch-section" data-testid="kt-rp-settings-launch-cta">
+                <div class="ktrp-card-box">
+                  <div class="ktrp-row-between">
+                    <div>
+                      <h4>{{ t('settingsLaunchTitle') }}</h4>
+                      <p class="ktrp-muted">{{ t('settingsLaunchHint') }}</p>
+                    </div>
+                    <ActionButton
+                      variant="primary"
+                      size="sm"
+                      icon="i-carbon-play"
+                      data-testid="kt-rp-settings-open-studio-btn"
+                      @click="openStudioTab"
+                    >
+                      {{ t('openStudioLibraryBtn') }}
+                    </ActionButton>
+                  </div>
                 </div>
               </div>
 
@@ -756,23 +1010,6 @@ export const CardLibraryView = {
               {{ t('studioLaunchNovelBtn') }}
             </ActionButton>
           </div>
-        </div>
-
-        <div v-if="launchedSession" class="ktrp-banner ktrp-banner--info" data-testid="kt-rp-launch-result">
-          <div>
-            <strong>{{ t('launchReadyTitle', { name: launchedSession.label }) }}</strong>
-            <p class="ktrp-muted">
-              {{ t('launchReadyIds', { sessionId: launchedSession.sessionId, creatureId: launchedSession.creatureId }) }}
-            </p>
-          </div>
-          <ActionButton
-            variant="primary"
-            size="sm"
-            data-testid="kt-rp-launch-open-session-btn"
-            @click="openSessionTab(launchedSession.sessionId)"
-          >
-            {{ t('launchOpenSession') }}
-          </ActionButton>
         </div>
 
         <SettingsGroup :title="t('usageGuideTitle')">
