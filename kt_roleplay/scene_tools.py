@@ -72,7 +72,9 @@ def prepare_cue(context: ToolContext, group, story: Story, actor: str) -> dict[s
 
 class DispatchScene(SceneTool):
     tool_name = "rp_dispatch_scene"
-    description = "Start a scene. Send a distinct sensory observation to each affected actor only. Return without drafting prose until required reports arrive."
+    description = ('Start one scene. Pass cues as an object keyed by actual cast IDs; each value is '
+                   'an object {"observation": "..."}, not a string. Include only actors who can perceive '
+                   'the event. End the turn without prose while waiting for their reports.')
     arguments = Dispatch
 
     def __init__(self, host: SceneHost):
@@ -93,7 +95,10 @@ class DispatchScene(SceneTool):
 
 class ReportScene(SceneTool):
     tool_name = "rp_report_scene"
-    description = "Report your own speech, attempted action and private reaction to the director for the scene number you received. Never claim the outcome."
+    description = ('Report your own proposal for the integer scene you received. Pass proposal as '
+                   'an object, not a JSON-encoded string: {"speech": "...", "attempted_action": "...", '
+                   '"private_reaction": "..."}. All three values are strings; use "" when absent. '
+                   'Do not claim the outcome.')
     arguments = Report
 
     async def _execute(self, args: dict, context: ToolContext) -> ToolResult:
@@ -154,7 +159,10 @@ class CheckScene(SceneTool):
 
 class CommitScene(SceneTool):
     tool_name = "rp_commit_scene"
-    description = "Commit the director's authoritative outcome, character-specific observations, public status and final reader prose once all NPCs have reported."
+    description = ('Adjudicate once all reports are in. Pass scene as an integer and outcome as an '
+                   'object containing {"prose": "..."}, not the prose string itself. Include changed '
+                   'facts, private_updates, visible_status or card_updates in outcome when applicable. '
+                   'Keep character-private information out of reader prose.')
     arguments = Commit
 
     def __init__(self, host: SceneHost):
