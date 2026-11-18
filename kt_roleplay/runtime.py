@@ -6,6 +6,7 @@ from typing import Literal
 
 from kohakuterrarium.builtins.plugins.ui_declarative.plugin import attached_renderers
 from kohakuterrarium.modules.output.event import OutputEvent
+from kohakuterrarium.modules.tool.base import ToolContext
 from kohakuterrarium.terrarium.tools.context import resolve_group_context, resolve_group_target
 from pydantic import TypeAdapter
 
@@ -18,7 +19,7 @@ from kohakuterrarium.utils.config_dir import config_dir
 
 from .cards import CardError, CardFields
 from .cast import NovelBinding
-from .novel import Story
+from .novel import SceneError, Story
 from .library_view import card_detail, cards_view, portrait_view
 from .library import CardNotFound, get_card
 from .lore import LoreBook, active_entries, load_book
@@ -178,6 +179,28 @@ class RoleplayPlugin(BasePlugin):
             raise ValueError("Only the director may adjudicate")
         self.can_open_scene = False
         self._save(story.model_dump())
+        self.ui_emit("state", self.ui_state())
+
+    def save_adjudication(self, context: ToolContext, story: Story, recipients: tuple[str, ...]) -> None:
+        """Commit the world and addressed NPC memories without waking a creature."""
+        group = resolve_group_context(context)
+        director = self.binding
+        if self.mode != "novel" or director is None or director.host_agent is not group.caller.agent:
+            raise SceneError("Only the bound director can commit an adjudication")
+        store = director.session_store
+        if store is None:
+            raise SceneError("A persistent novel session is required")
+        rows = [(director._state_key("novel"), story.model_dump())]
+        for actor in recipients:
+            target = resolve_group_target(group, actor)
+            plugin = target.agent.plugins.get_plugin("roleplay")
+            binding = plugin.binding if isinstance(plugin, RoleplayPlugin) else None
+            if binding is None or plugin.mode != "npc" or binding.session_store is not store or binding.agent_name != actor:
+                raise SceneError(f"Cannot deliver an adjudication to the session of {actor!r}")
+            receipt = {"throughScene": story.completed, "known": story.knowledge[actor]}
+            rows.append((binding._state_key("privateKnowledge"), receipt))
+        store.state.put_many(rows)
+        self.can_open_scene = False
         self.ui_emit("state", self.ui_state())
 
     def _record(self) -> object:

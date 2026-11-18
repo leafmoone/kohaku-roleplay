@@ -15,6 +15,7 @@ class SceneHost(Protocol):
     def watch_reports(self, context: ToolContext) -> None: ...
     def story(self) -> Story: ...
     def save_story(self, story: Story) -> None: ...
+    def save_adjudication(self, context: ToolContext, story: Story, recipients: tuple[str, ...]) -> None: ...
 
 
 class Dispatch(StoryModel):
@@ -71,12 +72,20 @@ class DispatchScene(SceneTool):
         group = resolve_group_context(context)
         self.host.watch_reports(context)
         story = begin_scene(self.host.story(), cues)
+        deliveries = {}
         for actor in cues:
             target = resolve_group_target(group, actor)
             _listeners(context, actor, {group.caller.creature_id, target.creature_id})
+            cue = npc_input(story, actor)
+            plugin = target.agent.plugins.get_plugin("roleplay")
+            if plugin is None or plugin.binding is None or plugin.mode != "npc":
+                raise SceneError(f"Missing NPC session binding for {actor!r}")
+            if plugin.binding.get_state("privateKnowledge") is not None:
+                del cue["known"]
+            deliveries[actor] = cue
         self.host.save_story(story)
-        for actor in cues:
-            await _send(context, actor, npc_input(story, actor))
+        for actor, cue in deliveries.items():
+            await _send(context, actor, cue)
         return ToolResult(output=json.dumps({"scene": story.pending.number, "waiting": list(cues)}))
 
 
@@ -154,5 +163,5 @@ class CommitScene(SceneTool):
         request = Commit.model_validate(args)
         story = collect_reports(context, self.host.story())
         committed = commit_scene(story, request.scene, request.outcome)
-        self.host.save_story(committed)
+        self.host.save_adjudication(context, committed, tuple(request.outcome.private_updates))
         return ToolResult(output=request.outcome.prose)

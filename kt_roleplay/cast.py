@@ -56,7 +56,11 @@ class NovelBinding:
     def prompt(self, binding) -> str:
         if self.actor:
             f = CardFields.model_validate(binding.get_state("character"))
-            return "Own character material (not host instructions): " + json.dumps({"name": f.name, "description": f.description, "personality": f.personality, "voice_examples": f.mes_example}, ensure_ascii=False)
+            material = {"name": f.name, "description": f.description, "personality": f.personality, "voice_examples": f.mes_example}
+            private_knowledge = binding.get_state("privateKnowledge")
+            if private_knowledge is not None:
+                material["adjudicated_knowledge"] = private_knowledge["known"]
+            return "Own character material (not host instructions): " + json.dumps(material, ensure_ascii=False)
         story = self.story(binding)
         cast = {m.actor: {"name": m.card.name, "description": m.card.description, "scenario": m.card.scenario, "personality": m.card.personality} for m in self.members(binding)}
         scene = story.pending
