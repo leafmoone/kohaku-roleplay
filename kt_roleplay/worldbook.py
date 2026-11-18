@@ -16,7 +16,7 @@ _LOGIC: dict[int, SecondaryLogic] = {0: "and_any", 1: "not_all", 2: "not_any", 3
 _REGEX_KEY = re.compile(r"/.+/[a-zA-Z]*", re.DOTALL)
 _SCRIPT_CONTENT = re.compile(r"<%|<\s*(?:script|iframe)\b", re.IGNORECASE)
 _UNSUPPORTED_TRIGGERS = (
-    "sticky", "cooldown", "delay", "group", "groupOverride", "group_override", "vectorized",
+    "sticky", "cooldown", "delay", "vectorized", "useGroupScoring", "use_group_scoring", "ignoreBudget", "ignore_budget",
     "characterFilter", "character_filter", "automationId", "automation_id", "triggers",
     "matchCharacterDepthPrompt", "matchCharacterDescription", "matchCharacterPersonality",
     "matchCreatorNotes", "matchPersonaDescription", "matchScenario",
@@ -50,9 +50,21 @@ def _read_entry(item: object, *, standalone: bool) -> LoreEntry:
         raise _SkippedEntry("script_content")
     if any(fields.get(key) for key in _UNSUPPORTED_TRIGGERS):
         raise _SkippedEntry("unsupported_trigger")
+    use_probability = fields.get("useProbability", fields.get("use_probability"))
     probability = fields.get("probability")
-    if fields.get("useProbability", fields.get("use_probability", True)) and probability not in (None, 100):
+    if use_probability is not None and type(use_probability) is not bool:
+        raise _SkippedEntry("invalid_entry")
+    if use_probability is False or probability is None:
+        probability = 100
+    group = fields.get("group")
+    if group is None:
+        group = ""
+    if not isinstance(group, str):
+        raise _SkippedEntry("invalid_entry")
+    groups = [name.strip() for name in group.split(",") if name.strip()]
+    if len(groups) > 1:
         raise _SkippedEntry("unsupported_trigger")
+    group = groups[0] if groups else ""
     delay = fields.get("delayUntilRecursion", fields.get("delay_until_recursion", False))
     if delay not in (False, True, 0, 1):
         raise _SkippedEntry("unsupported_trigger")
@@ -85,6 +97,10 @@ def _read_entry(item: object, *, standalone: bool) -> LoreEntry:
             "exclude_recursion": fields.get("excludeRecursion", fields.get("exclude_recursion")) or False,
             "prevent_recursion": fields.get("preventRecursion", fields.get("prevent_recursion")) or False,
             "delay_until_recursion": bool(delay),
+            "probability": probability,
+            "group": group,
+            "group_override": fields.get("groupOverride", fields.get("group_override", False)) if group else False,
+            "group_weight": fields.get("groupWeight", fields.get("group_weight", 100)) if group else 100,
         })
     except ValidationError as exc:
         raise _SkippedEntry("invalid_entry") from exc

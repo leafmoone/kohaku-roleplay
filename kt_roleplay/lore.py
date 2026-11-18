@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import Callable, Sequence
+from random import random
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,6 +33,10 @@ class LoreEntry(BaseModel):
     exclude_recursion: bool = False
     prevent_recursion: bool = False
     delay_until_recursion: bool = False
+    probability: float = Field(default=100, ge=0, le=100, allow_inf_nan=False)
+    group: str = ""
+    group_override: bool = False
+    group_weight: int = Field(default=100, ge=1, le=10_000)
 
     def matches(self, text: str) -> bool:
         if not self.enabled:
@@ -81,19 +86,39 @@ class LoreBook(BaseModel):
         }
 
 
+def _group_winner(group: list[tuple[int, LoreEntry]]) -> int:
+    if len(group) == 1:
+        return group[0][0]
+    prioritized = [row for row in group if row[1].group_override]
+    if prioritized:
+        return max(prioritized, key=lambda row: (row[1].insertion_order, -row[0]))[0]
+    roll = random() * sum(e.group_weight for _, e in group)
+    for index, entry in group:
+        roll -= entry.group_weight
+        if roll < 0:
+            return index
+    return group[-1][0]
+
+
 def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str], int], allowance: int) -> list[LoreEntry]:
     budget = min(book.token_budget, allowance)
     scan_text = {}
     recursive_text = []
     chosen = []
     selected = set()
+    blocked = set()
+    accepted_groups = set()
     ordered = sorted(enumerate(book.entries), key=lambda row: -row[1].priority)
     # Bound the number of scans even when an imported book contains a long chain.
     for level in range(8 if book.recursive_scanning else 1):
         context = "\n".join(recursive_text)
         added = []
+        candidates = []
+        groups = {}
         for index, entry in ordered:
-            if index in selected or (level and entry.exclude_recursion) or (not level and entry.delay_until_recursion):
+            if index in selected or index in blocked or entry.group in accepted_groups:
+                continue
+            if (level and entry.exclude_recursion) or (not level and entry.delay_until_recursion):
                 continue
             depth = book.scan_depth if entry.scan_depth is None else entry.scan_depth
             if depth not in scan_text:
@@ -103,10 +128,24 @@ def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str],
                 visible += "\n" + context
             if not entry.matches(visible):
                 continue
+            candidates.append((index, entry))
+            if entry.group:
+                groups.setdefault(entry.group, []).append((index, entry))
+        winners = {name: _group_winner(items) for name, items in groups.items()}
+        for index, entry in candidates:
+            if entry.group and winners[entry.group] != index:
+                blocked.add(index)
+                continue
+            # Match ST's group selection before trigger chance; never re-roll a failed entry in recursion.
+            if entry.probability < 100 and (entry.probability == 0 or random() * 100 >= entry.probability):
+                blocked.add(index)
+                continue
             size = cost(entry.content)
             if size <= budget:
                 chosen.append(entry)
                 selected.add(index)
+                if entry.group:
+                    accepted_groups.add(entry.group)
                 budget -= size
                 if not entry.prevent_recursion and entry.content:
                     added.append(entry.content)
