@@ -1,11 +1,14 @@
 """Bind confirmed character data to a live KT creature without mutating its config."""
 
+from collections.abc import Callable
+from contextlib import aclosing
 import json
 from pathlib import Path
 from typing import Literal
 
 from kohakuterrarium.builtins.plugins.ui_declarative.plugin import attached_renderers
 from kohakuterrarium.modules.output.event import OutputEvent
+from kohakuterrarium.parsing.events import AssistantImageEvent, TextEvent
 from kohakuterrarium.modules.tool.base import ToolContext
 from kohakuterrarium.terrarium.tools.context import resolve_group_context, resolve_group_target
 from pydantic import TypeAdapter
@@ -98,13 +101,37 @@ class RoleplayPlugin(BasePlugin):
         self.binding: PluginContext | None = None
         self.report_watch = None
         self.can_open_scene = False
+        self._committed_prose: str | None = None
+        self._narration_round: str | None = None
+        self._restore_completion: Callable[[], None] | None = None
 
     async def on_load(self, context: PluginContext) -> None:
         self.binding = context
+        controller = context.controller
+        if self.mode == "novel" and controller is not None:
+            # KT 2.2.2 streams parse events before post_llm_call can rewrite
+            # history. Gate only the director's committed continuation.
+            original = controller.run_once
+
+            async def run_once():
+                show_committed = self._committed_prose is not None
+                async with aclosing(original()) as events:
+                    async for event in events:
+                        if not show_committed or not isinstance(event, (TextEvent, AssistantImageEvent)):
+                            yield event
+
+            def restore() -> None:
+                if controller.run_once is run_once:
+                    controller.run_once = original
+
+            controller.run_once = run_once
+            self._restore_completion = restore
 
     async def on_event(self, event) -> None:
         if self.mode == "novel" and event.type == "user_input":
             self.can_open_scene = True
+            # Never apply an interrupted continuation to a new player turn.
+            self._committed_prose = self._narration_round = None
         if self.mode == "npc" and event.type == "channel_message" and self.binding is not None:
             raw = event.context.get("raw_content")
             if event.context.get("channel") == self.binding.agent_name and isinstance(raw, str):
@@ -138,11 +165,16 @@ class RoleplayPlugin(BasePlugin):
 
     async def on_unload(self) -> None:
         self._unwatch_reports()
+        if self._restore_completion is not None:
+            self._restore_completion()
+            self._restore_completion = None
 
     def presentation_contribution(self, context: PluginContext) -> str | None:
         if self.mode not in ("tavern", "novel") or "kt_roleplay.choices" not in attached_renderers(context.host_agent):
             return None
-        return 'Optional reader choices after finished prose: a closed kt_roleplay.choices code fence containing JSON {"prompt":"…","options":["…","…"]}. Free text remains available.'
+        location = "in outcome.prose when committing a scene" if self.mode == "novel" else "after finished prose"
+        return ('Optional reader choices ' + location + ': a closed kt_roleplay.choices code fence containing '
+                'JSON {"prompt":"…","options":["…","…"]}. Free text remains available.')
 
     def get_tool_visibility(self, context: PluginContext) -> ToolVisibility | None:
         if self.mode == "tavern":
@@ -223,6 +255,7 @@ class RoleplayPlugin(BasePlugin):
             if actor in outcome.card_updates:
                 rows.append((binding._state_key("fieldValues"), story.card_values[actor]))
         store.state.put_many(rows)
+        self._committed_prose = story.latest_prose
         self.can_open_scene = False
         self.ui_emit("state", self.ui_state())
 
@@ -333,6 +366,7 @@ class RoleplayPlugin(BasePlugin):
         record = self._record()
         if self.novel:
             content = self.novel.prompt(self.binding)
+            self._narration_round = self._committed_prose
         elif record is None:
             return None
         elif self.mode == "persona":
@@ -357,3 +391,18 @@ class RoleplayPlugin(BasePlugin):
                     self.ui_emit("state", self.ui_state())
         index = next((i for i, message in enumerate(messages) if message.get("role") not in ("system", "developer")), len(messages))
         return [*messages[:index], {"role": "user", "content": content}, *messages[index:]]
+
+    async def post_llm_call(self, messages: list[dict], response: str, usage: dict, **kwargs: object) -> str | None:
+        """Keep the terminal assistant message tied to the already committed prose."""
+        prose, self._narration_round = self._narration_round, None
+        if prose is None or self._committed_prose is None:
+            return None
+        # Update this round before KT records it. Returning rewritten text here
+        # would expose the withheld draft in KT's assistant_message_edited preview.
+        last = self.binding.controller.conversation.get_last_assistant_message()
+        if last is None:
+            raise SceneError("Cannot publish a scene without a completed assistant round")
+        last.content = prose
+        await self.binding.emit(OutputEvent(type="text", content=prose))
+        self._committed_prose = None
+        return None
