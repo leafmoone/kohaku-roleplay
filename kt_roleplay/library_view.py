@@ -3,6 +3,7 @@
 import base64
 from pathlib import Path
 
+from .errors import CardError
 from .library import get_card, list_cards
 from .lore import load_book
 
@@ -17,6 +18,12 @@ def card_detail(directory: Path, key: str) -> dict:
     return {"id": key, "version": card.version, "fields": card.fields.model_dump(), "warnings": card.warnings, "hasPortrait": card.portrait is not None, "hasWorldbook": book is not None, "bookSummary": {"entryCount": len(book.entries), "scanDepth": book.scan_depth, "tokenBudget": book.token_budget} if book is not None else None}
 
 
-def portrait_view(directory: Path, key: str) -> dict:
-    content = get_card(directory, key).portrait
+def portrait_view(directory: Path, key: str, variant: str | None) -> dict:
+    card = get_card(directory, key)
+    if variant is not None:
+        for asset in card.portraits:
+            if asset.key == variant:
+                return {"url": "data:image/png;base64," + asset.data}
+        raise CardError("No such portrait on this card")
+    content = card.portrait
     return {"url": "data:image/png;base64," + base64.b64encode(content).decode("ascii") if content else None}

@@ -11,6 +11,7 @@ from kohakuterrarium.modules.ui_owner import OwnerArgumentError
 from .cards import CardFields
 from .card_state import StateField, model_fields, public_fields, update_values
 from .novel import Outcome, SceneError, Story
+from .portraits import PortraitRule, chosen_key
 from .scene_tools import CheckScene, CommitScene, DispatchScene, ReportScene
 
 
@@ -20,6 +21,7 @@ class CastMember(BaseModel):
     cardId: str
     card: CardFields
     hasPortrait: bool
+    portrait_rules: list[PortraitRule] = Field(default_factory=list)
     state_fields: list[StateField] = Field(default_factory=list)
 
 
@@ -102,7 +104,11 @@ class NovelBinding:
         for member in self.members(binding):
             entry = {"name": member.card.name, "cardId": member.cardId, "hasPortrait": member.hasPortrait,
                      "visibleStatus": story.visible_status.get(member.actor, {})}
-            visible = public_fields(member.state_fields, story.card_values.get(member.actor, {}))
+            values = story.card_values.get(member.actor, {})
+            selected = chosen_key(member.portrait_rules, member.state_fields, values)
+            if selected is not None:
+                entry.update(hasPortrait=True, portraitKey=selected)
+            visible = public_fields(member.state_fields, values)
             if visible:
                 entry["stateFields"] = visible
             cast.append(entry)

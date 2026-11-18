@@ -13,6 +13,7 @@ from kohakuterrarium.terrarium import LocalTerrariumService, TerrariumService
 from .cast import CastMember, cast_recipe
 from .library import CardNotFound, get_card
 from .runtime import Arguments, Play, RoleplayPlugin, library_dir
+from .portraits import rules_for
 
 
 def local_host(request: Request, service: TerrariumService = Depends(current_service)) -> None:
@@ -61,7 +62,7 @@ async def start_novel(body: NovelStart, host: StudioDep, service: ServiceDep) ->
     members = []
     for index, key in enumerate(body.cardIds, 1):
         card = _library_card(key)
-        members.append(CastMember(actor=f"npc_{index}", cardId=key, card=card.fields, hasPortrait=card.portrait is not None, state_fields=card.state_fields))
+        members.append(CastMember(actor=f"npc_{index}", cardId=key, card=card.fields, hasPortrait=card.portrait is not None, portrait_rules=rules_for(card.portraits), state_fields=card.state_fields))
     recipe = cast_recipe(library_dir() / "recipes", members)
     try:
         session = await host.sessions.start_terrarium(recipe, name=body.name or "Roleplay Novel")

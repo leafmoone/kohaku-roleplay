@@ -12,6 +12,7 @@ from .card_editor import CopyRequest, edit_draft, save_copy
 from .cards import MAX_CARD_BYTES, PNG_HEADER, CardError
 from .library import CardNotFound, import_card, list_cards, original_card, remove_card
 from .library_view import card_detail, portrait_view
+from .portrait_library import PortraitCopy, portrait_draft, save_portraits_copy
 from .runtime import library_dir
 
 
@@ -53,8 +54,17 @@ class CardCatalog(UIOwnerMixin):
                 return card
             if action == "detail":
                 return await asyncio.to_thread(card_detail, directory, _id(args))
+            if action == "portrait_draft":
+                return await asyncio.to_thread(portrait_draft, directory, _id(args))
+            if action == "save_portraits_copy":
+                card = await asyncio.to_thread(save_portraits_copy, directory, PortraitCopy.model_validate(args))
+                self.ui_emit("state", await self.ui_state(context))
+                return card
             if action == "portrait":
-                return await asyncio.to_thread(portrait_view, directory, _id(args))
+                variant = args.get("variant")
+                if variant is not None and not isinstance(variant, str):
+                    raise OwnerArgumentError("Expected a portrait key")
+                return await asyncio.to_thread(portrait_view, directory, _id(args), variant)
             if action == "remove":
                 await asyncio.to_thread(remove_card, directory, _id(args))
                 state = await self.ui_state(context)

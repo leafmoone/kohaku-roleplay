@@ -22,6 +22,7 @@ from .cast import NovelBinding
 from .novel import Outcome, SceneError, Story
 from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields, update_values
 from .state_tool import SetCardState
+from .portraits import PortraitRule, chosen_key, rules_for
 from .library_view import card_detail, cards_view, portrait_view
 from .library import CardNotFound, get_card
 from .lore import LoreBook, active_entries, load_book
@@ -58,6 +59,7 @@ class TavernSession(Arguments):
     greetingIndex: int = 0
     openingSent: bool = False
     hasPortrait: bool = False
+    portrait_rules: list[PortraitRule] = Field(default_factory=list)
     state_fields: list[StateField] = Field(default_factory=list)
     values: dict[str, Value] = Field(default_factory=dict)
     lore: LoreBook | None
@@ -246,6 +248,9 @@ class RoleplayPlugin(BasePlugin):
                 "openingSent": play.openingSent, "hasPortrait": play.hasPortrait, "notes": play.notes,
                 "worldbookEntries": len(play.worldbook.entries) if play.worldbook else None,
                 "lore": self.binding.get_state("loreView") if self.binding else None}
+        selected = chosen_key(play.portrait_rules, play.state_fields, play.values)
+        if selected is not None:
+            view.update(hasPortrait=True, portraitKey=selected)
         visible = public_fields(play.state_fields, play.values)
         if visible:
             view["stateFields"] = visible
@@ -269,7 +274,15 @@ class RoleplayPlugin(BasePlugin):
                     raise OwnerArgumentError("A card id is required")
                 if self.mode == "novel" and (action != "portrait" or key not in {m.cardId for m in self.novel.members(self.binding)}):
                     raise OwnerArgumentError("The reader can only request portraits from this cast")
-                return card_detail(library_dir(), key) if action == "detail" else portrait_view(library_dir(), key)
+                if action == "detail":
+                    return card_detail(library_dir(), key)
+                selected = args.get("variant")
+                if selected is not None:
+                    view = self.ui_state()
+                    entries = view["cast"] if self.mode == "novel" else [view]
+                    if not isinstance(selected, str) or not any(e.get("cardId") == key and e.get("portraitKey") == selected for e in entries):
+                        raise OwnerArgumentError("Portrait is not selected in this session")
+                return portrait_view(library_dir(), key, selected)
             if action == "apply_persona" and self.mode == "persona":
                 request = Attach.model_validate(args)
                 get_card(library_dir(), request.cardId)
@@ -285,7 +298,7 @@ class RoleplayPlugin(BasePlugin):
                 if choice.greetingIndex >= len(greetings):
                     raise OwnerArgumentError("Opening index is out of range")
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player, greeting=expand(greetings[choice.greetingIndex], card.fields.name, choice.player.name, ""), lore=load_book(card.book) if card.book is not None else None, notes="")
-                play = play.model_copy(update={"greetingIndex": choice.greetingIndex, "hasPortrait": card.portrait is not None, "state_fields": card.state_fields})
+                play = play.model_copy(update={"greetingIndex": choice.greetingIndex, "hasPortrait": card.portrait is not None, "portrait_rules": rules_for(card.portraits), "state_fields": card.state_fields})
                 self._save(play.model_dump())
                 if play.greeting:
                     await self.publish_opening(play.greeting)

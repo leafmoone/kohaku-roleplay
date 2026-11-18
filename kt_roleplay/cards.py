@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from .card_state import StateField, decode_fields
 from .errors import CardError
 from .lore import load_book
+from .portraits import PortraitAsset, read_portraits
 
 MAX_CARD_BYTES = 12 * 1024 * 1024
 PNG_HEADER = b"\x89PNG\r\n\x1a\n"
@@ -46,6 +47,7 @@ class ParsedCard(BaseModel):
     book: dict[str, object] | None
     warnings: list[str]
     state_fields: list[StateField] = Field(default_factory=list)
+    portraits: list[PortraitAsset] = Field(default_factory=list)
     portrait: bytes | None = None
 
 
@@ -116,4 +118,10 @@ def parse_card(raw: bytes) -> ParsedCard:
         warnings.append("Card extensions are retained in the original; external scripts are not executed.")
     if data.get("assets"):
         warnings.append("V3 external assets are retained, not automatically fetched.")
-    return ParsedCard(version=version, fields=fields, book=book, warnings=warnings, portrait=portrait, state_fields=definitions)
+    namespace = extensions.get("kohaku-roleplay", {}) if isinstance(extensions, dict) else {}
+    portraits = read_portraits(namespace.get("portraits", []), definitions, MAX_CARD_BYTES)
+    cover = next((p for p in portraits if p.field is None), None)
+    if cover is not None:
+        portrait = base64.b64decode(cover.data)
+    return ParsedCard(version=version, fields=fields, book=book, warnings=warnings,
+                      portrait=portrait, state_fields=definitions, portraits=portraits)
