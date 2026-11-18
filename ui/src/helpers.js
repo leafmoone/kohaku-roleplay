@@ -168,6 +168,247 @@ export function normalizeStateFields(rawFields) {
 }
 
 /**
+ * Sanitize a character name into a safe download filename for PNG or JSON export.
+ */
+export function sanitizeDownloadFilename(name, format = "json") {
+  const ext = format === "png" ? ".png" : ".json";
+  const cleaned = String(name || "")
+    .replace(/[\u0000-\u001f\u007f<>:"/\\|?*]+/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^\.+|\.+$/g, "")
+    .slice(0, 80)
+    .trim();
+  return `${cleaned || "character"}${ext}`;
+}
+
+/**
+ * Decode an ASCII Base64 string into raw bytes for local Blob download.
+ */
+export function base64ToUint8Array(base64) {
+  const binary = atob(String(base64 || ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+const STRING_CARD_FIELDS = [
+  "name",
+  "description",
+  "personality",
+  "scenario",
+  "first_mes",
+  "mes_example",
+  "creator_notes",
+  "creator",
+  "system_prompt",
+  "post_history_instructions",
+];
+
+const ARRAY_CARD_FIELDS = ["alternate_greetings", "tags"];
+
+/**
+ * Normalize raw CardFields from edit_draft into a clean mutable draft object.
+ */
+export function cloneEditableFields(rawFields) {
+  const src = rawFields && typeof rawFields === "object" ? rawFields : {};
+  const out = {};
+  for (const key of STRING_CARD_FIELDS) {
+    out[key] = typeof src[key] === "string" ? src[key] : "";
+  }
+  for (const key of ARRAY_CARD_FIELDS) {
+    out[key] = Array.isArray(src[key]) ? src[key].map((v) => String(v ?? "")) : [];
+  }
+  return out;
+}
+
+/**
+ * Compute minimal patch of changed CardFields between original draft and edited draft.
+ * Preserves multi-line newlines in text/greetings without stripping internal line breaks.
+ */
+export function diffCardFields(originalFields, editedFields) {
+  const orig = cloneEditableFields(originalFields);
+  const next = cloneEditableFields(editedFields);
+  const patch = {};
+  for (const key of STRING_CARD_FIELDS) {
+    if (next[key] !== orig[key]) {
+      patch[key] = next[key];
+    }
+  }
+  for (const key of ARRAY_CARD_FIELDS) {
+    const a = orig[key];
+    const b = next[key];
+    if (a.length !== b.length || a.some((val, idx) => val !== b[idx])) {
+      patch[key] = [...b];
+    }
+  }
+  return patch;
+}
+
+const STATE_KEY_RE = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
+
+/**
+ * Convert backend StateField[] into interactive form rows for the editor.
+ */
+export function cloneStateDefinitionsToForm(defs) {
+  if (!Array.isArray(defs)) return [];
+  return defs.map((item) => {
+    const type = item?.type === "number" || item?.type === "enum" || item?.type === "list" ? item.type : "text";
+    const visibility = item?.visibility === "private" ? "private" : "public";
+    if (type === "number") {
+      return {
+        key: String(item?.key || ""),
+        label: String(item?.label || ""),
+        type,
+        visibility,
+        initialText: item?.initial !== undefined && item?.initial !== null ? String(item.initial) : "0",
+        minText: item?.min !== undefined && item?.min !== null ? String(item.min) : "",
+        maxText: item?.max !== undefined && item?.max !== null ? String(item.max) : "",
+        options: [],
+        listItems: [],
+      };
+    }
+    if (type === "enum") {
+      const options = Array.isArray(item?.options) ? item.options.map(String) : [];
+      const initial = typeof item?.initial === "string" && options.includes(item.initial) ? item.initial : options[0] || "";
+      return {
+        key: String(item?.key || ""),
+        label: String(item?.label || ""),
+        type,
+        visibility,
+        initialText: initial,
+        minText: "",
+        maxText: "",
+        options,
+        listItems: [],
+      };
+    }
+    if (type === "list") {
+      return {
+        key: String(item?.key || ""),
+        label: String(item?.label || ""),
+        type,
+        visibility,
+        initialText: "",
+        minText: "",
+        maxText: "",
+        options: [],
+        listItems: Array.isArray(item?.initial) ? item.initial.map(String) : [],
+      };
+    }
+    return {
+      key: String(item?.key || ""),
+      label: String(item?.label || ""),
+      type: "text",
+      visibility,
+      initialText: typeof item?.initial === "string" ? item.initial : "",
+      minText: "",
+      maxText: "",
+      options: [],
+      listItems: [],
+    };
+  });
+}
+
+function parseOptionalFiniteNumber(text) {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed) return { present: false, ok: true, value: undefined };
+  const num = Number(trimmed);
+  if (!Number.isFinite(num)) return { present: true, ok: false, value: NaN };
+  return { present: true, ok: true, value: num };
+}
+
+/**
+ * Validate interactive state definition rows and build strict StateField[] payload.
+ * Returns { ok: true, definitions } or { ok: false, code, index, key }.
+ */
+export function buildStateDefinitionsPayload(rows) {
+  if (!Array.isArray(rows)) return { ok: true, definitions: [] };
+  const seenKeys = new Set();
+  const definitions = [];
+
+  for (let idx = 0; idx < rows.length; idx += 1) {
+    const row = rows[idx] || {};
+    const key = String(row.key ?? "").trim();
+    const label = String(row.label ?? "").trim();
+    const type = row.type;
+    const visibility = row.visibility === "private" ? "private" : "public";
+
+    if (!STATE_KEY_RE.test(key)) {
+      return { ok: false, code: "key", index: idx, key };
+    }
+    if (seenKeys.has(key)) {
+      return { ok: false, code: "duplicateKey", index: idx, key };
+    }
+    seenKeys.add(key);
+
+    if (!label) {
+      return { ok: false, code: "label", index: idx, key };
+    }
+
+    if (type === "number") {
+      const minRes = parseOptionalFiniteNumber(row.minText);
+      const maxRes = parseOptionalFiniteNumber(row.maxText);
+      const initRes = parseOptionalFiniteNumber(row.initialText);
+      if (!initRes.present || !initRes.ok) {
+        return { ok: false, code: "numberInitial", index: idx, key };
+      }
+      if (!minRes.ok || !maxRes.ok) {
+        return { ok: false, code: "numberBounds", index: idx, key };
+      }
+      if (minRes.present && maxRes.present && maxRes.value < minRes.value) {
+        return { ok: false, code: "numberRangeOrder", index: idx, key };
+      }
+      if (
+        (minRes.present && initRes.value < minRes.value) ||
+        (maxRes.present && initRes.value > maxRes.value)
+      ) {
+        return { ok: false, code: "numberOutOfBounds", index: idx, key };
+      }
+      const out = { key, label, type: "number", initial: initRes.value, visibility };
+      if (minRes.present) out.min = minRes.value;
+      if (maxRes.present) out.max = maxRes.value;
+      definitions.push(out);
+    } else if (type === "enum") {
+      const options = Array.isArray(row.options) ? row.options.map((v) => String(v)) : [];
+      if (!options.length || new Set(options).size !== options.length) {
+        return { ok: false, code: "enumOptions", index: idx, key };
+      }
+      const initial = String(row.initialText ?? "");
+      if (!options.includes(initial)) {
+        return { ok: false, code: "enumInitial", index: idx, key };
+      }
+      definitions.push({ key, label, type: "enum", initial, visibility, options });
+    } else if (type === "list") {
+      const listVal = Array.isArray(row.listItems) ? row.listItems.map((v) => String(v)) : [];
+      definitions.push({ key, label, type: "list", initial: listVal, visibility });
+    } else {
+      definitions.push({
+        key,
+        label,
+        type: "text",
+        initial: String(row.initialText ?? ""),
+        visibility,
+      });
+    }
+  }
+
+  return { ok: true, definitions };
+}
+
+/**
+ * Compare original backend StateField[] with edited definitions to decide
+ * whether stateDefinitions should be sent on save_copy.
+ */
+export function areStateDefinitionsEqual(origDefs, nextDefs) {
+  const canonicalOrig = buildStateDefinitionsPayload(cloneStateDefinitionsToForm(origDefs));
+  if (!canonicalOrig.ok) return false;
+  return JSON.stringify(canonicalOrig.definitions) === JSON.stringify(nextDefs || []);
+}
+
+/**
  * Strict allowlist projection for novel player view.
  * Aligns strictly to backend public schema:
  * - pendingScene: { number } only (never maps actor names / reports)

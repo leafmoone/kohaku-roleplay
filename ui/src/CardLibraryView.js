@@ -12,11 +12,14 @@ import {
 
 import {
   DEFAULT_MAX_CARD_BYTES,
+  base64ToUint8Array,
   collectGreetings,
   expandPlaceholders,
   readFileAsBase64,
+  sanitizeDownloadFilename,
   validateCardFile,
 } from "./helpers.js";
+import { CardCopyEditor } from "./CardCopyEditor.js";
 import { PortraitFrame } from "./PortraitFrame.js";
 import { useRoleplayText } from "./strings.js";
 
@@ -27,7 +30,7 @@ import { useRoleplayText } from "./strings.js";
  */
 export const CardLibraryView = {
   name: "RoleplayCardLibraryView",
-  components: { ActionButton, SettingsGroup, SettingsRow, PortraitFrame },
+  components: { ActionButton, SettingsGroup, SettingsRow, PortraitFrame, CardCopyEditor },
   props: {
     mode: { type: String, default: "settings" },
   },
@@ -45,6 +48,9 @@ export const CardLibraryView = {
     const busy = ref(false);
     const actionError = ref("");
     const portraitRevision = ref(0);
+    const editingCopy = ref(false);
+    const savedCopyBanner = ref(false);
+    const exporting = ref(false);
 
     // Studio quick-launch state (used in tab mode)
     const tavernLaunchPlayer = ref("Player");
@@ -97,6 +103,7 @@ export const CardLibraryView = {
 
     watch(selectedId, () => {
       tavernLaunchGreetingIndex.value = 0;
+      editingCopy.value = false;
     });
 
     let detailSeq = 0;
@@ -135,6 +142,70 @@ export const CardLibraryView = {
 
     function selectCard(id) {
       selectedId.value = id;
+      savedCopyBanner.value = false;
+    }
+
+    function openCopyEditor() {
+      if (!selectedCard.value || busy.value) return;
+      actionError.value = "";
+      savedCopyBanner.value = false;
+      editingCopy.value = true;
+    }
+
+    function cancelCopyEditor() {
+      editingCopy.value = false;
+    }
+
+    async function handleCopySaved(created) {
+      editingCopy.value = false;
+      actionError.value = "";
+      try {
+        await owner.refresh();
+        portraitRevision.value += 1;
+        if (created?.id) {
+          selectedId.value = created.id;
+        }
+        savedCopyBanner.value = true;
+        notify(t("editorSavedCopyToast"), "success");
+      } catch (err) {
+        actionError.value = err?.message || String(err);
+      }
+    }
+
+    async function exportSelectedCard() {
+      const card = selectedCard.value;
+      if (!card || busy.value || exporting.value) return;
+      exporting.value = true;
+      actionError.value = "";
+      try {
+        const result = await owner.call("export_original", { id: card.id });
+        const fmt = result?.format === "png" ? "png" : "json";
+        const bytes = base64ToUint8Array(result?.data);
+        const blob = new Blob([bytes], {
+          type: fmt === "png" ? "image/png" : "application/json",
+        });
+        const filename = sanitizeDownloadFilename(
+          detail.value?.fields?.name || card.name,
+          fmt,
+        );
+        const url = URL.createObjectURL(blob);
+        try {
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = filename;
+          link.style.display = "none";
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        } finally {
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+        notify(t("exportCardSuccess", { filename }), "success");
+      } catch (err) {
+        actionError.value = err?.message || String(err);
+      } finally {
+        exporting.value = false;
+      }
     }
 
     function triggerImport() {
@@ -287,12 +358,19 @@ export const CardLibraryView = {
       busy,
       actionError,
       portraitRevision,
+      editingCopy,
+      savedCopyBanner,
+      exporting,
       maxMiB,
       cards,
       filteredCards,
       greetings,
       tags,
       selectCard,
+      openCopyEditor,
+      cancelCopyEditor,
+      handleCopySaved,
+      exportSelectedCard,
       triggerImport,
       handleFileChange,
       removeSelectedCard,
@@ -453,17 +531,56 @@ export const CardLibraryView = {
                     <span v-for="tag in tags" :key="tag" class="ktrp-tag">{{ tag }}</span>
                   </div>
                 </div>
-                <ActionButton
-                  variant="danger"
-                  size="sm"
-                  :disabled="busy"
-                  data-testid="kt-rp-delete-card-btn"
-                  @click="removeSelectedCard"
-                >
-                  {{ t('removeCard') }}
+                <div class="ktrp-detail-actions">
+                  <ActionButton
+                    size="sm"
+                    :disabled="busy || exporting"
+                    data-testid="kt-rp-edit-copy-btn"
+                    @click="openCopyEditor"
+                  >
+                    {{ editingCopy ? t('editorCancelBtn') : t('editAsNewCardBtn') }}
+                  </ActionButton>
+                  <ActionButton
+                    size="sm"
+                    :disabled="busy || exporting"
+                    data-testid="kt-rp-export-card-btn"
+                    @click="exportSelectedCard"
+                  >
+                    {{ exporting ? t('exportingCard') : t('exportCardBtn') }}
+                  </ActionButton>
+                  <ActionButton
+                    variant="danger"
+                    size="sm"
+                    :disabled="busy || exporting"
+                    data-testid="kt-rp-delete-card-btn"
+                    @click="removeSelectedCard"
+                  >
+                    {{ t('removeCard') }}
+                  </ActionButton>
+                </div>
+              </div>
+
+              <div
+                v-if="savedCopyBanner"
+                class="ktrp-banner ktrp-banner--info"
+                role="status"
+                data-testid="kt-rp-copy-saved-banner"
+              >
+                <span>{{ t('editorSavedCopyBanner') }}</span>
+                <ActionButton size="sm" variant="ghost" @click="savedCopyBanner = false">
+                  {{ t('dismissBtn') }}
                 </ActionButton>
               </div>
 
+              <CardCopyEditor
+                v-if="editingCopy"
+                :card-id="detail.id"
+                :card-name="detail.fields?.name || selectedCard.name"
+                @cancel="cancelCopyEditor"
+                @saved="handleCopySaved"
+              />
+
+              <template v-else>
               <div v-if="detail.warnings?.length" class="ktrp-banner ktrp-banner--warn" data-testid="kt-rp-card-warnings">
                 <div class="ktrp-warn-title">{{ t('warningsTitle') }}</div>
                 <ul>
@@ -551,6 +668,7 @@ export const CardLibraryView = {
                   </div>
                 </div>
               </div>
+              </template>
             </template>
           </div>
         </div>
