@@ -635,6 +635,35 @@
   font-size: var(--kt-fs-xs, 0.8125rem);
 }
 
+.ktrp-mvu-options {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ktrp-mvu-option-list {
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.ktrp-mvu-option {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.2rem;
+}
+
+.ktrp-mvu-option span,
+.ktrp-mvu-value-label {
+  overflow-wrap: anywhere;
+}
+
+.ktrp-mvu-values,
+.ktrp-mvu-value {
+  margin: 0;
+}
+
 .ktrp-error-inline {
   margin: 0;
   color: var(--color-danger, #c45454);

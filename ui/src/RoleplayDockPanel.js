@@ -1,5 +1,5 @@
 import { computed, ref, watch } from "vue";
-import { ActionButton, confirm, notify, openTab, useOwner } from "@kohakuterrarium/ui-sdk";
+import { ActionButton, confirm, notify, openTab, useCreature, useOwner, useSession } from "@kohakuterrarium/ui-sdk";
 
 import {
   collectGreetings,
@@ -9,6 +9,7 @@ import {
   projectNovelView,
 } from "./helpers.js";
 import { CardMediaGallery } from "./CardMediaGallery.js";
+import { MvuPanel } from "./MvuPanel.js";
 import { PortraitFrame } from "./PortraitFrame.js";
 import { StateFieldsView } from "./StateFieldsView.js";
 import { useRoleplayText } from "./strings.js";
@@ -20,9 +21,11 @@ import { useRoleplayText } from "./strings.js";
  */
 export const RoleplayDockPanel = {
   name: "RoleplayDockPanel",
-  components: { ActionButton, CardMediaGallery, PortraitFrame, StateFieldsView },
+  components: { ActionButton, CardMediaGallery, MvuPanel, PortraitFrame, StateFieldsView },
   setup() {
     const owner = useOwner();
+    const session = useSession();
+    const creature = useCreature();
     const t = useRoleplayText();
 
     const cards = ref([]);
@@ -77,6 +80,8 @@ export const RoleplayDockPanel = {
       () => cards.value.find((card) => card.id === state.value.cardId) || null,
     );
     const tavernStateFields = computed(() => normalizeStateFields(state.value.stateFields));
+    const mvuScopeKey = computed(() => JSON.stringify([session.value?.id, creature.value?.name, state.value.cardId]));
+    const saveMvuSelection = (ids) => owner.call("set_mvu_public", { ids });
     const novelView = computed(() => projectNovelView(state.value));
 
     const WORLDBOOK_ISSUE_KEYS = {
@@ -430,6 +435,8 @@ export const RoleplayDockPanel = {
       worldbookInput,
       worldbookError,
       tavernStateFields,
+      mvuScopeKey,
+      saveMvuSelection,
       sessionWorldbookDiag,
       cardLoreDiag,
       worldbookIssueLabel,
@@ -630,6 +637,14 @@ export const RoleplayDockPanel = {
             <div class="ktrp-box-head">{{ t('cardStateTitle') }}</div>
             <StateFieldsView :fields="tavernStateFields" test-id="kt-rp-tavern-state-fields" />
           </div>
+
+          <MvuPanel
+            v-if="state.mvu"
+            :key="mvuScopeKey"
+            :mvu="state.mvu"
+            :save-selection="saveMvuSelection"
+            :disabled="busy"
+          />
 
           <CardMediaGallery
             :card-id="state.cardId || ''"
