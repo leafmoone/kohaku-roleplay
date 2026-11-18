@@ -16,7 +16,7 @@ _LOGIC: dict[int, SecondaryLogic] = {0: "and_any", 1: "not_all", 2: "not_any", 3
 _REGEX_KEY = re.compile(r"/.+/[a-zA-Z]*", re.DOTALL)
 _SCRIPT_CONTENT = re.compile(r"<%|<\s*(?:script|iframe)\b", re.IGNORECASE)
 _UNSUPPORTED_TRIGGERS = (
-    "sticky", "cooldown", "delay", "vectorized", "useGroupScoring", "use_group_scoring", "ignoreBudget", "ignore_budget",
+    "sticky", "cooldown", "vectorized", "ignoreBudget", "ignore_budget",
     "characterFilter", "character_filter", "automationId", "automation_id", "triggers",
     "matchCharacterDepthPrompt", "matchCharacterDescription", "matchCharacterPersonality",
     "matchCreatorNotes", "matchPersonaDescription", "matchScenario",
@@ -61,10 +61,7 @@ def _read_entry(item: object, *, standalone: bool) -> LoreEntry:
         group = ""
     if not isinstance(group, str):
         raise _SkippedEntry("invalid_entry")
-    groups = [name.strip() for name in group.split(",") if name.strip()]
-    if len(groups) > 1:
-        raise _SkippedEntry("unsupported_trigger")
-    group = groups[0] if groups else ""
+    group = ",".join(dict.fromkeys(name.strip() for name in group.split(",") if name.strip()))
     delay = fields.get("delayUntilRecursion", fields.get("delay_until_recursion", False))
     if delay not in (False, True, 0, 1):
         raise _SkippedEntry("unsupported_trigger")
@@ -101,6 +98,8 @@ def _read_entry(item: object, *, standalone: bool) -> LoreEntry:
             "group": group,
             "group_override": fields.get("groupOverride", fields.get("group_override", False)) if group else False,
             "group_weight": fields.get("groupWeight", fields.get("group_weight", 100)) if group else 100,
+            "group_scoring": fields.get("useGroupScoring", fields.get("use_group_scoring")),
+            "delay_messages": fields.get("delay") if fields.get("delay") is not None else 0,
         })
     except ValidationError as exc:
         raise _SkippedEntry("invalid_entry") from exc
@@ -126,6 +125,7 @@ def read_worldbook(source: dict[str, object]) -> LoreBook:
             "scan_depth": source.get("scan_depth", source.get("scanDepth", 4)),
             "token_budget": source.get("token_budget", source.get("tokenBudget", 512)),
             "recursive_scanning": source.get("recursive_scanning", source.get("recursiveScanning", False)),
+            "group_scoring": source.get("use_group_scoring", source.get("useGroupScoring")) or False,
         })
     except ValidationError as exc:
         labels = ", ".join(str(error["loc"][0]) for error in exc.errors(include_input=False))

@@ -14,7 +14,7 @@ from kohakuterrarium.terrarium.tools.context import resolve_group_context, resol
 from pydantic import TypeAdapter
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from kohakuterrarium.core.conversation.elide import estimate_message_tokens
+from kohakuterrarium.core.conversation.elide import TOOL_FEEDBACK_KIND, estimate_message_tokens
 from kohakuterrarium.llm.message import UserMessage
 from kohakuterrarium.modules.plugin.base import BasePlugin, PluginBlockError, PluginContext, ToolVisibility
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError, OwnerForbiddenError
@@ -573,6 +573,15 @@ class RoleplayPlugin(BasePlugin):
             play = TavernSession.model_validate(record)
             history = [_text(m) for m in messages if m.get("role") in ("user", "assistant")]
             books = [book for book in (play.lore, play.worldbook) if book is not None]
+            chat_count = None
+            if any(entry.delay_messages for book in books for entry in book.entries):
+                host = self.binding.host_agent if self.binding else None
+                if host and host.controller:
+                    chat_count = sum(
+                        message.role in ("user", "assistant") and bool(message.content)
+                        and (message.metadata or {}).get("kind") != TOOL_FEEDBACK_KIND
+                        for message in host.controller.conversation.get_messages()
+                    )
             entries = []
             remaining = 2048
 
@@ -580,7 +589,7 @@ class RoleplayPlugin(BasePlugin):
                 return _cost(render_tavern_text(text, play.card, play.player))
 
             for book in books:
-                chosen = active_entries(book, history, lore_cost, remaining)
+                chosen = active_entries(book, history, lore_cost, remaining, chat_messages=chat_count)
                 entries.extend(chosen)
                 remaining -= sum(lore_cost(e.content) for e in chosen)
             content = story_context(play.card, play.player, entries, play.notes)

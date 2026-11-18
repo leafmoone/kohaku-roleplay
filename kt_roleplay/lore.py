@@ -37,12 +37,17 @@ class LoreEntry(BaseModel):
     group: str = ""
     group_override: bool = False
     group_weight: int = Field(default=100, ge=1, le=10_000)
+    group_scoring: bool | None = None
+    delay_messages: int = Field(default=0, ge=0)
 
     def matches(self, text: str) -> bool:
+        return self.match_score(text) is not None
+
+    def match_score(self, text: str) -> int | None:
         if not self.enabled:
-            return False
+            return None
         if self.constant:
-            return True
+            return 0
         haystack = text if self.case_sensitive else text.casefold()
 
         def found(key: str) -> bool:
@@ -53,20 +58,21 @@ class LoreEntry(BaseModel):
                 return re.search(r"(?<!\w)" + re.escape(key) + r"(?!\w)", haystack) is not None
             return key in haystack
 
-        if not any(found(key) for key in self.keys):
-            return False
-        secondary = [found(key) for key in self.secondary_keys if key]
-        if not self.selective or not secondary:
-            return True
+        primary = sum(found(key) for key in self.keys)
+        if not primary:
+            return None
+        secondary = [found(key) for key in self.secondary_keys if key] if self.selective else []
+        if not secondary:
+            return primary
         match self.secondary_logic:
             case "and_all":
-                return all(secondary)
+                return primary + len(secondary) if all(secondary) else None
             case "not_all":
-                return not all(secondary)
+                return primary if not all(secondary) else None
             case "not_any":
-                return not any(secondary)
+                return primary if not any(secondary) else None
             case "and_any":
-                return any(secondary)
+                return primary + 1 if any(secondary) else None
 
 
 class LoreBook(BaseModel):
@@ -75,6 +81,7 @@ class LoreBook(BaseModel):
     scan_depth: int = Field(default=4, ge=0)
     token_budget: int = Field(default=512, ge=0)
     recursive_scanning: bool = False
+    group_scoring: bool = False
     issues: dict[str, int] = Field(default_factory=dict)
 
     def diagnostics(self) -> dict[str, object]:
@@ -100,8 +107,10 @@ def _group_winner(group: list[tuple[int, LoreEntry]]) -> int:
     return group[-1][0]
 
 
-def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str], int], allowance: int) -> list[LoreEntry]:
+def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str], int], allowance: int,
+                   *, chat_messages: int | None = None) -> list[LoreEntry]:
     budget = min(book.token_budget, allowance)
+    message_count = len(history) if chat_messages is None else chat_messages
     scan_text = {}
     recursive_text = []
     chosen = []
@@ -109,14 +118,17 @@ def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str],
     blocked = set()
     accepted_groups = set()
     ordered = sorted(enumerate(book.entries), key=lambda row: -row[1].priority)
+    memberships = {index: set(entry.group.split(',')) if entry.group else set() for index, entry in ordered}
     # Bound the number of scans even when an imported book contains a long chain.
     for level in range(8 if book.recursive_scanning else 1):
         context = "\n".join(recursive_text)
         added = []
         candidates = []
         groups = {}
+        scores = {}
         for index, entry in ordered:
-            if index in selected or index in blocked or entry.group in accepted_groups:
+            if (index in selected or index in blocked or memberships[index] & accepted_groups
+                    or entry.delay_messages > message_count):
                 continue
             if (level and entry.exclude_recursion) or (not level and entry.delay_until_recursion):
                 continue
@@ -126,14 +138,32 @@ def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str],
             visible = scan_text[depth]
             if context:
                 visible += "\n" + context
-            if not entry.matches(visible):
+            score = entry.match_score(visible)
+            if score is None:
                 continue
+            scores[index] = score
             candidates.append((index, entry))
             if entry.group:
-                groups.setdefault(entry.group, []).append((index, entry))
-        winners = {name: _group_winner(items) for name, items in groups.items()}
+                for name in entry.group.split(','):
+                    groups.setdefault(name, []).append((index, entry))
+        excluded = set()
+        for items in groups.values():
+            # Scoring applies to entries opting in (or inheriting it from the book).
+            high = max(scores[index] for index, _ in items)
+            excluded.update(index for index, entry in items
+                            if (book.group_scoring if entry.group_scoring is None else entry.group_scoring) and scores[index] < high)
+        winners = set()
+        reserved = set()
+        for name, items in groups.items():
+            if name in reserved:
+                continue
+            eligible = [row for row in items if row[0] not in excluded and not memberships[row[0]] & reserved]
+            if eligible:
+                winner = _group_winner(eligible)
+                winners.add(winner)
+                reserved.update(memberships[winner])
         for index, entry in candidates:
-            if entry.group and winners[entry.group] != index:
+            if entry.group and index not in winners:
                 blocked.add(index)
                 continue
             # Match ST's group selection before trigger chance; never re-roll a failed entry in recursion.
@@ -144,8 +174,7 @@ def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str],
             if size <= budget:
                 chosen.append(entry)
                 selected.add(index)
-                if entry.group:
-                    accepted_groups.add(entry.group)
+                accepted_groups.update(memberships[index])
                 budget -= size
                 if not entry.prevent_recursion and entry.content:
                     added.append(entry.content)
