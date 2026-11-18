@@ -26,6 +26,7 @@ from .lore import LoreBook, active_entries, load_book
 from .projections import Persona, Player, expand, persona_context, story_context
 from .worldbook import read_worldbook
 from .scene_tools import ingest_report
+from .recovery import resume_scene
 
 
 class Arguments(BaseModel):
@@ -226,6 +227,12 @@ class RoleplayPlugin(BasePlugin):
         if context is not None and context.multi_user:
             raise OwnerForbiddenError("Roleplay currently supports single-user KT hosts only")
         try:
+            if action == "resume_scene" and self.mode == "novel":
+                number = args.get("scene")
+                if type(number) is not int or set(args) != {"scene"}:
+                    raise OwnerArgumentError("Expected the current numeric scene identifier")
+                await resume_scene(self, number)
+                return self.ui_state()
             if action == "cards" and self.mode in ("persona", "tavern"):
                 return cards_view(library_dir())
             if action in ("detail", "portrait") and self.mode != "npc":
@@ -267,7 +274,7 @@ class RoleplayPlugin(BasePlugin):
                 self._save(existing.model_copy(update=Notes.model_validate(args).model_dump()).model_dump())
             else:
                 raise OwnerArgumentError(f"Action {action!r} is not available in the current {self.mode} session")
-        except (ValidationError, CardError, CardNotFound) as exc:
+        except (ValidationError, CardError, CardNotFound, SceneError) as exc:
             raise OwnerArgumentError(f"Invalid roleplay request: {exc}") from exc
         view = self.ui_state()
         self.ui_emit("state", view)

@@ -45,7 +45,7 @@ class SceneTool(BaseTool):
         return self.arguments.model_json_schema()
 
 
-async def _send(context: ToolContext, channel: str, value: dict[str, object]) -> None:
+async def send_story_message(context: ToolContext, channel: str, value: dict[str, object]) -> None:
     result = await SendChannelTool().execute({"channel": channel, "message": json.dumps(value, ensure_ascii=False)}, context)
     if not result.success:
         raise SceneError(result.error or f"KT failed to deliver to channel {channel}")
@@ -56,6 +56,18 @@ def _listeners(context: ToolContext, channel: str, allowed: set[str]) -> None:
     actual = {cid for cid, channels in group.graph.listen_edges.items() if channel in channels}
     if actual != allowed or channel not in group.graph.send_edges.get(group.caller.creature_id, set()):
         raise SceneError(f"Invalid story channel wiring for {channel}: verify sender and intended listeners")
+
+
+def prepare_cue(context: ToolContext, group, story: Story, actor: str) -> dict[str, object]:
+    target = resolve_group_target(group, actor)
+    _listeners(context, actor, {group.caller.creature_id, target.creature_id})
+    plugin = target.agent.plugins.get_plugin("roleplay")
+    if plugin is None or plugin.binding is None or plugin.mode != "npc":
+        raise SceneError(f"Missing NPC session binding for {actor!r}")
+    cue = npc_input(story, actor)
+    if plugin.binding.get_state("privateKnowledge") is not None:
+        del cue["known"]
+    return cue
 
 
 class DispatchScene(SceneTool):
@@ -72,20 +84,10 @@ class DispatchScene(SceneTool):
         group = resolve_group_context(context)
         self.host.watch_reports(context)
         story = begin_scene(self.host.story(), cues)
-        deliveries = {}
-        for actor in cues:
-            target = resolve_group_target(group, actor)
-            _listeners(context, actor, {group.caller.creature_id, target.creature_id})
-            cue = npc_input(story, actor)
-            plugin = target.agent.plugins.get_plugin("roleplay")
-            if plugin is None or plugin.binding is None or plugin.mode != "npc":
-                raise SceneError(f"Missing NPC session binding for {actor!r}")
-            if plugin.binding.get_state("privateKnowledge") is not None:
-                del cue["known"]
-            deliveries[actor] = cue
+        deliveries = {actor: prepare_cue(context, group, story, actor) for actor in cues}
         self.host.save_story(story)
         for actor, cue in deliveries.items():
-            await _send(context, actor, cue)
+            await send_story_message(context, actor, cue)
         return ToolResult(output=json.dumps({"scene": story.pending.number, "waiting": list(cues)}))
 
 
@@ -104,7 +106,7 @@ class ReportScene(SceneTool):
         current = director.story()
         checked = receive_report(current, report.scene, group.caller.name, report.proposal)
         if checked is not current:
-            await _send(context, "report_to_root", report.model_dump())
+            await send_story_message(context, "report_to_root", report.model_dump())
         actor_plugin = group.caller.agent.plugins.get_plugin("roleplay")
         actor_plugin.binding.set_state("reportedScene", report.scene)
         return ToolResult(output="Report received. Do not report again or narrate the scene; finish this turn.")
