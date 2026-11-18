@@ -14,7 +14,8 @@ from .card_state import StateField, decode_fields
 from .charx import CardMedia, inspect_charx_media, is_charx, open_charx, read_charx_card
 from .errors import CardError
 from .lore import LoreBook
-from .portraits import PortraitAsset, read_portraits
+from .portraits import PortraitAsset, PortraitRule, read_portraits
+from .scene_media import read_scene_media
 from .worldbook import read_worldbook
 
 MAX_CARD_BYTES = 12 * 1024 * 1024
@@ -67,6 +68,7 @@ class ParsedCard(BaseModel):
     source_format: CardFormat | None = None
     media: list[CardMedia] = Field(default_factory=list)
     media_issues: dict[str, int] = Field(default_factory=dict)
+    scene_media_rules: list[PortraitRule] = Field(default_factory=list)
 
     @cached_property
     def lore(self) -> LoreBook | None:
@@ -126,7 +128,15 @@ def parse_card(raw: bytes) -> ParsedCard:
             if version != 3:
                 raise CardError("CHARX card.json must be a Character Card V3 document")
             media, portrait, issues = inspect_charx_media(archive, members, data.get("assets"))
-        return _parse_document(version, data, portrait, fmt).model_copy(update={"media": media, "media_issues": issues})
+        card = _parse_document(version, data, portrait, fmt)
+        extensions = data.get("extensions")
+        namespace = extensions.get("kohaku-roleplay", {}) if isinstance(extensions, dict) else {}
+        rules = []
+        if "scene_images" in namespace:
+            rules, invalid = read_scene_media(namespace["scene_images"], media, card.state_fields)
+            if invalid:
+                issues["invalid_scene_rule"] = invalid
+        return card.model_copy(update={"media": media, "media_issues": issues, "scene_media_rules": rules})
     if not 0 < len(raw) <= MAX_CARD_BYTES:
         raise CardError("Choose a non-empty JSON or PNG card no larger than 12 MiB")
     payload, portrait = _png_payload(raw) if fmt == "png" else (raw, None)

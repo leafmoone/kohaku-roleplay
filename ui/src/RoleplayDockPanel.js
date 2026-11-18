@@ -650,6 +650,7 @@ export const RoleplayDockPanel = {
             :card-id="state.cardId || ''"
             :media="state.media || []"
             :media-issues="state.mediaIssues || null"
+            :scene-media-key="state.sceneMediaKey"
             compact
             test-id-prefix="kt-rp-tavern-media"
           />

@@ -77,6 +77,7 @@ class TavernSession(Arguments):
     notes: str
     media: list[CardMedia] = Field(default_factory=list)
     media_issues: dict[str, int] = Field(default_factory=dict)
+    scene_media_rules: list[PortraitRule] = Field(default_factory=list)
     mvu: MvuInit | None = None
     mvu_public: list[str] = Field(default_factory=list)
 
@@ -357,6 +358,9 @@ class RoleplayPlugin(BasePlugin):
         selected = chosen_key(play.portrait_rules, play.state_fields, play.values)
         if selected is not None:
             view.update(hasPortrait=True, portraitKey=selected)
+        if play.scene_media_rules:
+            selected_scene = chosen_key(play.scene_media_rules, play.state_fields, play.values)
+            view["sceneMediaKey"] = selected_scene or next((asset.key for asset in play.media if asset.kind == "icon"), None)
         visible = public_fields(play.state_fields, play.values)
         if visible:
             view["stateFields"] = visible
@@ -438,7 +442,8 @@ class RoleplayPlugin(BasePlugin):
                                      greeting=expand(greetings[choice.greetingIndex], card.fields.name, choice.player.name, ""),
                                      lore=lore, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
                                      portrait_rules=rules_for(card.portraits), state_fields=card.state_fields,
-                                     media=card.media, media_issues=card.media_issues, mvu=mvu)
+                                     media=card.media, media_issues=card.media_issues,
+                                     scene_media_rules=card.scene_media_rules, mvu=mvu)
                 self._save(play.model_dump())
                 if play.greeting:
                     await self.publish_opening(play.greeting)

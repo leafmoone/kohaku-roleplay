@@ -9,6 +9,7 @@ const MEDIA_ISSUE_KEYS = {
   missing_asset: "mediaIssueMissingAsset",
   unsupported_asset: "mediaIssueUnsupportedAsset",
   invalid_asset: "mediaIssueInvalidAsset",
+  invalid_scene_rule: "mediaIssueInvalidSceneRule",
 };
 
 /**
@@ -22,6 +23,7 @@ export const CardMediaGallery = {
     cardId: { type: String, default: "" },
     media: { type: Array, default: () => [] },
     mediaIssues: { type: Object, default: null },
+    sceneMediaKey: { type: String, default: undefined },
     revision: { type: Number, default: 0 },
     compact: { type: Boolean, default: false },
     testIdPrefix: { type: String, default: "kt-rp-media" },
@@ -32,14 +34,21 @@ export const CardMediaGallery = {
     const creature = useCreature();
     const t = useRoleplayText();
 
-    const selectedKey = ref("");
+    const galleryKey = ref("");
+    const manualSceneKey = ref("");
     const previewUrl = ref("");
     const loading = ref(false);
     const loadError = ref("");
 
     const items = computed(() => normalizeMediaList(props.media));
     const issues = computed(() => normalizeMediaIssues(props.mediaIssues));
-    const hasContent = computed(() => items.value.length > 0 || issues.value.length > 0);
+    // Undefined is a legacy gallery; null is an explicit scene with no automatic image.
+    const sceneEnabled = computed(() => props.sceneMediaKey !== undefined);
+    const followingScene = computed(() => sceneEnabled.value && !manualSceneKey.value);
+    const selectedKey = computed(() => sceneEnabled.value
+      ? manualSceneKey.value || props.sceneMediaKey || ""
+      : galleryKey.value);
+    const hasContent = computed(() => sceneEnabled.value || items.value.length > 0 || issues.value.length > 0);
     const selectedItem = computed(
       () => items.value.find((item) => item.key === selectedKey.value) || null,
     );
@@ -47,31 +56,33 @@ export const CardMediaGallery = {
     watch(
       () => [props.cardId, items.value.map((it) => it.key).join("\u0000")],
       () => {
-        if (!items.value.length) {
-          selectedKey.value = "";
-          previewUrl.value = "";
-          loadError.value = "";
-          return;
+        if (!items.value.some((it) => it.key === galleryKey.value)) {
+          galleryKey.value = items.value[0]?.key || "";
         }
-        if (!items.value.some((it) => it.key === selectedKey.value)) {
-          selectedKey.value = items.value[0].key;
+        if (manualSceneKey.value && !items.value.some((it) => it.key === manualSceneKey.value)) {
+          manualSceneKey.value = "";
         }
       },
       { immediate: true },
     );
 
-    const requestContext = () => [
-      props.cardId,
-      selectedKey.value,
-      props.revision,
-      owner.status.value,
-      unref(owner.owner),
-      session.value?.id,
-      creature.value?.name,
+    watch(
+      [() => props.cardId, () => session.value?.id, () => creature.value?.name, sceneEnabled],
+      () => { manualSceneKey.value = ""; },
+    );
+
+    const requestSources = [
+      () => props.cardId,
+      () => selectedKey.value,
+      () => props.revision,
+      () => owner.status.value,
+      () => unref(owner.owner),
+      () => session.value?.id,
+      () => creature.value?.name,
     ];
     let loadSeq = 0;
     watch(
-      requestContext,
+      requestSources,
       async (context, _, onCleanup) => {
         const [cardId, key, , status] = context;
         let stale = false;
@@ -80,7 +91,7 @@ export const CardMediaGallery = {
         });
         const seq = ++loadSeq;
         const isCurrent = () => !stale && seq === loadSeq
-          && requestContext().every((value, i) => Object.is(value, context[i]));
+          && requestSources.every((read, i) => Object.is(read(), context[i]));
         loading.value = false;
         loadError.value = "";
         previewUrl.value = "";
@@ -109,7 +120,12 @@ export const CardMediaGallery = {
     );
 
     function selectMedia(key) {
-      selectedKey.value = key;
+      if (sceneEnabled.value) manualSceneKey.value = key;
+      else galleryKey.value = key;
+    }
+
+    function resumeScene() {
+      manualSceneKey.value = "";
     }
 
     function issueLabel(issue) {
@@ -123,12 +139,15 @@ export const CardMediaGallery = {
       items,
       issues,
       hasContent,
+      sceneEnabled,
+      followingScene,
       selectedKey,
       selectedItem,
       previewUrl,
       loading,
       loadError,
       selectMedia,
+      resumeScene,
       issueLabel,
     };
   },
@@ -157,42 +176,65 @@ export const CardMediaGallery = {
         </span>
       </div>
 
-      <template v-if="items.length">
-        <div class="ktrp-media-strip" role="listbox" :aria-label="t('mediaSectionTitle')" :data-testid="testIdPrefix + '-list'">
-          <button
-            v-for="item in items"
-            :key="item.key"
-            type="button"
-            class="ktrp-media-chip"
-            role="option"
-            :aria-selected="item.key === selectedKey"
-            :data-testid="testIdPrefix + '-item-' + item.key"
-            @click="selectMedia(item.key)"
-          >
-            <span class="ktrp-media-chip-name">{{ item.name }}</span>
-            <span v-if="item.kind" class="ktrp-media-chip-kind">{{ item.kind }}</span>
-          </button>
-        </div>
+      <div v-if="sceneEnabled" class="ktrp-row-between">
+        <span
+          class="ktrp-chip"
+          :data-mode="followingScene ? 'auto' : 'manual'"
+          :data-testid="testIdPrefix + '-scene-mode'"
+        >{{ t(followingScene ? 'mediaSceneAuto' : 'mediaSceneManual') }}</span>
+        <button
+          v-if="!followingScene"
+          type="button"
+          class="ktrp-media-chip"
+          :data-testid="testIdPrefix + '-scene-auto'"
+          @click="resumeScene"
+        >{{ t('mediaSceneResume') }}</button>
+      </div>
 
-        <div class="ktrp-media-stage" :data-testid="testIdPrefix + '-preview'">
-          <p v-if="loading" class="ktrp-muted" role="status">{{ t('loading') }}</p>
-          <p v-else-if="loadError" class="ktrp-error-inline" role="alert" :data-testid="testIdPrefix + '-error'">
-            {{ loadError }}
-          </p>
-          <figure v-else-if="previewUrl" class="ktrp-media-figure">
-            <img
-              :src="previewUrl"
-              :alt="selectedItem?.name || selectedKey"
-              class="ktrp-media-img"
-              :data-testid="testIdPrefix + '-img'"
-              @error="loadError = t('mediaLoadFailed'); previewUrl = ''"
-            />
-            <figcaption class="ktrp-muted ktrp-media-caption">
-              {{ selectedItem?.name }}<template v-if="selectedItem?.kind"> · {{ selectedItem.kind }}</template>
-            </figcaption>
-          </figure>
-        </div>
-      </template>
+      <div v-if="items.length" class="ktrp-media-strip" role="listbox" :aria-label="t('mediaSectionTitle')" :data-testid="testIdPrefix + '-list'">
+        <button
+          v-for="item in items"
+          :key="item.key"
+          type="button"
+          class="ktrp-media-chip"
+          role="option"
+          :aria-selected="item.key === selectedKey"
+          :data-testid="testIdPrefix + '-item-' + item.key"
+          @click="selectMedia(item.key)"
+        >
+          <span class="ktrp-media-chip-name">{{ item.name }}</span>
+          <span v-if="item.kind" class="ktrp-media-chip-kind">{{ item.kind }}</span>
+        </button>
+      </div>
+
+      <div
+        v-if="items.length || sceneEnabled"
+        class="ktrp-media-stage"
+        :data-media-key="selectedKey || undefined"
+        :data-testid="testIdPrefix + '-preview'"
+      >
+        <p v-if="followingScene && !selectedKey" class="ktrp-muted" :data-testid="testIdPrefix + '-scene-empty'">
+          {{ t('mediaSceneNone') }}
+        </p>
+        <p v-else-if="loading" class="ktrp-muted" role="status">{{ t('loading') }}</p>
+        <p v-else-if="loadError" class="ktrp-error-inline" role="alert" :data-testid="testIdPrefix + '-error'">
+          {{ loadError }}
+        </p>
+        <figure v-else-if="previewUrl" class="ktrp-media-figure">
+          <img
+            :src="previewUrl"
+            :alt="selectedItem?.name || selectedKey"
+            class="ktrp-media-img"
+            :data-testid="testIdPrefix + '-img'"
+            @error="loadError = t('mediaLoadFailed'); previewUrl = ''"
+          />
+          <figcaption class="ktrp-muted ktrp-media-caption">
+            {{ selectedItem?.name }}<template v-if="followingScene && selectedItem?.kind === 'icon'"> ·
+              <span :data-testid="testIdPrefix + '-scene-cover'">{{ t('mediaSceneCover') }}</span>
+            </template><template v-else-if="selectedItem?.kind"> · {{ selectedItem.kind }}</template>
+          </figcaption>
+        </figure>
+      </div>
     </div>
   `,
 };
