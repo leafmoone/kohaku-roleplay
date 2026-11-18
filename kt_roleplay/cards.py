@@ -91,8 +91,6 @@ def card_document(payload: bytes) -> tuple[Literal[1, 2, 3], dict, dict]:
         raise CardError(f"Unsupported character card specification: {envelope.get('spec')!r}")
     if not isinstance(data, dict):
         raise CardError("Card data must be an object")
-    try:
-        fields = CardFields.model_validate(data)
     return version, envelope, data
 
 
@@ -101,6 +99,8 @@ def parse_card(raw: bytes) -> ParsedCard:
         raise CardError("Choose a non-empty JSON or PNG card no larger than 12 MiB")
     payload, portrait = _png_payload(raw) if raw.startswith(PNG_HEADER) else (raw, None)
     version, _, data = card_document(payload)
+    try:
+        fields = CardFields.model_validate(data)
     except ValidationError as exc:
         errors = "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors(include_input=False))
         raise CardError(f"Invalid card fields: {errors}") from exc

@@ -45,13 +45,13 @@ class CardCatalog(UIOwnerMixin):
                 card = await asyncio.to_thread(import_card, directory, base64.b64decode(source, validate=True))
                 self.ui_emit("state", await self.ui_state(context))
                 return card
-            if action == "detail":
             if action == "edit_draft":
                 return await asyncio.to_thread(edit_draft, directory, _id(args))
             if action == "save_copy":
                 card = await asyncio.to_thread(save_copy, directory, CopyRequest.model_validate(args))
                 self.ui_emit("state", await self.ui_state(context))
                 return card
+            if action == "detail":
                 return await asyncio.to_thread(card_detail, directory, _id(args))
             if action == "portrait":
                 return await asyncio.to_thread(portrait_view, directory, _id(args))
