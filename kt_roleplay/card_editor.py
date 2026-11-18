@@ -13,7 +13,7 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .card_state import StateField
-from .cards import CardError, CardFields, PNG_HEADER, card_document, parse_card
+from .cards import CardError, CardFields, PNG_HEADER, card_document, card_format, parse_card, require_editable
 from .library import CardSummary, get_card, import_card, original_card
 
 
@@ -34,6 +34,7 @@ class CopyRequest(BaseModel):
 
 def edit_draft(directory: Path, key: str) -> dict[str, object]:
     card = get_card(directory, key)
+    require_editable(card.source_format)
     return {"id": key, "fields": card.fields.model_dump(),
             "stateDefinitions": [f.model_dump(exclude_none=True, exclude_unset=True) for f in card.state_fields]}
 
@@ -89,6 +90,7 @@ def updated_card(raw: bytes, edit: Callable[[dict], None]) -> bytes:
 
 def save_copy(directory: Path, request: CopyRequest) -> CardSummary:
     original = original_card(directory, request.id)
+    require_editable(card_format(original))
     change_state = "stateDefinitions" in request.model_fields_set
 
     def edit(data: dict) -> None:

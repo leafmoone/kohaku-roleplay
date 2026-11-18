@@ -5,7 +5,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from .card_editor import updated_card
-from .cards import MAX_CARD_BYTES
+from .cards import MAX_CARD_BYTES, require_editable
 from .errors import CardError
 from .library import CardSummary, get_card, import_card, original_card
 from .portraits import PortraitAsset, read_portraits
@@ -19,12 +19,14 @@ class PortraitCopy(BaseModel):
 
 def portrait_draft(directory: Path, key: str) -> dict[str, object]:
     card = get_card(directory, key)
+    require_editable(card.source_format)
     return {"portraits": [a.model_dump(exclude_none=True) for a in card.portraits]}
 
 
 def save_portraits_copy(directory: Path, request: PortraitCopy) -> CardSummary:
     original = original_card(directory, request.id)
     card = get_card(directory, request.id)
+    require_editable(card.source_format)
     clean = read_portraits(request.portraits, card.state_fields, MAX_CARD_BYTES)
     encoded = [a.model_dump(exclude_none=True) for a in clean]
 

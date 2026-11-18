@@ -9,9 +9,10 @@ from kohakuterrarium.api.ext import UICallContext
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError, OwnerForbiddenError, UIOwnerMixin
 
 from .card_editor import CopyRequest, edit_draft, save_copy
-from .cards import MAX_CARD_BYTES, PNG_HEADER, CardError
+from .cards import MAX_CARD_BYTES, CardError, card_format
+from .charx import MAX_ARCHIVE_BYTES
 from .library import CardNotFound, import_card, list_cards, original_card, remove_card
-from .library_view import card_detail, portrait_view
+from .library_view import card_detail, media_view, portrait_view
 from .portrait_library import PortraitCopy, portrait_draft, save_portraits_copy
 from .runtime import library_dir
 
@@ -33,7 +34,8 @@ class CardCatalog(UIOwnerMixin):
 
     async def ui_state(self, context: UICallContext) -> dict[str, object]:
         single_user(context)
-        return {"cards": await asyncio.to_thread(list_cards, library_dir()), "maxCardBytes": MAX_CARD_BYTES}
+        return {"cards": await asyncio.to_thread(list_cards, library_dir()), "maxCardBytes": MAX_CARD_BYTES,
+                "maxArchiveBytes": MAX_ARCHIVE_BYTES}
 
     async def ui_call(self, action: str, args: dict[str, object], context: UICallContext) -> object:
         single_user(context)
@@ -41,8 +43,8 @@ class CardCatalog(UIOwnerMixin):
         try:
             if action == "import":
                 source = args.get("data")
-                if not isinstance(source, str) or not source.isascii() or len(source) > 4 * ((MAX_CARD_BYTES + 2) // 3):
-                    raise OwnerArgumentError("Expected a Base64-encoded JSON/PNG file of at most 12 MiB")
+                if not isinstance(source, str) or not source.isascii() or len(source) > 4 * ((MAX_ARCHIVE_BYTES + 2) // 3):
+                    raise OwnerArgumentError("Expected a Base64-encoded JSON/PNG (12 MiB) or CHARX (32 MiB) card")
                 card = await asyncio.to_thread(import_card, directory, base64.b64decode(source, validate=True))
                 self.ui_emit("state", await self.ui_state(context))
                 return card
@@ -60,6 +62,11 @@ class CardCatalog(UIOwnerMixin):
                 card = await asyncio.to_thread(save_portraits_copy, directory, PortraitCopy.model_validate(args))
                 self.ui_emit("state", await self.ui_state(context))
                 return card
+            if action == "media":
+                media_key = args.get("key")
+                if not isinstance(media_key, str) or not media_key:
+                    raise OwnerArgumentError("A media key is required")
+                return await asyncio.to_thread(media_view, directory, _id(args), media_key)
             if action == "portrait":
                 variant = args.get("variant")
                 if variant is not None and not isinstance(variant, str):
@@ -72,7 +79,7 @@ class CardCatalog(UIOwnerMixin):
                 return state
             if action == "export_original":
                 data = await asyncio.to_thread(original_card, directory, _id(args))
-                return {"data": base64.b64encode(data).decode("ascii"), "format": "png" if data.startswith(PNG_HEADER) else "json"}
+                return {"data": base64.b64encode(data).decode("ascii"), "format": card_format(data)}
         except ValidationError as exc:
             issue = exc.errors(include_input=False)[0]
             raise OwnerArgumentError(f"Invalid card edit at {issue['loc']}: {issue['msg']}") from exc

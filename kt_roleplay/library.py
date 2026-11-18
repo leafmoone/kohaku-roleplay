@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from typing import TypedDict
 from uuid import uuid4
 
-from .cards import ParsedCard, parse_card
+from .cards import ParsedCard, card_format, parse_card
 
 
 class CardSummary(TypedDict):
@@ -44,10 +44,11 @@ def list_cards(directory: Path) -> list[CardSummary]:
 
 def get_card(directory: Path, key: str) -> ParsedCard:
     with _open(directory) as db:
-        row = db.execute("SELECT card,portrait FROM cards WHERE id=?", (key,)).fetchone()
+        row = db.execute("SELECT card,portrait,substr(original,1,8) FROM cards WHERE id=?", (key,)).fetchone()
     if row is None:
         raise CardNotFound(key)
-    return ParsedCard.model_validate_json(row[0]).model_copy(update={"portrait": row[1]})
+    card = ParsedCard.model_validate_json(row[0])
+    return card.model_copy(update={"portrait": row[1], "source_format": card.source_format or card_format(row[2])})
 
 
 def remove_card(directory: Path, key: str) -> None:

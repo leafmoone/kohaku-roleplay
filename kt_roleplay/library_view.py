@@ -3,8 +3,9 @@
 import base64
 from pathlib import Path
 
+from .charx import CardMedia, read_charx_image
 from .errors import CardError
-from .library import get_card, list_cards
+from .library import get_card, list_cards, original_card
 
 
 def cards_view(directory: Path) -> dict:
@@ -19,7 +20,22 @@ def card_detail(directory: Path, key: str) -> dict:
         diagnostics = book.diagnostics()
         summary = {"entryCount": diagnostics["totalEntries"], "scanDepth": book.scan_depth,
                    "tokenBudget": book.token_budget, "diagnostics": diagnostics}
-    return {"id": key, "version": card.version, "fields": card.fields.model_dump(), "warnings": card.warnings, "hasPortrait": card.portrait is not None, "hasWorldbook": book is not None, "bookSummary": summary}
+    return {"id": key, "version": card.version, "fields": card.fields.model_dump(), "warnings": card.warnings,
+            "hasPortrait": card.portrait is not None, "hasWorldbook": book is not None, "bookSummary": summary,
+            "sourceFormat": card.source_format, "media": media_summary(card.media), "mediaIssues": card.media_issues}
+
+
+def media_summary(assets: list[CardMedia]) -> list[dict[str, str]]:
+    return [{"key": item.key, "name": item.name, "kind": item.kind} for item in assets]
+
+
+def media_view(directory: Path, card_id: str, key: str) -> dict[str, str]:
+    card = get_card(directory, card_id)
+    asset = next((item for item in card.media if item.key == key), None)
+    if asset is None or card.source_format != "charx":
+        raise CardError("The card has no local image with that key")
+    image = read_charx_image(original_card(directory, card_id), asset.member)
+    return {"url": "data:image/png;base64," + base64.b64encode(image).decode("ascii")}
 
 
 def portrait_view(directory: Path, key: str, variant: str | None) -> dict:

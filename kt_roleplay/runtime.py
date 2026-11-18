@@ -1,6 +1,6 @@
 """Bind confirmed character data to a live KT creature without mutating its config."""
 
-from asyncio import current_task
+from asyncio import current_task, to_thread
 from collections.abc import Callable
 import json
 from pathlib import Path
@@ -21,12 +21,13 @@ from kohakuterrarium.modules.ui_owner import OwnerArgumentError, OwnerForbiddenE
 from kohakuterrarium.utils.config_dir import config_dir
 
 from .cards import CardError, CardFields
+from .charx import CardMedia
 from .cast import NovelBinding
 from .novel import Outcome, SceneError, Story
 from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields, update_values
 from .state_tool import SetCardState
 from .portraits import PortraitRule, chosen_key, rules_for
-from .library_view import card_detail, cards_view, portrait_view
+from .library_view import card_detail, cards_view, media_summary, media_view, portrait_view
 from .library import CardNotFound, get_card
 from .lore import LoreBook, active_entries
 from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context
@@ -68,6 +69,8 @@ class TavernSession(Arguments):
     lore: LoreBook | None
     worldbook: LoreBook | None = None
     notes: str
+    media: list[CardMedia] = Field(default_factory=list)
+    media_issues: dict[str, int] = Field(default_factory=dict)
 
 
 def library_dir() -> Path:
@@ -325,7 +328,8 @@ class RoleplayPlugin(BasePlugin):
                 "worldbookEntries": len(play.worldbook.entries) if play.worldbook else None,
                 "worldbookDiagnostics": play.worldbook.diagnostics() if play.worldbook else None,
                 "cardLoreDiagnostics": play.lore.diagnostics() if play.lore else None,
-                "lore": self.binding.get_state("loreView") if self.binding else None}
+                "lore": self.binding.get_state("loreView") if self.binding else None,
+                "media": media_summary(play.media), "mediaIssues": play.media_issues}
         selected = chosen_key(play.portrait_rules, play.state_fields, play.values)
         if selected is not None:
             view.update(hasPortrait=True, portraitKey=selected)
@@ -346,6 +350,12 @@ class RoleplayPlugin(BasePlugin):
                 return self.ui_state()
             if action == "cards" and self.mode in ("persona", "tavern"):
                 return cards_view(library_dir())
+            if action == "media" and self.mode == "tavern" and self._record() is not None:
+                play = TavernSession.model_validate(self._record())
+                key = args.get("key")
+                if args.get("id") != play.cardId or not isinstance(key, str) or not any(item.key == key for item in play.media):
+                    raise OwnerArgumentError("Only media from the selected tavern card can be viewed here")
+                return await to_thread(media_view, library_dir(), play.cardId, key)
             if action in ("detail", "portrait") and self.mode != "npc":
                 key = args.get("id")
                 if not isinstance(key, str) or not key:
@@ -379,7 +389,9 @@ class RoleplayPlugin(BasePlugin):
                 if choice.greetingIndex >= len(greetings):
                     raise OwnerArgumentError("Opening index is out of range")
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player, greeting=expand(greetings[choice.greetingIndex], card.fields.name, choice.player.name, ""), lore=card.lore, notes="")
-                play = play.model_copy(update={"greetingIndex": choice.greetingIndex, "hasPortrait": card.portrait is not None, "portrait_rules": rules_for(card.portraits), "state_fields": card.state_fields})
+                play = play.model_copy(update={"greetingIndex": choice.greetingIndex, "hasPortrait": card.portrait is not None,
+                                               "portrait_rules": rules_for(card.portraits), "state_fields": card.state_fields,
+                                               "media": card.media, "media_issues": card.media_issues})
                 self._save(play.model_dump())
                 if play.greeting:
                     await self.publish_opening(play.greeting)
