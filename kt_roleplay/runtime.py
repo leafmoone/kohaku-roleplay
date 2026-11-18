@@ -30,6 +30,8 @@ from .portraits import PortraitRule, chosen_key, rules_for
 from .library_view import card_detail, cards_view, media_summary, media_view, portrait_view
 from .library import CardNotFound, get_card
 from .lore import LoreBook, active_entries
+from .mvu import MvuChange, MvuInit, apply_changes, inspect_initializers, is_initializer, public_options, public_values
+from .mvu_tool import UpdateMvu
 from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context
 from .worldbook import read_worldbook
 from .scene_tools import ingest_report
@@ -55,6 +57,10 @@ class Notes(Arguments):
     notes: str
 
 
+class MvuSelection(Arguments):
+    ids: list[str] = Field(max_length=128)
+
+
 class TavernSession(Arguments):
     cardId: str
     card: CardFields
@@ -71,6 +77,8 @@ class TavernSession(Arguments):
     notes: str
     media: list[CardMedia] = Field(default_factory=list)
     media_issues: dict[str, int] = Field(default_factory=dict)
+    mvu: MvuInit | None = None
+    mvu_public: list[str] = Field(default_factory=list)
 
 
 def library_dir() -> Path:
@@ -226,6 +234,8 @@ class RoleplayPlugin(BasePlugin):
         if self.mode == "tavern":
             record = self._record()
             allowed = {"rp_set_card_state"} if record and record.get("state_fields") else set()
+            if record and (record.get("mvu") or {}).get("values"):
+                allowed.add("rp_update_mvu")
             return ToolVisibility(allowed_tools=frozenset(allowed), allowed_subagents=frozenset())
         if self.novel is None:
             return None
@@ -255,7 +265,7 @@ class RoleplayPlugin(BasePlugin):
 
     def contribute_tools(self):
         if self.mode == "tavern":
-            return [SetCardState(self)]
+            return [SetCardState(self), UpdateMvu(self)]
         return self.novel.tools(self) if self.novel else []
 
     def apply_card_changes(self, changes: list[FieldUpdate]) -> None:
@@ -264,6 +274,20 @@ class RoleplayPlugin(BasePlugin):
         play = TavernSession.model_validate(self._record())
         values = update_values(play.state_fields, play.values, changes)
         self._save(play.model_copy(update={"values": values}).model_dump())
+        self.ui_emit("state", self.ui_state())
+
+    def apply_mvu_changes(self, changes: list[MvuChange]) -> None:
+        if self.mode != "tavern" or (record := self._record()) is None:
+            raise SceneError("Bind a card in a tavern session before changing variables")
+        play = TavernSession.model_validate(record)
+        if play.mvu is None or not play.mvu.values:
+            raise SceneError("The card has no initialized variables")
+        try:
+            values = apply_changes(play.mvu.values, changes)
+        except ValueError as exc:
+            raise SceneError(str(exc)) from exc
+        mvu = play.mvu.model_copy(update={"values": values})
+        self._save(play.model_copy(update={"mvu": mvu}).model_dump())
         self.ui_emit("state", self.ui_state())
 
     def story(self) -> Story:
@@ -336,6 +360,10 @@ class RoleplayPlugin(BasePlugin):
         visible = public_fields(play.state_fields, play.values)
         if visible:
             view["stateFields"] = visible
+        if play.mvu is not None:
+            view["mvu"] = {"invalidInitializers": play.mvu.issues.get("invalid_initializer", 0),
+                           "options": public_options(play.mvu.values), "selected": play.mvu_public,
+                           "values": public_values(play.mvu.values, play.mvu_public)}
         return view
 
     async def ui_call(self, action: str, args: dict[str, object], context) -> dict[str, object]:
@@ -350,6 +378,17 @@ class RoleplayPlugin(BasePlugin):
                 return self.ui_state()
             if action == "cards" and self.mode in ("persona", "tavern"):
                 return cards_view(library_dir())
+            if action == "set_mvu_public" and self.mode == "tavern" and (record := self._record()) is not None:
+                selection = MvuSelection.model_validate(args).ids
+                play = TavernSession.model_validate(record)
+                if play.mvu is None or len(selection) != len(set(selection)) or not set(selection).issubset(
+                    item["id"] for item in public_options(play.mvu.values)
+                ):
+                    raise OwnerArgumentError("Choose existing variable paths only")
+                self._save(play.model_copy(update={"mvu_public": selection}).model_dump())
+                view = self.ui_state()
+                self.ui_emit("state", view)
+                return view
             if action == "media" and self.mode == "tavern" and self._record() is not None:
                 play = TavernSession.model_validate(self._record())
                 key = args.get("key")
@@ -388,10 +427,18 @@ class RoleplayPlugin(BasePlugin):
                 greetings = [card.fields.first_mes, *card.fields.alternate_greetings]
                 if choice.greetingIndex >= len(greetings):
                     raise OwnerArgumentError("Opening index is out of range")
-                play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player, greeting=expand(greetings[choice.greetingIndex], card.fields.name, choice.player.name, ""), lore=card.lore, notes="")
-                play = play.model_copy(update={"greetingIndex": choice.greetingIndex, "hasPortrait": card.portrait is not None,
-                                               "portrait_rules": rules_for(card.portraits), "state_fields": card.state_fields,
-                                               "media": card.media, "media_issues": card.media_issues})
+                lore = card.lore
+                mvu = inspect_initializers(card.book)
+                if mvu is not None and lore is not None:
+                    lore = lore.model_copy(update={"entries": [
+                        entry.model_copy(update={"enabled": False}) if is_initializer(entry.comment, entry.name) else entry
+                        for entry in lore.entries
+                    ]})
+                play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player,
+                                     greeting=expand(greetings[choice.greetingIndex], card.fields.name, choice.player.name, ""),
+                                     lore=lore, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
+                                     portrait_rules=rules_for(card.portraits), state_fields=card.state_fields,
+                                     media=card.media, media_issues=card.media_issues, mvu=mvu)
                 self._save(play.model_dump())
                 if play.greeting:
                     await self.publish_opening(play.greeting)
@@ -471,6 +518,12 @@ class RoleplayPlugin(BasePlugin):
             messages = insert_depth_lore(messages, entries, play.card, play.player)
             if play.state_fields:
                 content += "\nUse rp_set_card_state for changed declared fields only. Keep private fields out of prose.\n" + json.dumps(model_fields(play.state_fields, play.values), ensure_ascii=False)
+            if play.mvu is not None and play.mvu.values:
+                content += ("\nThese are initialized variables in the current fictional session only. Use rp_update_mvu to "
+                            "record only justified changes. Variables not selected for display are private; do not copy "
+                            "their values into prose.\n" + json.dumps({"mvu_variables": play.mvu.values,
+                                                                       "mvu_displayed_paths": [json.loads(key) for key in play.mvu_public]},
+                                                                      ensure_ascii=False))
             if books and self.binding:
                 lore_view = {"totalEntries": sum(len(book.entries) for book in books), "activeTitles": [e.name or e.comment or ", ".join(e.keys) for e in entries], "usedTokens": 2048 - remaining, "budgetTokens": min(2048, sum(book.token_budget for book in books))}
                 if self.binding.get_state("loreView") != lore_view:
