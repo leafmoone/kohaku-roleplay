@@ -74,10 +74,8 @@ def _png_payload(raw: bytes) -> tuple[bytes, bytes]:
         raise CardError(f"Invalid character card PNG: {exc}") from exc
 
 
-def parse_card(raw: bytes) -> ParsedCard:
-    if not 0 < len(raw) <= MAX_CARD_BYTES:
-        raise CardError("Choose a non-empty JSON or PNG card no larger than 12 MiB")
-    payload, portrait = _png_payload(raw) if raw.startswith(PNG_HEADER) else (raw, None)
+def card_document(payload: bytes) -> tuple[Literal[1, 2, 3], dict, dict]:
+    """Return the envelope and the editable data object, retaining unknown keys."""
     try:
         envelope = json.loads(payload.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
@@ -95,6 +93,14 @@ def parse_card(raw: bytes) -> ParsedCard:
         raise CardError("Card data must be an object")
     try:
         fields = CardFields.model_validate(data)
+    return version, envelope, data
+
+
+def parse_card(raw: bytes) -> ParsedCard:
+    if not 0 < len(raw) <= MAX_CARD_BYTES:
+        raise CardError("Choose a non-empty JSON or PNG card no larger than 12 MiB")
+    payload, portrait = _png_payload(raw) if raw.startswith(PNG_HEADER) else (raw, None)
+    version, _, data = card_document(payload)
     except ValidationError as exc:
         errors = "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors(include_input=False))
         raise CardError(f"Invalid card fields: {errors}") from exc
