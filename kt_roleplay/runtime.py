@@ -23,6 +23,7 @@ from kohakuterrarium.utils.config_dir import config_dir
 from .cards import CardError, CardFields
 from .charx import CardMedia
 from .cast import NovelBinding
+from .gameplay import Action, PlayActions, apply_actions
 from .novel import Outcome, SceneError, Story
 from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields, update_values
 from .state_tool import SetCardState
@@ -33,7 +34,7 @@ from .lore import LoreBook, active_entries
 from .mvu import MvuChange, MvuInit, apply_changes, inspect_initializers, is_initializer, public_options, public_values
 from .mvu_legacy import apply_literal_update, split_opening
 from .mvu_tool import ApplyMvuUpdate, UpdateMvu
-from .panels import ChoicePanel, NativePanel, public_panels
+from .panels import ChoicePanel, InventoryPanel, NativePanel, QuestPanel, public_panels
 from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context
 from .worldbook import read_worldbook
 from .scene_tools import ingest_report
@@ -249,6 +250,8 @@ class RoleplayPlugin(BasePlugin):
                 allowed.add("rp_update_mvu")
                 if record.get("mvu_legacy"):
                     allowed.add("rp_apply_mvu_update")
+            if record and any(p.get("type") in ("inventory", "quest") for p in record.get("native_panels", [])):
+                allowed.add("rp_apply_gameplay")
             return ToolVisibility(allowed_tools=frozenset(allowed), allowed_subagents=frozenset())
         if self.novel is None:
             return None
@@ -278,7 +281,7 @@ class RoleplayPlugin(BasePlugin):
 
     def contribute_tools(self):
         if self.mode == "tavern":
-            return [SetCardState(self), UpdateMvu(self), ApplyMvuUpdate(self)]
+            return [SetCardState(self), UpdateMvu(self), ApplyMvuUpdate(self), PlayActions(self)]
         return self.novel.tools(self) if self.novel else []
 
     def apply_card_changes(self, changes: list[FieldUpdate]) -> None:
@@ -286,6 +289,17 @@ class RoleplayPlugin(BasePlugin):
             raise SceneError("Bind a card in a tavern session before changing state")
         play = TavernSession.model_validate(self._record())
         values = update_values(play.state_fields, play.values, changes)
+        self._save(play.model_copy(update={"values": values}).model_dump())
+        self.ui_emit("state", self.ui_state())
+
+    def apply_gameplay_actions(self, actions: list[Action]) -> None:
+        if self.mode != "tavern" or (record := self._record()) is None:
+            raise SceneError("Bind a tavern card before applying a gameplay action")
+        play = TavernSession.model_validate(record)
+        try:
+            values = apply_actions(play.native_panels, play.state_fields, play.values, actions)
+        except ValueError as exc:
+            raise SceneError(str(exc)) from exc
         self._save(play.model_copy(update={"values": values}).model_dump())
         self.ui_emit("state", self.ui_state())
 
@@ -573,6 +587,11 @@ class RoleplayPlugin(BasePlugin):
             messages = insert_depth_lore(messages, entries, play.card, play.player)
             if play.state_fields:
                 content += "\nUse rp_set_card_state for changed declared fields only. Keep private fields out of prose.\n" + json.dumps(model_fields(play.state_fields, play.values), ensure_ascii=False)
+            gameplay = public_panels([panel for panel in play.native_panels if isinstance(panel, (InventoryPanel, QuestPanel))],
+                                     play.state_fields, play.values)
+            if gameplay:
+                content += ("\nFor an inventory or quest action, use rp_apply_gameplay with these panel IDs; "
+                            "do not repeat it through rp_set_card_state.\n" + json.dumps(gameplay, ensure_ascii=False))
             if play.mvu is not None and play.mvu.values:
                 content += ("\nThese are initialized variables in the current fictional session only. Use rp_update_mvu to "
                             "record only justified changes. Variables not selected for display are private; do not copy "
