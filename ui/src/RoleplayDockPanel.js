@@ -78,6 +78,49 @@ export const RoleplayDockPanel = {
     const tavernStateFields = computed(() => normalizeStateFields(state.value.stateFields));
     const novelView = computed(() => projectNovelView(state.value));
 
+    const WORLDBOOK_ISSUE_KEYS = {
+      unsupported_position: "worldbookIssueUnsupportedPosition",
+      unsupported_trigger: "worldbookIssueUnsupportedTrigger",
+      unsupported_key: "worldbookIssueUnsupportedKey",
+      script_content: "worldbookIssueScriptContent",
+      invalid_entry: "worldbookIssueInvalidEntry",
+    };
+
+    function normalizeWorldbookDiagnostics(raw) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+      const totalEntries = Number(raw.totalEntries);
+      const supportedEntries = Number(raw.supportedEntries);
+      if (!Number.isFinite(totalEntries) || !Number.isFinite(supportedEntries)) return null;
+      const rawIssues = Array.isArray(raw.issues) ? raw.issues : [];
+      const issues = rawIssues
+        .filter((item) => item && typeof item === "object" && typeof item.code === "string" && item.code)
+        .map((item) => ({
+          code: item.code,
+          count: Math.max(0, Number(item.count) || 0),
+        }))
+        .filter((item) => item.count > 0);
+      const skippedEntries = Math.max(
+        0,
+        totalEntries - supportedEntries,
+        issues.reduce((sum, item) => sum + item.count, 0),
+      );
+      return {
+        totalEntries: Math.max(0, totalEntries),
+        supportedEntries: Math.max(0, supportedEntries),
+        skippedEntries,
+        issues,
+      };
+    }
+
+    function worldbookIssueLabel(issue) {
+      const i18nKey = WORLDBOOK_ISSUE_KEYS[issue?.code];
+      if (i18nKey) return t(i18nKey, { count: issue.count });
+      return t("worldbookIssueUnknown", { code: issue?.code || "unknown", count: issue?.count || 0 });
+    }
+
+    const sessionWorldbookDiag = computed(() => normalizeWorldbookDiagnostics(state.value.worldbookDiagnostics));
+    const cardLoreDiag = computed(() => normalizeWorldbookDiagnostics(state.value.cardLoreDiagnostics));
+
     async function loadCards() {
       if (owner.status.value !== "ready") return;
       cardsLoading.value = true;
@@ -386,6 +429,9 @@ export const RoleplayDockPanel = {
       worldbookInput,
       worldbookError,
       tavernStateFields,
+      sessionWorldbookDiag,
+      cardLoreDiag,
+      worldbookIssueLabel,
       resumingScene,
       resumeError,
       novelView,
@@ -628,6 +674,70 @@ export const RoleplayDockPanel = {
                 data-testid="kt-rp-worldbook-input"
                 @change="handleWorldbookFileChange"
               />
+            </div>
+
+            <div
+              v-if="sessionWorldbookDiag"
+              class="ktrp-diag-block"
+              data-testid="kt-rp-session-worldbook-diag"
+            >
+              <div class="ktrp-row-between">
+                <span class="ktrp-diag-title">{{ t('worldbookDiagSessionTitle') }}</span>
+                <span class="ktrp-chip" data-testid="kt-rp-session-worldbook-diag-summary">
+                  {{
+                    t('worldbookDiagSummary', {
+                      supported: sessionWorldbookDiag.supportedEntries,
+                      total: sessionWorldbookDiag.totalEntries,
+                      skipped: sessionWorldbookDiag.skippedEntries,
+                    })
+                  }}
+                </span>
+              </div>
+              <p v-if="!sessionWorldbookDiag.issues.length" class="ktrp-muted">
+                {{ t('worldbookDiagAllSupported') }}
+              </p>
+              <div v-else class="ktrp-tag-list" data-testid="kt-rp-session-worldbook-diag-issues">
+                <span
+                  v-for="issue in sessionWorldbookDiag.issues"
+                  :key="issue.code"
+                  class="ktrp-chip"
+                  :data-testid="'kt-rp-session-worldbook-issue-' + issue.code"
+                >
+                  {{ worldbookIssueLabel(issue) }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div
+            v-if="cardLoreDiag"
+            class="ktrp-card-box"
+            data-testid="kt-rp-card-lore-diag"
+          >
+            <div class="ktrp-row-between">
+              <div class="ktrp-box-head">{{ t('worldbookDiagCardTitle') }}</div>
+              <span class="ktrp-chip" data-testid="kt-rp-card-lore-diag-summary">
+                {{
+                  t('worldbookDiagSummary', {
+                    supported: cardLoreDiag.supportedEntries,
+                    total: cardLoreDiag.totalEntries,
+                    skipped: cardLoreDiag.skippedEntries,
+                  })
+                }}
+              </span>
+            </div>
+            <p v-if="!cardLoreDiag.issues.length" class="ktrp-muted">
+              {{ t('worldbookDiagAllSupported') }}
+            </p>
+            <div v-else class="ktrp-tag-list" data-testid="kt-rp-card-lore-diag-issues">
+              <span
+                v-for="issue in cardLoreDiag.issues"
+                :key="issue.code"
+                class="ktrp-chip"
+                :data-testid="'kt-rp-card-lore-issue-' + issue.code"
+              >
+                {{ worldbookIssueLabel(issue) }}
+              </span>
             </div>
           </div>
 

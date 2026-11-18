@@ -466,6 +466,20 @@
   cursor: not-allowed;
 }
 
+.ktrp-diag-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.ktrp-diag-title {
+  font-weight: 600;
+  font-size: var(--kt-fs-xs, 0.8125rem);
+}
+
 .ktrp-box-head {
   font-weight: 600;
   font-size: var(--kt-fs-xs, 0.8125rem);
