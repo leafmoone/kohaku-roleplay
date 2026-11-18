@@ -1,0 +1,19 @@
+# Python development artifacts
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Local instructions, memory and verification artifacts
+/AGENTS.md
+/MEMORY.md
+/.local/
