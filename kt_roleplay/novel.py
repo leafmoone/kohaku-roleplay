@@ -4,6 +4,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .card_state import FieldUpdate, Value
 
 Key = Annotated[str, Field(min_length=1)]
 
@@ -30,9 +31,10 @@ class Scene(StoryModel):
 
 class Outcome(StoryModel):
     prose: Key
-    facts: list[str]
-    private_updates: dict[Key, str]
-    visible_status: dict[Key, dict[str, str | int]]
+    facts: list[str] = Field(default_factory=list)
+    private_updates: dict[Key, str] = Field(default_factory=dict, description="Private adjudications keyed by the affected actor ID.")
+    visible_status: dict[Key, dict[str, str | int]] = Field(default_factory=dict, description="Public status for actors without card-defined fields only.")
+    card_updates: dict[Key, list[FieldUpdate]] = Field(default_factory=dict, description="Declared field changes keyed by affected actor ID. Use absolute values.")
 
 
 class Story(StoryModel):
@@ -42,6 +44,7 @@ class Story(StoryModel):
     facts: list[str] = Field(default_factory=list)
     knowledge: dict[Key, list[str]] = Field(default_factory=dict)
     visible_status: dict[Key, dict[str, str | int]] = Field(default_factory=dict)
+    card_values: dict[Key, dict[str, Value]] = Field(default_factory=dict)
     pending: Scene | None = None
 
 
@@ -83,7 +86,7 @@ def commit_scene(story: Story, number: int, outcome: Outcome) -> Story:
     missing = set(scene.cues).difference(scene.reports)
     if missing:
         raise SceneError("Missing required NPC reports: " + ", ".join(sorted(missing)))
-    affected = set(outcome.private_updates) | set(outcome.visible_status)
+    affected = set(outcome.private_updates) | set(outcome.visible_status) | set(outcome.card_updates)
     if affected.difference(scene.cues):
         raise SceneError("A character outside this scene cannot acquire a new reaction or observation")
     knowledge = {**story.knowledge, **{actor: [*story.knowledge.get(actor, []), text] for actor, text in outcome.private_updates.items()}}

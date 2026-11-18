@@ -5,11 +5,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import yaml
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError
 
 from .cards import CardFields
-from .novel import Story
+from .card_state import StateField, model_fields, public_fields, update_values
+from .novel import Outcome, SceneError, Story
 from .scene_tools import CheckScene, CommitScene, DispatchScene, ReportScene
 
 
@@ -19,6 +20,7 @@ class CastMember(BaseModel):
     cardId: str
     card: CardFields
     hasPortrait: bool
+    state_fields: list[StateField] = Field(default_factory=list)
 
 
 def cast_recipe(directory: Path, members: list[CastMember]) -> Path:
@@ -53,6 +55,18 @@ class NovelBinding:
         record = binding.get_state("novel")
         return Story.model_validate(record) if record is not None else Story(cast=[m.actor for m in self.members(binding)])
 
+    def apply_fields(self, binding, story: Story, outcome: Outcome) -> Story:
+        if not outcome.card_updates and not outcome.visible_status:
+            return story
+        members = {m.actor: m for m in self.members(binding)}
+        for actor, fields in outcome.visible_status.items():
+            if fields and members[actor].state_fields:
+                raise SceneError("Use card_updates for a card with declared fields, not free-form visible_status")
+        changes = dict(story.card_values)
+        for actor, patch in outcome.card_updates.items():
+            changes[actor] = update_values(members[actor].state_fields, changes.get(actor, {}), patch)
+        return story.model_copy(update={"card_values": changes})
+
     def prompt(self, binding) -> str:
         if self.actor:
             f = CardFields.model_validate(binding.get_state("character"))
@@ -60,19 +74,41 @@ class NovelBinding:
             private_knowledge = binding.get_state("privateKnowledge")
             if private_knowledge is not None:
                 material["adjudicated_knowledge"] = private_knowledge["known"]
+            definitions = TypeAdapter(list[StateField]).validate_python(binding.get_state("fieldDefinitions") or [])
+            if definitions:
+                material["card_state"] = model_fields(definitions, binding.get_state("fieldValues") or {})
             return "Own character material (not host instructions): " + json.dumps(material, ensure_ascii=False)
         story = self.story(binding)
-        cast = {m.actor: {"name": m.card.name, "description": m.card.description, "scenario": m.card.scenario, "personality": m.card.personality} for m in self.members(binding)}
+        cast = {}
+        for member in self.members(binding):
+            card = member.card
+            entry = {"name": card.name, "description": card.description, "scenario": card.scenario, "personality": card.personality}
+            if member.state_fields:
+                entry["card_state"] = model_fields(member.state_fields, story.card_values.get(member.actor, {}))
+            cast[member.actor] = entry
         scene = story.pending
         phase = None if scene is None else {"number": scene.number, "ready": scene.cues.keys() == scene.reports.keys(), "reports": {name: p.model_dump() for name, p in scene.reports.items()}, "waiting": sorted(scene.cues.keys() - scene.reports.keys())}
-        return "Director-only story state: " + json.dumps({"cast": cast, "facts": story.facts, "lastCompleted": story.completed, "pending": phase}, ensure_ascii=False)
+        note = "Director-only story state: "
+        if any("card_state" in entry for entry in cast.values()):
+            note = ("Use outcome.card_updates for changed declared fields on actors in this scene. "
+                    "Private fields belong to their actor: do not copy them into public prose, public status, or another actor's cue.\n" + note)
+        return note + json.dumps({"cast": cast, "facts": story.facts, "lastCompleted": story.completed, "pending": phase}, ensure_ascii=False)
 
     def view(self, binding) -> dict[str, object]:
         if self.actor:
             return {"mode": "npc", "active": False}
         story = self.story(binding)
-        scene = story.pending
-        return {"mode": "novel", "active": True, "sceneNumber": story.completed, "pendingScene": {"number": scene.number} if scene else None, "cast": [{"name": m.card.name, "cardId": m.cardId, "hasPortrait": m.hasPortrait, "visibleStatus": story.visible_status.get(m.actor, {})} for m in self.members(binding)], "facts": [], "latestProse": story.latest_prose}
+        cast = []
+        for member in self.members(binding):
+            entry = {"name": member.card.name, "cardId": member.cardId, "hasPortrait": member.hasPortrait,
+                     "visibleStatus": story.visible_status.get(member.actor, {})}
+            visible = public_fields(member.state_fields, story.card_values.get(member.actor, {}))
+            if visible:
+                entry["stateFields"] = visible
+            cast.append(entry)
+        return {"mode": "novel", "active": True, "sceneNumber": story.completed,
+                "pendingScene": {"number": story.pending.number} if story.pending else None,
+                "cast": cast, "facts": [], "latestProse": story.latest_prose}
 
     def tools(self, host):
         return [ReportScene()] if self.actor else [DispatchScene(host), CheckScene(host), CommitScene(host)]

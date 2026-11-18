@@ -9,12 +9,12 @@ from typing import Literal
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from .card_state import StateField, decode_fields
+from .errors import CardError
+from .lore import load_book
+
 MAX_CARD_BYTES = 12 * 1024 * 1024
 PNG_HEADER = b"\x89PNG\r\n\x1a\n"
-
-
-from .lore import load_book
-from .errors import CardError
 
 
 class CardFields(BaseModel):
@@ -45,6 +45,7 @@ class ParsedCard(BaseModel):
     fields: CardFields
     book: dict[str, object] | None
     warnings: list[str]
+    state_fields: list[StateField] = Field(default_factory=list)
     portrait: bytes | None = None
 
 
@@ -103,8 +104,10 @@ def parse_card(raw: bytes) -> ParsedCard:
     if book is not None:
         load_book(book)
     warnings = []
-    if data.get("extensions"):
+    extensions = data.get("extensions")
+    definitions = decode_fields(extensions)
+    if extensions and (not isinstance(extensions, dict) or set(extensions) - {"kohaku-roleplay"}):
         warnings.append("Card extensions are retained in the original; external scripts are not executed.")
     if data.get("assets"):
         warnings.append("V3 external assets are retained, not automatically fetched.")
-    return ParsedCard(version=version, fields=fields, book=book, warnings=warnings, portrait=portrait)
+    return ParsedCard(version=version, fields=fields, book=book, warnings=warnings, portrait=portrait, state_fields=definitions)

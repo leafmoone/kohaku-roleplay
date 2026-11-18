@@ -19,7 +19,9 @@ from kohakuterrarium.utils.config_dir import config_dir
 
 from .cards import CardError, CardFields
 from .cast import NovelBinding
-from .novel import SceneError, Story
+from .novel import Outcome, SceneError, Story
+from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields, update_values
+from .state_tool import SetCardState
 from .library_view import card_detail, cards_view, portrait_view
 from .library import CardNotFound, get_card
 from .lore import LoreBook, active_entries, load_book
@@ -56,6 +58,8 @@ class TavernSession(Arguments):
     greetingIndex: int = 0
     openingSent: bool = False
     hasPortrait: bool = False
+    state_fields: list[StateField] = Field(default_factory=list)
+    values: dict[str, Value] = Field(default_factory=dict)
     lore: LoreBook | None
     worldbook: LoreBook | None = None
     notes: str
@@ -140,7 +144,9 @@ class RoleplayPlugin(BasePlugin):
 
     def get_tool_visibility(self, context: PluginContext) -> ToolVisibility | None:
         if self.mode == "tavern":
-            return ToolVisibility(allowed_tools=frozenset(), allowed_subagents=frozenset())
+            record = self._record()
+            allowed = {"rp_set_card_state"} if record and record.get("state_fields") else set()
+            return ToolVisibility(allowed_tools=frozenset(allowed), allowed_subagents=frozenset())
         if self.novel is None:
             return None
         allowed = frozenset()
@@ -168,7 +174,17 @@ class RoleplayPlugin(BasePlugin):
             raise PluginBlockError("Story creatures may not delegate outside their own perspective")
 
     def contribute_tools(self):
+        if self.mode == "tavern":
+            return [SetCardState(self)]
         return self.novel.tools(self) if self.novel else []
+
+    def apply_card_changes(self, changes: list[FieldUpdate]) -> None:
+        if self.mode != "tavern" or self._record() is None:
+            raise SceneError("Bind a card in a tavern session before changing state")
+        play = TavernSession.model_validate(self._record())
+        values = update_values(play.state_fields, play.values, changes)
+        self._save(play.model_copy(update={"values": values}).model_dump())
+        self.ui_emit("state", self.ui_state())
 
     def story(self) -> Story:
         if not self.novel or self.mode != "novel":
@@ -182,7 +198,7 @@ class RoleplayPlugin(BasePlugin):
         self._save(story.model_dump())
         self.ui_emit("state", self.ui_state())
 
-    def save_adjudication(self, context: ToolContext, story: Story, recipients: tuple[str, ...]) -> None:
+    def save_adjudication(self, context: ToolContext, story: Story, outcome: Outcome) -> None:
         """Commit the world and addressed NPC memories without waking a creature."""
         group = resolve_group_context(context)
         director = self.binding
@@ -191,15 +207,19 @@ class RoleplayPlugin(BasePlugin):
         store = director.session_store
         if store is None:
             raise SceneError("A persistent novel session is required")
+        story = self.novel.apply_fields(director, story, outcome)
         rows = [(director._state_key("novel"), story.model_dump())]
-        for actor in recipients:
+        for actor in outcome.private_updates.keys() | outcome.card_updates.keys():
             target = resolve_group_target(group, actor)
             plugin = target.agent.plugins.get_plugin("roleplay")
             binding = plugin.binding if isinstance(plugin, RoleplayPlugin) else None
             if binding is None or plugin.mode != "npc" or binding.session_store is not store or binding.agent_name != actor:
                 raise SceneError(f"Cannot deliver an adjudication to the session of {actor!r}")
-            receipt = {"throughScene": story.completed, "known": story.knowledge[actor]}
-            rows.append((binding._state_key("privateKnowledge"), receipt))
+            if actor in outcome.private_updates:
+                receipt = {"throughScene": story.completed, "known": story.knowledge[actor]}
+                rows.append((binding._state_key("privateKnowledge"), receipt))
+            if actor in outcome.card_updates:
+                rows.append((binding._state_key("fieldValues"), story.card_values[actor]))
         store.state.put_many(rows)
         self.can_open_scene = False
         self.ui_emit("state", self.ui_state())
@@ -221,7 +241,15 @@ class RoleplayPlugin(BasePlugin):
         if self.mode == "persona":
             return {"mode": self.mode, "active": True, **Attach.model_validate(record).model_dump()}
         play = TavernSession.model_validate(record)
-        return {"mode": self.mode, "active": True, "cardId": play.cardId, "name": play.card.name, "player": play.player.model_dump(), "greeting": play.greeting, "greetingIndex": play.greetingIndex, "openingSent": play.openingSent, "hasPortrait": play.hasPortrait, "notes": play.notes, "worldbookEntries": len(play.worldbook.entries) if play.worldbook else None, "lore": self.binding.get_state("loreView") if self.binding else None}
+        view = {"mode": self.mode, "active": True, "cardId": play.cardId, "name": play.card.name,
+                "player": play.player.model_dump(), "greeting": play.greeting, "greetingIndex": play.greetingIndex,
+                "openingSent": play.openingSent, "hasPortrait": play.hasPortrait, "notes": play.notes,
+                "worldbookEntries": len(play.worldbook.entries) if play.worldbook else None,
+                "lore": self.binding.get_state("loreView") if self.binding else None}
+        visible = public_fields(play.state_fields, play.values)
+        if visible:
+            view["stateFields"] = visible
+        return view
 
     async def ui_call(self, action: str, args: dict[str, object], context) -> dict[str, object]:
         if context is not None and context.multi_user:
@@ -257,7 +285,7 @@ class RoleplayPlugin(BasePlugin):
                 if choice.greetingIndex >= len(greetings):
                     raise OwnerArgumentError("Opening index is out of range")
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player, greeting=expand(greetings[choice.greetingIndex], card.fields.name, choice.player.name, ""), lore=load_book(card.book) if card.book is not None else None, notes="")
-                play = play.model_copy(update={"greetingIndex": choice.greetingIndex, "hasPortrait": card.portrait is not None})
+                play = play.model_copy(update={"greetingIndex": choice.greetingIndex, "hasPortrait": card.portrait is not None, "state_fields": card.state_fields})
                 self._save(play.model_dump())
                 if play.greeting:
                     await self.publish_opening(play.greeting)
@@ -307,6 +335,8 @@ class RoleplayPlugin(BasePlugin):
                 entries.extend(chosen)
                 remaining -= sum(_cost(e.content) for e in chosen)
             content = story_context(play.card, play.player, entries, play.notes)
+            if play.state_fields:
+                content += "\nUse rp_set_card_state for changed declared fields only. Keep private fields out of prose.\n" + json.dumps(model_fields(play.state_fields, play.values), ensure_ascii=False)
             if books and self.binding:
                 lore_view = {"totalEntries": sum(len(book.entries) for book in books), "activeTitles": [e.name or e.comment or ", ".join(e.keys) for e in entries], "usedTokens": 2048 - remaining, "budgetTokens": min(2048, sum(book.token_budget for book in books))}
                 if self.binding.get_state("loreView") != lore_view:

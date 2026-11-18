@@ -61,7 +61,7 @@ async def start_novel(body: NovelStart, host: StudioDep, service: ServiceDep) ->
     members = []
     for index, key in enumerate(body.cardIds, 1):
         card = _library_card(key)
-        members.append(CastMember(actor=f"npc_{index}", cardId=key, card=card.fields, hasPortrait=card.portrait is not None))
+        members.append(CastMember(actor=f"npc_{index}", cardId=key, card=card.fields, hasPortrait=card.portrait is not None, state_fields=card.state_fields))
     recipe = cast_recipe(library_dir() / "recipes", members)
     try:
         session = await host.sessions.start_terrarium(recipe, name=body.name or "Roleplay Novel")
@@ -85,6 +85,8 @@ async def start_novel(body: NovelStart, host: StudioDep, service: ServiceDep) ->
             if actor_plugin.binding is None or actor_plugin.binding.session_store is None:
                 raise OwnerArgumentError(f"NPC has no persistent session: {member.actor}")
             actor_plugin.binding.set_state("character", member.card.model_dump())
+            if member.state_fields:
+                actor_plugin.binding.set_state("fieldDefinitions", [f.model_dump() for f in member.state_fields])
             await service.wire_creature(sid, root.creature_id, member.actor, "send", enabled=True)
         plugin.story()
         return {"sessionId": sid, "creatureId": root.creature_id}
