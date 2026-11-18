@@ -46,9 +46,14 @@ def _budget(value: JsonValue, depth: int = 0) -> int:
     return 1
 
 
-def _data(text: str) -> dict[str, JsonValue]:
-    if len(text.encode("utf-8")) > _MAX_INIT_BYTES or "<%" in text:
-        raise ValueError("MVU initializer requires static JSON or YAML")
+def _json_mapping(pairs: list[tuple[str, JsonValue]]) -> dict[str, JsonValue]:
+    result = dict(pairs)
+    if len(result) != len(pairs) or "" in result:
+        raise ValueError("MVU initial data needs unique string keys")
+    return result
+
+
+def _yaml_data(text: str) -> object:
     depth = 0
     for i, event in enumerate(yaml.parse(text, Loader=_DataLoader)):
         if i > _MAX_NODES * 3 or isinstance(event, AliasEvent) or getattr(event, "anchor", None) or getattr(event, "tag", None):
@@ -59,10 +64,21 @@ def _data(text: str) -> dict[str, JsonValue]:
                 raise ValueError("MVU initializer exceeds its nesting limit")
         elif isinstance(event, CollectionEndEvent):
             depth -= 1
-    values = MvuInit.model_validate({"values": yaml.load(text, Loader=_DataLoader)}).values
-    if _budget(values) > _MAX_NODES:
+    return yaml.load(text, Loader=_DataLoader)
+
+
+def _data(text: str) -> dict[str, JsonValue]:
+    if len(text.encode("utf-8")) > _MAX_INIT_BYTES or "<%" in text:
+        raise ValueError("MVU initializer requires static JSON or YAML")
+    try:
+        raw = json.loads(text, object_pairs_hook=_json_mapping)
+    except json.JSONDecodeError:
+        raw = _yaml_data(text)
+    if not isinstance(raw, dict):
+        raise ValueError("MVU initializer needs an object")
+    if _budget(raw) > _MAX_NODES:
         raise ValueError("MVU initializer exceeds its value limit")
-    return values
+    return MvuInit.model_validate({"values": raw}).values
 
 
 def _overlay(base: dict[str, JsonValue], more: dict[str, JsonValue]) -> dict[str, JsonValue]:

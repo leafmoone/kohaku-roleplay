@@ -442,7 +442,8 @@ class RoleplayPlugin(BasePlugin):
                 self._save(play.model_dump())
                 if play.greeting:
                     await self.publish_opening(play.greeting)
-                    self._save(play.model_copy(update={"openingSent": True}).model_dump())
+                    latest = TavernSession.model_validate(self._record())
+                    self._save(latest.model_copy(update={"openingSent": True}).model_dump())
             elif action == "set_worldbook" and self.mode == "tavern" and self._record() is not None:
                 if "book" not in args or (args["book"] is not None and not isinstance(args["book"], dict)):
                     raise OwnerArgumentError("Expected a world-info object or null to remove the book")
