@@ -13,42 +13,55 @@ export const MvuPanel = {
   },
   setup(props) {
     const t = useRoleplayText();
-    const draft = ref(null);
+    const draft = ref(new Map());
+    const acknowledged = ref(null);
     const saving = ref(false);
     const feedback = ref("");
 
     const options = computed(() => props.mvu.options);
     const selected = computed(() => new Set(props.mvu.selected));
-    const checked = computed(() => draft.value ?? selected.value);
-    const dirty = computed(() => options.value.some(({ id }) => checked.value.has(id) !== selected.value.has(id)));
+    // A successful RPC can precede its state event. Use the ACK for checkboxes only.
+    const savedSelection = computed(() => acknowledged.value ?? selected.value);
+    const checked = computed(() => {
+      const ids = new Set(savedSelection.value);
+      for (const [id, isChecked] of draft.value) {
+        if (isChecked) ids.add(id);
+        else ids.delete(id);
+      }
+      return ids;
+    });
+    const dirty = computed(() => options.value.some(({ id }) => checked.value.has(id) !== savedSelection.value.has(id)));
     const values = computed(() => props.mvu.values.filter(
       ({ id }) => selected.value.has(id) && checked.value.has(id),
     ));
 
-    // A new saved selection takes precedence; value-only events leave an edit in progress intact.
-    watch(() => JSON.stringify(props.mvu.selected), () => {
-      draft.value = null;
-      if (feedback.value === "error") feedback.value = "";
+    function matchesProjection(ids) {
+      return ids.size === selected.value.size && [...ids].every((id) => selected.value.has(id));
+    }
+
+    watch(selected, () => {
+      if (acknowledged.value && matchesProjection(acknowledged.value)) acknowledged.value = null;
     });
 
     function setChecked(id, isChecked) {
       if (props.disabled || saving.value) return;
-      const next = new Set(checked.value);
-      if (isChecked) next.add(id);
-      else next.delete(id);
-      draft.value = next;
+      if (isChecked === savedSelection.value.has(id)) draft.value.delete(id);
+      else draft.value.set(id, isChecked);
       feedback.value = "";
     }
 
-    const canSave = computed(() => !props.disabled && !saving.value && dirty.value && feedback.value !== "saved");
+    const canSave = computed(() => !props.disabled && !saving.value && dirty.value);
     async function save() {
       if (!canSave.value) return;
       const ids = options.value.filter(({ id }) => checked.value.has(id)).map(({ id }) => id);
       saving.value = true;
       feedback.value = "";
       try {
-        await props.saveSelection(ids);
-        // The action reply acknowledges the save; only owner state supplies display values.
+        const reply = await props.saveSelection(ids);
+        const replyIds = reply?.mvu?.selected;
+        const saved = new Set(Array.isArray(replyIds) ? replyIds : ids);
+        acknowledged.value = matchesProjection(saved) ? null : saved;
+        draft.value.clear();
         feedback.value = "saved";
       } catch {
         feedback.value = "error";
