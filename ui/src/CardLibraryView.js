@@ -11,6 +11,7 @@ import {
 } from "@kohakuterrarium/ui-sdk";
 
 import {
+  DEFAULT_MAX_ARCHIVE_BYTES,
   DEFAULT_MAX_CARD_BYTES,
   base64ToUint8Array,
   collectGreetings,
@@ -20,6 +21,7 @@ import {
   validateCardFile,
 } from "./helpers.js";
 import { CardCopyEditor } from "./CardCopyEditor.js";
+import { CardMediaGallery } from "./CardMediaGallery.js";
 import { PortraitFrame } from "./PortraitFrame.js";
 import { PortraitRuleEditor } from "./PortraitRuleEditor.js";
 import { useRoleplayText } from "./strings.js";
@@ -33,7 +35,15 @@ const NOVEL_CAST_LIMIT = 32;
 
 export const CardLibraryView = {
   name: "RoleplayCardLibraryView",
-  components: { ActionButton, SettingsGroup, SettingsRow, PortraitFrame, CardCopyEditor, PortraitRuleEditor },
+  components: {
+    ActionButton,
+    SettingsGroup,
+    SettingsRow,
+    PortraitFrame,
+    CardCopyEditor,
+    PortraitRuleEditor,
+    CardMediaGallery,
+  },
   props: {
     mode: { type: String, default: "settings" },
   },
@@ -66,7 +76,14 @@ export const CardLibraryView = {
 
     const state = computed(() => owner.state.value || {});
     const maxCardBytes = computed(() => Number(state.value.maxCardBytes) || DEFAULT_MAX_CARD_BYTES);
+    const maxArchiveBytes = computed(
+      () => Number(state.value.maxArchiveBytes) || DEFAULT_MAX_ARCHIVE_BYTES,
+    );
     const maxMiB = computed(() => Math.round((maxCardBytes.value / (1024 * 1024)) * 10) / 10);
+    const maxArchiveMiB = computed(
+      () => Math.round((maxArchiveBytes.value / (1024 * 1024)) * 10) / 10,
+    );
+    const isCharxCard = computed(() => detail.value?.sourceFormat === "charx");
     const cards = computed(() => (Array.isArray(state.value.cards) ? state.value.cards : []));
     const filteredCards = computed(() => {
       const q = query.value.trim().toLowerCase();
@@ -204,7 +221,7 @@ export const CardLibraryView = {
     }
 
     function openCopyEditor() {
-      if (!selectedCard.value || busy.value) return;
+      if (!selectedCard.value || busy.value || isCharxCard.value) return;
       actionError.value = "";
       savedCopyBanner.value = false;
       editingPortraits.value = false;
@@ -216,7 +233,7 @@ export const CardLibraryView = {
     }
 
     function openPortraitsEditor() {
-      if (!selectedCard.value || busy.value) return;
+      if (!selectedCard.value || busy.value || isCharxCard.value) return;
       actionError.value = "";
       savedCopyBanner.value = false;
       editingCopy.value = false;
@@ -251,10 +268,16 @@ export const CardLibraryView = {
       actionError.value = "";
       try {
         const result = await owner.call("export_original", { id: card.id });
-        const fmt = result?.format === "png" ? "png" : "json";
+        const fmt =
+          result?.format === "png" ? "png" : result?.format === "charx" ? "charx" : "json";
         const bytes = base64ToUint8Array(result?.data);
         const blob = new Blob([bytes], {
-          type: fmt === "png" ? "image/png" : "application/json",
+          type:
+            fmt === "png"
+              ? "image/png"
+              : fmt === "charx"
+                ? "application/octet-stream"
+                : "application/json",
         });
         const filename = sanitizeDownloadFilename(
           detail.value?.fields?.name || card.name,
@@ -291,10 +314,14 @@ export const CardLibraryView = {
       if (!file) return;
 
       actionError.value = "";
-      const check = validateCardFile(file, maxCardBytes.value);
+      const check = validateCardFile(file, maxCardBytes.value, maxArchiveBytes.value);
       if (!check.ok) {
         actionError.value =
-          check.code === "type" ? t("invalidFileType") : t("sizeLimitError", { mb: maxMiB.value });
+          check.code === "type"
+            ? t("invalidFileType")
+            : check.kind === "charx"
+              ? t("archiveSizeLimitError", { mb: maxArchiveMiB.value })
+              : t("sizeLimitError", { mb: maxMiB.value });
         return;
       }
 
@@ -458,7 +485,10 @@ export const CardLibraryView = {
       savedCopyBanner,
       exporting,
       maxCardBytes,
+      maxArchiveBytes,
       maxMiB,
+      maxArchiveMiB,
+      isCharxCard,
       cards,
       filteredCards,
       greetings,
@@ -571,7 +601,7 @@ export const CardLibraryView = {
         </div>
 
           <div class="ktrp-row-between">
-            <p class="ktrp-muted">{{ t('supportedHint', { mb: maxMiB }) }}</p>
+            <p class="ktrp-muted">{{ t('supportedHint', { mb: maxMiB, archiveMb: maxArchiveMiB }) }}</p>
             <div class="ktrp-inline-actions">
               <ActionButton
                 size="sm"
@@ -595,7 +625,7 @@ export const CardLibraryView = {
               <input
                 ref="fileInput"
                 type="file"
-                accept=".json,.png,application/json,image/png"
+                accept=".json,.png,.charx,application/json,image/png,application/zip"
                 hidden
                 tabindex="-1"
                 :disabled="busy"
@@ -716,6 +746,14 @@ export const CardLibraryView = {
                     <h3>{{ detail.fields?.name || selectedCard.name }}</h3>
                     <div class="ktrp-chip-row">
                       <span class="ktrp-chip">{{ t('versionTag', { version: detail.version }) }}</span>
+                      <span
+                        v-if="detail.sourceFormat"
+                        class="ktrp-chip"
+                        :class="{ 'ktrp-chip--accent': isCharxCard }"
+                        data-testid="kt-rp-card-format-badge"
+                      >
+                        {{ detail.sourceFormat.toUpperCase() }}
+                      </span>
                       <span v-if="detail.hasWorldbook" class="ktrp-chip ktrp-chip--accent">{{ t('worldbookTag') }}</span>
                       <span v-if="detail.fields?.creator" class="ktrp-chip">{{ t('creatorLabel') }}: {{ detail.fields.creator }}</span>
                     </div>
@@ -727,7 +765,7 @@ export const CardLibraryView = {
                 <div class="ktrp-detail-actions">
                   <ActionButton
                     size="sm"
-                    :disabled="busy || exporting"
+                    :disabled="busy || exporting || isCharxCard"
                     data-testid="kt-rp-edit-copy-btn"
                     @click="openCopyEditor"
                   >
@@ -735,7 +773,7 @@ export const CardLibraryView = {
                   </ActionButton>
                   <ActionButton
                     size="sm"
-                    :disabled="busy || exporting"
+                    :disabled="busy || exporting || isCharxCard"
                     data-testid="kt-rp-edit-portraits-btn"
                     @click="openPortraitsEditor"
                   >
@@ -759,6 +797,14 @@ export const CardLibraryView = {
                     {{ t('removeCard') }}
                   </ActionButton>
                 </div>
+              </div>
+
+              <div
+                v-if="isCharxCard"
+                class="ktrp-banner ktrp-banner--info"
+                data-testid="kt-rp-charx-readonly-notice"
+              >
+                <span>{{ t('charxReadonlyNotice') }}</span>
               </div>
 
               <div
@@ -797,6 +843,14 @@ export const CardLibraryView = {
                   <li v-for="(warn, idx) in detail.warnings" :key="idx">{{ warn }}</li>
                 </ul>
               </div>
+
+              <CardMediaGallery
+                :card-id="detail.id"
+                :media="detail.media || []"
+                :media-issues="detail.mediaIssues || null"
+                :revision="portraitRevision"
+                test-id-prefix="kt-rp-detail-media"
+              />
 
             <div class="ktrp-detail-sections">
                 <div

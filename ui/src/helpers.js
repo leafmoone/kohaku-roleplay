@@ -5,6 +5,7 @@
  */
 
 export const DEFAULT_MAX_CARD_BYTES = 12 * 1024 * 1024;
+export const DEFAULT_MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 
 const STORY_OR_INSTRUCTION_LINE_RE =
   /(\{\{(char|user|original)\}\}|<\/?[a-z_]+>|^(system|instruction|rules?|scenario|example|dialogue|plot)\s*:|^\s*["“「*])/i;
@@ -12,21 +13,27 @@ const STORY_OR_INSTRUCTION_LINE_RE =
 /**
  * Validate a selected character card file before reading its bytes.
  */
-export function validateCardFile(file, maxBytes = DEFAULT_MAX_CARD_BYTES) {
+export function validateCardFile(
+  file,
+  maxBytes = DEFAULT_MAX_CARD_BYTES,
+  maxArchiveBytes = DEFAULT_MAX_ARCHIVE_BYTES,
+) {
   if (!file || typeof file.size !== "number") {
-    return { ok: false, code: "size" };
-  }
-  if (file.size <= 0 || file.size > maxBytes) {
     return { ok: false, code: "size" };
   }
   const name = String(file.name || "").toLowerCase();
   const mime = String(file.type || "").toLowerCase();
   const isJson = name.endsWith(".json") || mime === "application/json" || mime === "text/json";
   const isPng = name.endsWith(".png") || mime === "image/png";
-  if (!isJson && !isPng) {
+  const isCharx = name.endsWith(".charx");
+  if (!isJson && !isPng && !isCharx) {
     return { ok: false, code: "type" };
   }
-  return { ok: true, kind: isPng ? "png" : "json" };
+  const limit = isCharx ? maxArchiveBytes : maxBytes;
+  if (file.size <= 0 || file.size > limit) {
+    return { ok: false, code: "size", kind: isCharx ? "charx" : isPng ? "png" : "json" };
+  }
+  return { ok: true, kind: isCharx ? "charx" : isPng ? "png" : "json" };
 }
 
 /**
@@ -168,10 +175,10 @@ export function normalizeStateFields(rawFields) {
 }
 
 /**
- * Sanitize a character name into a safe download filename for PNG or JSON export.
+ * Sanitize a character name into a safe download filename for PNG, JSON, or CHARX export.
  */
 export function sanitizeDownloadFilename(name, format = "json") {
-  const ext = format === "png" ? ".png" : ".json";
+  const ext = format === "png" ? ".png" : format === "charx" ? ".charx" : ".json";
   const cleaned = String(name || "")
     .replace(/[\u0000-\u001f\u007f<>:"/\\|?*]+/g, "_")
     .replace(/\s+/g, " ")
@@ -548,6 +555,33 @@ export function buildPortraitsPayload(rows, publicFields = [], maxBytes = DEFAUL
   }
 
   return { ok: true, portraits };
+}
+
+export function normalizeMediaList(rawMedia) {
+  if (!Array.isArray(rawMedia)) return [];
+  const out = [];
+  for (const item of rawMedia) {
+    if (!item || typeof item !== "object") continue;
+    const key = typeof item.key === "string" ? item.key.trim() : "";
+    if (!key) continue;
+    out.push({
+      key,
+      name: typeof item.name === "string" && item.name.trim() ? item.name.trim() : key,
+      kind: typeof item.kind === "string" ? item.kind.trim() : "",
+    });
+  }
+  return out;
+}
+
+export function normalizeMediaIssues(rawIssues) {
+  if (!rawIssues || typeof rawIssues !== "object" || Array.isArray(rawIssues)) return [];
+  const out = [];
+  for (const [code, rawCount] of Object.entries(rawIssues)) {
+    const count = Number(rawCount);
+    if (!code || !Number.isFinite(count) || count <= 0) continue;
+    out.push({ code, count: Math.floor(count) });
+  }
+  return out;
 }
 
 /**

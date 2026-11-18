@@ -8,6 +8,7 @@ import {
   normalizeStateFields,
   projectNovelView,
 } from "./helpers.js";
+import { CardMediaGallery } from "./CardMediaGallery.js";
 import { PortraitFrame } from "./PortraitFrame.js";
 import { StateFieldsView } from "./StateFieldsView.js";
 import { useRoleplayText } from "./strings.js";
@@ -19,7 +20,7 @@ import { useRoleplayText } from "./strings.js";
  */
 export const RoleplayDockPanel = {
   name: "RoleplayDockPanel",
-  components: { ActionButton, PortraitFrame, StateFieldsView },
+  components: { ActionButton, CardMediaGallery, PortraitFrame, StateFieldsView },
   setup() {
     const owner = useOwner();
     const t = useRoleplayText();
@@ -629,6 +630,14 @@ export const RoleplayDockPanel = {
             <div class="ktrp-box-head">{{ t('cardStateTitle') }}</div>
             <StateFieldsView :fields="tavernStateFields" test-id="kt-rp-tavern-state-fields" />
           </div>
+
+          <CardMediaGallery
+            :card-id="state.cardId || ''"
+            :media="state.media || []"
+            :media-issues="state.mediaIssues || null"
+            compact
+            test-id-prefix="kt-rp-tavern-media"
+          />
 
           <div class="ktrp-card-box" data-testid="kt-rp-tavern-worldbook">
             <div class="ktrp-row-between">
