@@ -93,12 +93,9 @@ class LoreBook(BaseModel):
         }
 
 
-def _group_winner(group: list[tuple[int, LoreEntry]]) -> int:
+def _weighted_winner(group: list[tuple[int, LoreEntry]]) -> int:
     if len(group) == 1:
         return group[0][0]
-    prioritized = [row for row in group if row[1].group_override]
-    if prioritized:
-        return max(prioritized, key=lambda row: (row[1].insertion_order, -row[0]))[0]
     roll = random() * sum(e.group_weight for _, e in group)
     for index, entry in group:
         roll -= entry.group_weight
@@ -143,9 +140,8 @@ def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str],
                 continue
             scores[index] = score
             candidates.append((index, entry))
-            if entry.group:
-                for name in entry.group.split(','):
-                    groups.setdefault(name, []).append((index, entry))
+            for name in sorted(memberships[index]):
+                groups.setdefault(name, []).append((index, entry))
         excluded = set()
         for items in groups.values():
             # Scoring applies to entries opting in (or inheriting it from the book).
@@ -154,12 +150,19 @@ def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str],
                             if (book.group_scoring if entry.group_scoring is None else entry.group_scoring) and scores[index] < high)
         winners = set()
         reserved = set()
+        # Resolve all explicit priorities before an ordinary draw can claim a shared group.
+        overrides = sorted((row for row in candidates if row[0] not in excluded and row[1].group and row[1].group_override),
+                           key=lambda row: (-row[1].insertion_order, row[0]))
+        for index, _ in overrides:
+            if not memberships[index] & reserved:
+                winners.add(index)
+                reserved.update(memberships[index])
         for name, items in groups.items():
             if name in reserved:
                 continue
             eligible = [row for row in items if row[0] not in excluded and not memberships[row[0]] & reserved]
             if eligible:
-                winner = _group_winner(eligible)
+                winner = _weighted_winner(eligible)
                 winners.add(winner)
                 reserved.update(memberships[winner])
         for index, entry in candidates:
