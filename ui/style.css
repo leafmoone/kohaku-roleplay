@@ -664,6 +664,15 @@
   margin: 0;
 }
 
+.ktrp-native-panels {
+  overflow-wrap: anywhere;
+}
+
+.ktrp-native-option-text {
+  padding: 0.35rem 0.45rem;
+  border-inline-start: 2px solid var(--color-border);
+}
+
 .ktrp-error-inline {
   margin: 0;
   color: var(--color-danger, #c45454);

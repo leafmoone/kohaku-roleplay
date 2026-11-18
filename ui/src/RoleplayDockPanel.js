@@ -10,6 +10,7 @@ import {
 } from "./helpers.js";
 import { CardMediaGallery } from "./CardMediaGallery.js";
 import { MvuPanel } from "./MvuPanel.js";
+import { NativePanels } from "./NativePanels.js";
 import { PortraitFrame } from "./PortraitFrame.js";
 import { StateFieldsView } from "./StateFieldsView.js";
 import { useRoleplayText } from "./strings.js";
@@ -21,7 +22,7 @@ import { useRoleplayText } from "./strings.js";
  */
 export const RoleplayDockPanel = {
   name: "RoleplayDockPanel",
-  components: { ActionButton, CardMediaGallery, MvuPanel, PortraitFrame, StateFieldsView },
+  components: { ActionButton, CardMediaGallery, MvuPanel, NativePanels, PortraitFrame, StateFieldsView },
   setup() {
     const owner = useOwner();
     const session = useSession();
@@ -80,8 +81,9 @@ export const RoleplayDockPanel = {
       () => cards.value.find((card) => card.id === state.value.cardId) || null,
     );
     const tavernStateFields = computed(() => normalizeStateFields(state.value.stateFields));
-    const mvuScopeKey = computed(() => JSON.stringify([session.value?.id, creature.value?.name, state.value.cardId]));
+    const tavernScopeKey = computed(() => JSON.stringify([session.value?.id, creature.value?.name, state.value.cardId]));
     const saveMvuSelection = (ids) => owner.call("set_mvu_public", { ids });
+    const chooseNativeOption = (panelId, index) => owner.call("choose_panel_option", { panelId, index });
     const novelView = computed(() => projectNovelView(state.value));
 
     const WORLDBOOK_ISSUE_KEYS = {
@@ -435,8 +437,9 @@ export const RoleplayDockPanel = {
       worldbookInput,
       worldbookError,
       tavernStateFields,
-      mvuScopeKey,
+      tavernScopeKey,
       saveMvuSelection,
+      chooseNativeOption,
       sessionWorldbookDiag,
       cardLoreDiag,
       worldbookIssueLabel,
@@ -638,9 +641,18 @@ export const RoleplayDockPanel = {
             <StateFieldsView :fields="tavernStateFields" test-id="kt-rp-tavern-state-fields" />
           </div>
 
+          <NativePanels
+            v-if="state.nativePanels || state.invalidNativePanels"
+            :key="'native:' + tavernScopeKey"
+            :panels="state.nativePanels || []"
+            :invalid-count="state.invalidNativePanels || 0"
+            :choose-option="chooseNativeOption"
+            :disabled="busy"
+          />
+
           <MvuPanel
             v-if="state.mvu"
-            :key="mvuScopeKey"
+            :key="tavernScopeKey"
             :mvu="state.mvu"
             :save-selection="saveMvuSelection"
             :disabled="busy"

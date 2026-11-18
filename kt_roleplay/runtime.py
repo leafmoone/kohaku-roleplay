@@ -32,6 +32,7 @@ from .library import CardNotFound, get_card
 from .lore import LoreBook, active_entries
 from .mvu import MvuChange, MvuInit, apply_changes, inspect_initializers, is_initializer, public_options, public_values
 from .mvu_tool import UpdateMvu
+from .panels import ChoicePanel, NativePanel, public_panels
 from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context
 from .worldbook import read_worldbook
 from .scene_tools import ingest_report
@@ -61,6 +62,11 @@ class MvuSelection(Arguments):
     ids: list[str] = Field(max_length=128)
 
 
+class PanelSelection(Arguments):
+    panelId: str
+    index: int = Field(ge=0)
+
+
 class TavernSession(Arguments):
     cardId: str
     card: CardFields
@@ -78,6 +84,8 @@ class TavernSession(Arguments):
     media: list[CardMedia] = Field(default_factory=list)
     media_issues: dict[str, int] = Field(default_factory=dict)
     scene_media_rules: list[PortraitRule] = Field(default_factory=list)
+    native_panels: list[NativePanel] = Field(default_factory=list)
+    invalid_native_panels: int = 0
     mvu: MvuInit | None = None
     mvu_public: list[str] = Field(default_factory=list)
 
@@ -364,6 +372,9 @@ class RoleplayPlugin(BasePlugin):
         visible = public_fields(play.state_fields, play.values)
         if visible:
             view["stateFields"] = visible
+        if play.native_panels or play.invalid_native_panels:
+            view["nativePanels"] = public_panels(play.native_panels, play.state_fields, play.values)
+            view["invalidNativePanels"] = play.invalid_native_panels
         if play.mvu is not None:
             view["mvu"] = {"invalidInitializers": play.mvu.issues.get("invalid_initializer", 0),
                            "options": public_options(play.mvu.values), "selected": play.mvu_public,
@@ -393,6 +404,18 @@ class RoleplayPlugin(BasePlugin):
                 view = self.ui_state()
                 self.ui_emit("state", view)
                 return view
+            if action == "choose_panel_option" and self.mode == "tavern" and (record := self._record()) is not None:
+                choice = PanelSelection.model_validate(args)
+                play = TavernSession.model_validate(record)
+                panel = next((p for p in play.native_panels if isinstance(p, ChoicePanel) and p.id == choice.panelId), None)
+                if panel is None or choice.index >= len(panel.options):
+                    raise OwnerArgumentError("This action is not available for the current card")
+                agent = self.binding.host_agent if self.binding else None
+                if agent is None or agent.is_processing:
+                    raise OwnerArgumentError("Wait for the tavern to become idle before sending an action")
+                text = panel.options[choice.index].text
+                await agent.inject_input([{"type": "text", "text": text}], source="web")
+                return self.ui_state()
             if action == "media" and self.mode == "tavern" and self._record() is not None:
                 play = TavernSession.model_validate(self._record())
                 key = args.get("key")
@@ -443,7 +466,8 @@ class RoleplayPlugin(BasePlugin):
                                      lore=lore, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
                                      portrait_rules=rules_for(card.portraits), state_fields=card.state_fields,
                                      media=card.media, media_issues=card.media_issues,
-                                     scene_media_rules=card.scene_media_rules, mvu=mvu)
+                                     scene_media_rules=card.scene_media_rules, native_panels=card.native_panels,
+                                     invalid_native_panels=card.invalid_native_panels, mvu=mvu)
                 self._save(play.model_dump())
                 if play.greeting:
                     await self.publish_opening(play.greeting)

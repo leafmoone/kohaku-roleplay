@@ -14,6 +14,7 @@ from .card_state import StateField, decode_fields
 from .charx import CardMedia, inspect_charx_media, is_charx, open_charx, read_charx_card
 from .errors import CardError
 from .lore import LoreBook
+from .panels import NativePanel, read_panels
 from .portraits import PortraitAsset, PortraitRule, read_portraits
 from .scene_media import read_scene_media
 from .worldbook import read_worldbook
@@ -69,6 +70,8 @@ class ParsedCard(BaseModel):
     media: list[CardMedia] = Field(default_factory=list)
     media_issues: dict[str, int] = Field(default_factory=dict)
     scene_media_rules: list[PortraitRule] = Field(default_factory=list)
+    native_panels: list[NativePanel] = Field(default_factory=list)
+    invalid_native_panels: int = 0
 
     @cached_property
     def lore(self) -> LoreBook | None:
@@ -162,11 +165,13 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
         warnings.append("V3 assets outside a CHARX archive are retained, not automatically fetched.")
     namespace = extensions.get("kohaku-roleplay", {}) if isinstance(extensions, dict) else {}
     portraits = read_portraits(namespace.get("portraits", []), definitions, MAX_CARD_BYTES)
+    panels, bad_panels = read_panels(namespace.get("panels", []), definitions)
     cover = next((p for p in portraits if p.field is None), None)
     if cover is not None:
         portrait = base64.b64decode(cover.data)
     card = ParsedCard(version=version, fields=fields, book=book, warnings=warnings,
-                      portrait=portrait, state_fields=definitions, portraits=portraits, source_format=fmt)
+                      portrait=portrait, state_fields=definitions, portraits=portraits, source_format=fmt,
+                      native_panels=panels, invalid_native_panels=bad_panels)
     if book is not None:
         _ = card.lore
     return card

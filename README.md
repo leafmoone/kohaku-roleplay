@@ -59,10 +59,23 @@
 
 变量值默认不出现在侧栏。可在「MVU 变量」面板选择要显示的路径并保存，重开同一存档可恢复数值和选择，新开局从卡片初值开始。此设置只控制侧栏，不隐藏该局酒馆模型需要的变量，也不加密会话。形象挂载、小说和普通无变量酒馆不使用此面板。MVU 的 JavaScript、EJS、`<UpdateVariable>` 脚本格式和外部插件不会执行，第三方自定义界面不会原样加载。
 
+### 酒馆原生面板
+
+在 `data.extensions["kohaku-roleplay"].panels` 声明一组面板；每项有唯一 `id`、显示用 `label` 和 `type`。状态由 KT 的本局字段更新，面板只负责呈现，不自行推进剧情。
+
+| `type` | 附加字段 |
+| --- | --- |
+| `meter` | `field` 指向有 `min` 和 `max` 的公开数值字段。 |
+| `inventory` | `field` 指向公开的字符串列表；相同物品名合并显示数量。 |
+| `quest` | `status` 指向公开枚举，`completed` 是该枚举中的完成值；可用 `objectives: [{"label":"…","field":"…","equals":"…"}]` 显示单项目标。 |
+| `choices` | `options: [{"label":"…","text":"…"}]`；面板明示实际要发送的内容，玩家点击后才作为一条普通输入提交。不支持宿主斜杠命令。 |
+
+引用私有字段、类型不匹配或未知面板声明会跳过并提示。读取已保存的公共字段，不把面板配置或伏笔写回卡片；不改变普通形象和小说的行为，也不替代聊天框的自由输入。现有正文中的原生选项组件继续可用。
+
 ## 项目文件地图
 
 - `kohaku.yaml`：KT 包清单；`creatures/rp_agent/`：单 agent 酒馆配置与角色行为。
-- `kt_roleplay/`：后端，含卡片解析、素材库、人物形象/游玩投影和世界书筛选；`card_state.py` 定义卡片状态协议，`state_tool.py` 提供酒馆更新工具，`mvu.py` / `mvu_tool.py` 负责静态初值与本局原生更新工具，`novel.py` / `scene_tools.py` / `recovery.py` 处理小说裁定、分发回报与中断恢复。
+- `kt_roleplay/`：后端，含卡片解析、素材库、人物形象/游玩投影和世界书筛选；`card_state.py` 定义卡片状态协议，`state_tool.py` 提供酒馆更新工具，`mvu.py` / `mvu_tool.py` 负责静态初值与本局原生更新工具，`panels.py` 投影酒馆原生面板，`novel.py` / `scene_tools.py` / `recovery.py` 处理小说裁定、分发回报与中断恢复。
 - `kt_roleplay/card_editor.py`：在原格式上另存卡片；`charx.py`：读取归档及本地媒体；`portraits.py` / `portrait_library.py`：处理嵌入的本地图片、公开状态映射与立绘副本。
 - `ui/`：KT UI SDK 扩展，包含角色库、卡片编辑、会话侧栏、行动选项与语言资源。
 
