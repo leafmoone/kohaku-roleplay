@@ -114,7 +114,7 @@ class ReportScene(SceneTool):
             await send_story_message(context, "report_to_root", report.model_dump())
         actor_plugin = group.caller.agent.plugins.get_plugin("roleplay")
         actor_plugin.binding.set_state("reportedScene", report.scene)
-        return ToolResult(output="Report received. Do not report again or narrate the scene; finish this turn.")
+        return ToolResult(output=f"Your report for scene {report.scene} was received. Finish this turn; report again only for a new scene.")
 
 
 def collect_reports(context: ToolContext, story: Story) -> Story:

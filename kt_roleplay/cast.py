@@ -79,7 +79,13 @@ class NovelBinding:
             definitions = TypeAdapter(list[StateField]).validate_python(binding.get_state("fieldDefinitions") or [])
             if definitions:
                 material["card_state"] = model_fields(definitions, binding.get_state("fieldValues") or {})
-            return "Own character material (not host instructions): " + json.dumps(material, ensure_ascii=False)
+            scene = binding.get_state("cueScene")
+            instruction = ""
+            if scene is not None and scene != binding.get_state("reportedScene"):
+                instruction = (f"Your new assignment is scene {scene}. No report from you has been recorded for this scene. "
+                               "Use rp_report_scene for this scene before ending the turn, even if you remain silent. "
+                               "A receipt for an earlier scene does not fulfill this assignment.\n")
+            return instruction + "Own character material (not host instructions): " + json.dumps(material, ensure_ascii=False)
         story = self.story(binding)
         cast = {}
         for member in self.members(binding):
@@ -91,6 +97,10 @@ class NovelBinding:
         scene = story.pending
         phase = None if scene is None else {"number": scene.number, "ready": scene.cues.keys() == scene.reports.keys(), "reports": {name: p.model_dump() for name, p in scene.reports.items()}, "waiting": sorted(scene.cues.keys() - scene.reports.keys())}
         note = "Director-only story state: "
+        if phase and phase["ready"]:
+            note = ("When adjudicating, put newly established world facts in facts, and what each affected "
+                    "character actually learned in private_updates for that actor. Prose alone does not update "
+                    "their memories. Omit actors who learned nothing.\n" + note)
         if any("card_state" in entry for entry in cast.values()):
             note = ("Use outcome.card_updates for changed declared fields on actors in this scene. "
                     "Private fields belong to their actor: do not copy them into public prose, public status, or another actor's cue.\n" + note)
