@@ -105,9 +105,11 @@ def inspect_charx_media(archive: ZipFile, index: dict[str, ZipInfo], declared: o
         return [], None, {"invalid_asset": 1} if declared is not None else {}
     media = []
     warnings = Counter()
+    if len(declared) > _MAX_MEMBERS:
+        warnings["unsupported_asset"] = len(declared) - _MAX_MEMBERS
     checked_paths: dict[str, bool] = {}
     cover = None
-    for i, row in enumerate(declared):
+    for i, row in enumerate(declared[:_MAX_MEMBERS]):
         if not isinstance(row, dict) or not all(isinstance(row.get(k), str) and row[k].strip() for k in ("name", "type", "uri")):
             warnings["invalid_asset"] += 1
             continue
