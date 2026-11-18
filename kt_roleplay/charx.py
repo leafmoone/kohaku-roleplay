@@ -7,7 +7,8 @@ from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Iterator
 from urllib.parse import unquote
-from zipfile import BadZipFile, LargeZipFile, ZipFile, ZipInfo
+from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, LargeZipFile, ZipFile, ZipInfo
+from zlib import error as DeflateError
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict
@@ -22,7 +23,9 @@ _MAX_MEMBER_BYTES = 8 * 1024 * 1024
 _MAX_IMAGE_PIXELS = 16_000_000
 _IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 _IMAGE_FORMATS = ("PNG", "JPEG", "WEBP")
-_ARCHIVE_ERRORS = (BadZipFile, LargeZipFile, NotImplementedError, RuntimeError, OSError, EOFError, binascii.Error)
+_COMPRESSIONS = (ZIP_STORED, ZIP_DEFLATED)
+_ARCHIVE_ERRORS = (BadZipFile, LargeZipFile, NotImplementedError, RuntimeError, OSError, EOFError,
+                   UnicodeDecodeError, DeflateError, binascii.Error)
 
 
 class CardMedia(BaseModel):
@@ -69,6 +72,8 @@ def open_charx(raw: bytes) -> Iterator[tuple[ZipFile, dict[str, ZipInfo]]]:
 
 
 def _member(archive: ZipFile, item: ZipInfo) -> bytes:
+    if item.compress_type not in _COMPRESSIONS:
+        raise CardError("CHARX reads only stored and deflated ZIP entries")
     if item.is_dir() or not 0 < item.file_size <= _MAX_MEMBER_BYTES:
         raise CardError("CHARX file exceeds the per-entry size limit or is empty")
     with archive.open(item) as stream:
@@ -125,14 +130,15 @@ def inspect_charx_media(archive: ZipFile, index: dict[str, ZipInfo], declared: o
         if not _local_path(path) or path not in index:
             warnings["missing_asset"] += 1
             continue
-        if PurePosixPath(path).suffix.lower() not in _IMAGE_SUFFIXES:
+        item = index[path]
+        if PurePosixPath(path).suffix.lower() not in _IMAGE_SUFFIXES or item.compress_type not in _COMPRESSIONS:
             warnings["unsupported_asset"] += 1
             continue
         kind = row["type"]
         needs_cover = kind == "icon" and cover is None
         if checked_paths.get(path) is not False and (path not in checked_paths or needs_cover):
             try:
-                checked = _image(_member(archive, index[path]), (480, 640))
+                checked = _image(_member(archive, item), (480, 640))
                 checked_paths[path] = True
                 if needs_cover:
                     cover = checked
