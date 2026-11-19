@@ -127,6 +127,14 @@ export const RoleplayDockPanel = {
     const invokingScriptButtonKey = ref("");
     let scriptMutationSeq = 0;
 
+    // Session header summary pins state
+    const headerPinsDraft = ref([]);
+    const headerPinsDirty = ref(false);
+    const headerPinsBusy = ref(false);
+    const headerPinsError = ref("");
+    const headerPinsSaved = ref(false);
+    let headerPinsSeq = 0;
+
     const resumingScene = ref(false);
     const resumeError = ref("");
 
@@ -244,6 +252,38 @@ export const RoleplayDockPanel = {
       };
     });
 
+    const sessionHeaderSummary = computed(() => {
+      const raw = state.value.headerSummary;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+      const options = Array.isArray(raw.options)
+        ? raw.options
+            .filter(
+              (item) =>
+                item &&
+                typeof item === "object" &&
+                typeof item.id === "string" &&
+                item.id &&
+                typeof item.label === "string" &&
+                item.label,
+            )
+            .map((item) => ({
+              id: item.id,
+              label: item.label,
+              type: typeof item.type === "string" ? item.type : "text",
+            }))
+        : [];
+      const optionSet = new Set(options.map((o) => o.id));
+      const pinned = Array.isArray(raw.pinned)
+        ? raw.pinned.filter((id) => typeof id === "string" && optionSet.has(id))
+        : [];
+      const maxPins = Number.isInteger(raw.maxPins) && raw.maxPins > 0 ? raw.maxPins : 8;
+      return {
+        options,
+        pinned,
+        maxPins,
+      };
+    });
+
     const sessionWorldbookDiag = computed(() =>
       normalizeWorldbookDiagnostics(state.value.worldbookDiagnostics),
     );
@@ -342,12 +382,35 @@ export const RoleplayDockPanel = {
     watch(tavernScopeKey, () => {
       worldbookMutationSeq += 1;
       scriptMutationSeq += 1;
+      headerPinsSeq += 1;
       worldbookError.value = "";
       scriptBusy.value = false;
       scriptError.value = "";
       invokingScriptButtonKey.value = "";
+      headerPinsDirty.value = false;
+      headerPinsBusy.value = false;
+      headerPinsError.value = "";
+      headerPinsSaved.value = false;
       resetSlotInspector();
     });
+
+    watch(
+      () => sessionHeaderSummary.value,
+      (summary) => {
+        if (!summary) {
+          headerPinsDraft.value = [];
+          headerPinsDirty.value = false;
+          return;
+        }
+        const optionIds = new Set(summary.options.map((o) => o.id));
+        if (!headerPinsDirty.value) {
+          headerPinsDraft.value = [...summary.pinned];
+        } else {
+          headerPinsDraft.value = headerPinsDraft.value.filter((id) => optionIds.has(id));
+        }
+      },
+      { immediate: true, deep: true },
+    );
 
     watch(
       () => state.value.worldbookRef?.id || "",
@@ -836,6 +899,64 @@ export const RoleplayDockPanel = {
       }
     }
 
+    function headerPinTestId(id) {
+      return `kt-rp-header-pin-option-${encodeURIComponent(id)}`;
+    }
+
+    function toggleHeaderPinOption(id) {
+      const summary = sessionHeaderSummary.value;
+      if (!summary || busy.value || headerPinsBusy.value || !id) return;
+      if (!summary.options.some((o) => o.id === id)) return;
+      const list = [...headerPinsDraft.value];
+      const idx = list.indexOf(id);
+      if (idx >= 0) {
+        list.splice(idx, 1);
+        headerPinsDraft.value = list;
+        headerPinsDirty.value = true;
+        headerPinsError.value = "";
+        headerPinsSaved.value = false;
+      } else if (list.length < summary.maxPins) {
+        list.push(id);
+        headerPinsDraft.value = list;
+        headerPinsDirty.value = true;
+        headerPinsError.value = "";
+        headerPinsSaved.value = false;
+      }
+    }
+
+    async function saveHeaderSummaryPins() {
+      const summary = sessionHeaderSummary.value;
+      if (!summary || busy.value || headerPinsBusy.value) return;
+      const scopeSnap = tavernScopeKey.value;
+      const seq = ++headerPinsSeq;
+      const optionIds = new Set(summary.options.map((o) => o.id));
+      const ids = headerPinsDraft.value
+        .filter((id) => optionIds.has(id))
+        .slice(0, summary.maxPins);
+      headerPinsBusy.value = true;
+      headerPinsError.value = "";
+      headerPinsSaved.value = false;
+      actionError.value = "";
+      try {
+        const nextView = await owner.call("set_header_pins", { ids });
+        if (seq !== headerPinsSeq || tavernScopeKey.value !== scopeSnap) return;
+        headerPinsDirty.value = false;
+        if (nextView && typeof nextView === "object") {
+          owner.state.value = nextView;
+        }
+        headerPinsSaved.value = true;
+      } catch (err) {
+        if (seq === headerPinsSeq && tavernScopeKey.value === scopeSnap) {
+          headerPinsError.value = err?.message || String(err);
+          headerPinsSaved.value = false;
+        }
+      } finally {
+        if (seq === headerPinsSeq) {
+          headerPinsBusy.value = false;
+        }
+      }
+    }
+
     async function resumePendingScene() {
       const pending = novelView.value.pendingScene;
       if (!pending || busy.value || resumingScene.value) return;
@@ -944,6 +1065,15 @@ export const RoleplayDockPanel = {
       invokingScriptButtonKey,
       setSessionCardScripts,
       invokeCardScriptButton,
+      sessionHeaderSummary,
+      headerPinsDraft,
+      headerPinsDirty,
+      headerPinsBusy,
+      headerPinsError,
+      headerPinsSaved,
+      headerPinTestId,
+      toggleHeaderPinOption,
+      saveHeaderSummaryPins,
       resumingScene,
       resumeError,
       novelView,
@@ -1315,6 +1445,92 @@ export const RoleplayDockPanel = {
             compact
             test-id-prefix="kt-rp-tavern-media"
           />
+
+          <div
+            v-if="sessionHeaderSummary"
+            class="ktrp-card-box"
+            data-testid="kt-rp-header-pins-section"
+          >
+            <div class="ktrp-row-between">
+              <div class="ktrp-box-head">{{ t('headerSummaryTitle') }}</div>
+              <span
+                class="ktrp-chip"
+                :class="{ 'ktrp-chip--accent': headerPinsDraft.length > 0 }"
+                data-testid="kt-rp-header-pins-count"
+              >
+                {{
+                  t('headerSummaryCount', {
+                    count: headerPinsDraft.length,
+                    max: sessionHeaderSummary.maxPins,
+                  })
+                }}
+              </span>
+            </div>
+            <p class="ktrp-muted">
+              {{ t('headerSummaryHint', { max: sessionHeaderSummary.maxPins }) }}
+            </p>
+
+            <div
+              v-if="headerPinsError"
+              class="ktrp-banner ktrp-banner--error"
+              role="alert"
+              data-testid="kt-rp-header-pins-error"
+            >
+              <span>{{ headerPinsError }}</span>
+            </div>
+
+            <p
+              v-if="headerPinsSaved"
+              class="ktrp-muted"
+              role="status"
+              data-testid="kt-rp-header-pins-status"
+            >
+              {{ t('headerSummarySavedToast') }}
+            </p>
+
+            <template v-if="sessionHeaderSummary.options.length">
+              <div class="ktrp-mvu-option-list" data-testid="kt-rp-header-pins-options">
+                <label
+                  v-for="opt in sessionHeaderSummary.options"
+                  :key="opt.id"
+                  class="ktrp-mvu-option"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="headerPinsDraft.includes(opt.id)"
+                    :disabled="
+                      busy ||
+                      headerPinsBusy ||
+                      (!headerPinsDraft.includes(opt.id) &&
+                        headerPinsDraft.length >= sessionHeaderSummary.maxPins)
+                    "
+                    :data-testid="headerPinTestId(opt.id)"
+                    :data-pin-id="opt.id"
+                    @change="toggleHeaderPinOption(opt.id)"
+                  />
+                  <span>{{ opt.label }}</span>
+                </label>
+              </div>
+              <div class="ktrp-row-end">
+                <ActionButton
+                  size="sm"
+                  variant="primary"
+                  :disabled="busy || headerPinsBusy"
+                  data-testid="kt-rp-header-pins-save-btn"
+                  @click="saveHeaderSummaryPins"
+                >
+                  {{ headerPinsBusy ? t('headerSummarySavingBtn') : t('headerSummarySaveBtn') }}
+                </ActionButton>
+              </div>
+            </template>
+            <p
+              v-else
+              class="ktrp-muted"
+              data-testid="kt-rp-header-pins-empty"
+            >
+              {{ t('headerSummaryNoOptions') }}
+            </p>
+          </div>
 
           <div class="ktrp-card-box" data-testid="kt-rp-tavern-worldbook">
             <div class="ktrp-row-between">

@@ -403,5 +403,12 @@
   "cardDepsRefKindUnsupported": "不支持或动态导入（不可下载）",
   "cardDepsRefUnspecified": "（非字面量或动态导入）",
   "cardDepsNoteExternalMvuZod": "使用了外部 mvu_zod registerMvuSchema 辅助函数（运行期校验兼容性提示）。",
-  "cardDepsMaxLimitHint": "单张角色卡最多可勾选 {max} 个不重复的静态 HTTPS 模块。"
+  "cardDepsMaxLimitHint": "单张角色卡最多可勾选 {max} 个不重复的静态 HTTPS 模块。",
+  "headerSummaryTitle": "顶栏摘要固定项",
+  "headerSummaryHint": "最多勾选 {max} 个公开状态字段、原生面板或已公开 MVU 变量，在会话顶栏实时展示只读摘要。",
+  "headerSummaryCount": "已固定 {count}/{max}",
+  "headerSummarySaveBtn": "保存顶栏固定项",
+  "headerSummarySavingBtn": "正在保存…",
+  "headerSummarySavedToast": "已保存顶栏摘要固定项。",
+  "headerSummaryNoOptions": "当前会话暂无可固定到顶栏的公开状态项。"
 }

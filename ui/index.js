@@ -3,6 +3,7 @@ import { defineExtension } from "@kohakuterrarium/ui-sdk";
 import { CardLibraryView } from "./src/CardLibraryView.js";
 import { ChoiceBlock } from "./src/ChoiceBlock.js";
 import { RoleplayDockPanel } from "./src/RoleplayDockPanel.js";
+import { RoleplayHeaderSummary } from "./src/RoleplayHeaderSummary.js";
 import { WorldbookLibraryView } from "./src/WorldbookLibraryView.js";
 
 const SettingsLibrary = {
@@ -23,10 +24,22 @@ const WorldbookLibraryTab = {
   template: `<div class="ktrp-tab-shell"><WorldbookLibraryView /></div>`,
 };
 
+export const RoleplaySurface = {
+  name: "RoleplaySurface",
+  components: { RoleplayDockPanel, RoleplayHeaderSummary },
+  props: {
+    surface: { type: String, default: "dock" },
+  },
+  template: `
+    <RoleplayHeaderSummary v-if="surface === 'session-header'" />
+    <RoleplayDockPanel v-else />
+  `,
+};
+
 export default defineExtension((kt) => {
   kt.registerSettingsSection("library", SettingsLibrary);
   kt.registerTab("studio", StudioLibraryTab);
   kt.registerTab("worldbooks", WorldbookLibraryTab);
-  kt.registerPanel("roleplay", RoleplayDockPanel);
+  kt.registerPanel("roleplay", RoleplaySurface);
   kt.registerMessageRenderer("choices", ChoiceBlock);
 });

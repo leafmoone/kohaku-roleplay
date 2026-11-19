@@ -441,6 +441,14 @@ const EN_FALLBACK = {
   cardDepsNoteExternalMvuZod:
     "Uses external mvu_zod registerMvuSchema helper (runtime schema validation notice).",
   cardDepsMaxLimitHint: "Up to {max} distinct static HTTPS modules can be selected per card.",
+  headerSummaryTitle: "Header summary pins",
+  headerSummaryHint:
+    "Select up to {max} public state fields, native panels, or MVU variables to display in the session header bar.",
+  headerSummaryCount: "{count}/{max} pinned",
+  headerSummarySaveBtn: "Save header pins",
+  headerSummarySavingBtn: "Saving pins…",
+  headerSummarySavedToast: "Saved header summary pins.",
+  headerSummaryNoOptions: "No public summary items are available to pin in this session.",
 };
 
 function interpolate(template, params = {}) {
