@@ -18,6 +18,27 @@ class SessionScripts(BaseModel):
     mvu_listeners: dict[str, bool] = Field(default_factory=dict)
     inactive_events: dict[str, list[str]] = Field(default_factory=dict)
     appended_buttons: dict[str, list[ScriptButton]] = Field(default_factory=dict)
+    button_receipts_current: bool = False
+
+
+def upgrade_button_receipts(state: SessionScripts) -> SessionScripts:
+    # Early dynamic-button saves could cache registrations from before the append.
+    if state.button_receipts_current:
+        return state
+    return state.model_copy(update={'button_receipts_current': True, 'mvu_listeners': {
+        key: value for key, value in state.mvu_listeners.items() if key not in state.appended_buttons
+    }})
+
+
+def settled_mvu_scripts(state: SessionScripts, notices: dict[str, list[str]],
+                        added: dict[str, list[ScriptButton]]) -> SessionScripts:
+    inactive = {**state.inactive_events, **notices}
+    published = {key: [*state.appended_buttons.get(key, []), *rows] for key, rows in added.items() if rows}
+    return state.model_copy(update={
+        'inactive_events': {key: names for key, names in inactive.items() if names},
+        'appended_buttons': {**state.appended_buttons, **published},
+        'mvu_listeners': {key: value for key, value in state.mvu_listeners.items() if key not in published},
+    })
 
 
 def upgrade_script_clock(state: SessionScripts, last_turn: int) -> SessionScripts:
@@ -50,7 +71,7 @@ class ScriptSession:
                 if script_id is not None:
                     raise CardScriptError("This tavern has no approved script with initialized variables")
                 return
-            old = play.script_state
+            old = upgrade_button_receipts(play.script_state)
             if sequence is not None and event != "opening" and old.clock != "turn":
                 # A late attach can miss the start hook: be conservative about replay.
                 upgraded = upgrade_script_clock(old, sequence)
@@ -78,6 +99,8 @@ class ScriptSession:
                     used, values, listeners[script.id], skipped, added = await run_card_script(script, values, event, args, buttons)
                     if added:
                         published[script.id] = [*published.get(script.id, []), *added]
+                        # This receipt predates the buttons just published by the callback.
+                        listeners.pop(script.id, None)
                     if skipped:
                         inactive[script.id] = skipped
                     else:

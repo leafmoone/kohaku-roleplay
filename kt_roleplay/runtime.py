@@ -50,7 +50,7 @@ from .projections import Persona, Player, expand, insert_depth_lore, persona_con
 from .worldbook import read_worldbook
 from .worldbook_library import WorldbookNotFound, WorldbookReference, default_worldbook_for_play, snapshot_detail, worldbook_for_play
 from .scene_tools import ingest_report
-from .script_session import ScriptSession, SessionScripts, approved, upgrade_script_clock
+from .script_session import ScriptSession, SessionScripts, approved, settled_mvu_scripts, upgrade_button_receipts, upgrade_script_clock
 from .script_tool import CardScriptError, RunCardScript, effective_buttons, run_mvu_update
 from .recovery import resume_scene
 
@@ -434,18 +434,16 @@ class RoleplayPlugin(BasePlugin):
         if play.mvu is None or not play.mvu.values or (isinstance(update, str) and not play.mvu_legacy):
             raise SceneError("This tavern has no initialized variables for this update format")
         try:
-            scripts = approved(play.scripts, play.script_state) if self._script_turn_index() is not None else []
+            state = upgrade_button_receipts(play.script_state)
+            scripts = approved(play.scripts, state) if self._script_turn_index() is not None else []
             # An old diagnostic is not proof of absent listeners: re-probe unknown registrations.
-            scripts = [s for s in scripts if play.script_state.mvu_listeners.get(s.id, True)]
+            scripts = [s for s in scripts if state.mvu_listeners.get(s.id, True)]
             if scripts:
                 wire = update if isinstance(update, str) else [change.model_dump() for change in update]
-                values, notices = await to_thread(run_mvu_update, scripts, play.mvu.values, wire, play.script_state.appended_buttons)
+                values, notices, added = await to_thread(run_mvu_update, scripts, play.mvu.values, wire, state.appended_buttons)
                 if self._record() != record:
                     raise ValueError('The tavern changed during the MVU update; try again')
-                inactive = {**play.script_state.inactive_events, **notices}
-                play = play.model_copy(update={'script_state': play.script_state.model_copy(update={
-                    'inactive_events': {key: names for key, names in inactive.items() if names}
-                })})
+                state = settled_mvu_scripts(state, notices, added)
             elif isinstance(update, str):
                 values = apply_literal_update(play.mvu.values, update)
             else:
@@ -453,7 +451,7 @@ class RoleplayPlugin(BasePlugin):
         except ValueError as exc:
             raise SceneError(str(exc)) from exc
         mvu = play.mvu.model_copy(update={"values": values})
-        self._save(play.model_copy(update={"mvu": mvu}).model_dump())
+        self._save(play.model_copy(update={"mvu": mvu, 'script_state': state}).model_dump())
         self.ui_emit("state", self.ui_state())
 
     def story(self) -> Story:
@@ -813,12 +811,14 @@ class RoleplayPlugin(BasePlugin):
                 if choice.enableCardScripts and not script_card_ok:
                     raise _no_compatible_scripts(scripts)
                 enable_scripts = enable_requested and script_host_ok and script_card_ok
-                script_state = SessionScripts(clock="turn", approved=script_fingerprint(scripts) if enable_scripts else None)
+                script_state = SessionScripts(clock="turn", approved=script_fingerprint(scripts) if enable_scripts else None,
+                                              button_receipts_current=True)
                 if block is not None:
                     try:
                         if enable_scripts:
-                            values, notices = await to_thread(run_mvu_update, approved(scripts, script_state), mvu.values, block)
-                            script_state = script_state.model_copy(update={'inactive_events': {k: v for k, v in notices.items() if v}})
+                            values, notices, added = await to_thread(run_mvu_update, approved(scripts, script_state), mvu.values,
+                                                                     block, script_state.appended_buttons)
+                            script_state = settled_mvu_scripts(script_state, notices, added)
                         else:
                             values = apply_literal_update(mvu.values, block)
                         mvu = mvu.model_copy(update={'values': values})

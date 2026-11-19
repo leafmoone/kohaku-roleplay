@@ -72,17 +72,38 @@ def _inactive(names: object) -> list[str]:
     return names
 
 
+def _appended_rows(buttons: list[ScriptButton], proposals: object) -> list[ScriptButton]:
+    if not isinstance(proposals, list) or len(proposals) > 8:
+        raise CardScriptError('Invalid button list from card script worker')
+    next_buttons = [ScriptButton.model_validate(row) for row in proposals]
+    if next_buttons[:len(buttons)] != buttons or len({row.name for row in next_buttons}) != len(next_buttons):
+        raise CardScriptError('Card scripts may only append new button names')
+    added = next_buttons[len(buttons):]
+    for row in added:
+        try:
+            row.name.encode('utf-8')
+        except UnicodeError as exc:
+            raise CardScriptError('Invalid appended card script button name') from exc
+        if row.name.strip() != row.name:
+            raise CardScriptError('Invalid appended card script button name')
+    return added
+
+
 def run_mvu_update(scripts: list[CardScript], values: dict[str, JsonValue], update,
-                   appended: dict[str, list[ScriptButton]] | None = None) -> tuple[dict[str, JsonValue], dict[str, list[str]]]:
-    bundle = [{'id': s.id, 'code': s.content, 'buttons': _button_rows(effective_buttons(s, (appended or {}).get(s.id, []))),
-               'module': s.module} for s in scripts]
+                   appended: dict[str, list[ScriptButton]]) -> tuple[dict[str, JsonValue], dict[str, list[str]], dict[str, list[ScriptButton]]]:
+    current = {s.id: effective_buttons(s, appended.get(s.id, [])) for s in scripts}
+    bundle = [{'id': s.id, 'code': s.content, 'buttons': _button_rows(current[s.id]), 'module': s.module} for s in scripts]
     result = _worker_result({'scripts': bundle, 'values': values, 'update': update}, mvu=True)
     if not isinstance(result.get('values'), dict):
         raise CardScriptError('Invalid response from MVU worker')
     inactive = result.get('inactive')
     if not isinstance(inactive, dict) or set(inactive) != {s.id for s in scripts}:
         raise CardScriptError('Invalid event diagnostics from MVU worker')
-    return validate_updated_values(result['values']), {k: _inactive(names) for k, names in inactive.items()}
+    buttons = result.get('buttons')
+    if not isinstance(buttons, dict) or not set(buttons).issubset(current):
+        raise CardScriptError('Invalid published buttons from MVU worker')
+    added = {key: _appended_rows(current[key], rows) for key, rows in buttons.items()}
+    return validate_updated_values(result['values']), {k: _inactive(names) for k, names in inactive.items()}, added
 
 
 async def run_card_script(script: CardScript, values: dict[str, JsonValue], event: str, args: JsonValue,
@@ -92,19 +113,7 @@ async def run_card_script(script: CardScript, values: dict[str, JsonValue], even
         if type(result.get("handled")) is not bool or type(result.get('listensMvu')) is not bool or "values" not in result:
             raise CardScriptError("Invalid response from card script worker")
         inactive = _inactive(result.get('inactive'))
-        added = []
-        if 'buttons' in result:
-            proposals = result['buttons']
-            if not isinstance(proposals, list) or len(proposals) > 8:
-                raise CardScriptError('Invalid button list from card script worker')
-            next_buttons = [ScriptButton.model_validate(row) for row in proposals]
-            if next_buttons[:len(buttons)] != buttons or len({row.name for row in next_buttons}) != len(next_buttons):
-                raise CardScriptError('Card scripts may only append new button names')
-            added = next_buttons[len(buttons):]
-            for row in added:
-                row.name.encode('utf-8')
-                if row.name.strip() != row.name:
-                    raise CardScriptError('Invalid appended card script button name')
+        added = _appended_rows(buttons, result['buttons']) if 'buttons' in result else []
         return (result['handled'], validated_script_values(values, result['values']), result['listensMvu'], inactive, added)
     except (RecursionError, UnicodeError) as exc:
         raise CardScriptError("Card script returned invalid variable data") from exc

@@ -36,11 +36,13 @@ def execute_update(payload: dict) -> dict:
         if perf_counter() >= deadline:
             raise ValueError('MVU listener transaction exceeded its time limit')
     inactive = {}
+    button_results = {}
     for script in payload['scripts']:
         try:
             check_time()
             context = load_context({**script, 'values': before, 'event': 'mvu', 'args': None}, deadline)
             inactive[script['id']] = json.loads(context.eval('__kt_card_worker.inactiveEvents()'))
+            button_results[script['id']] = context.eval('__kt_card_worker.publishedButtons')
             has = context.eval('__kt_card_worker.hasMvu')
             call = context.eval('__kt_card_worker.mvu')
             for name, handlers in listeners.items():
@@ -108,4 +110,9 @@ def execute_update(payload: dict) -> dict:
             changes = [changes[i] for i in keep]
         state = apply_changes(state, changes, observe=observer)
     state = emit(_ENDED, state, {'before': before, 'display': state})
-    return {'status': 'ok', 'values': state, 'inactive': inactive}
+    published = {}
+    for script_id, read in button_results.items():
+        check_time()
+        if rows := read():
+            published[script_id] = json.loads(rows)
+    return {'status': 'ok', 'values': state, 'inactive': inactive, 'buttons': published}

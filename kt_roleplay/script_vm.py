@@ -45,7 +45,6 @@ _BRIDGE = r"""
     }
     if (next.length > 8) throw new Error('Only eight buttons per card script can be published');
     if (next.length === buttonRows.length) return;
-    if (event === 'mvu') throw new Error('Cannot publish buttons during an MVU settlement');
     buttonRows.splice(0, buttonRows.length, ...next);
     published = true;
   };
@@ -115,6 +114,7 @@ _BRIDGE = r"""
     },
     hasMvu: name => handlers.some(([key]) => key === name),
     inactiveEvents: () => stringify([...inactive]),
+    publishedButtons: () => published ? stringify(buttonRows) : undefined,
     mvu: async (name, rawState, rawDetail) => {
       firing = true;
       result = undefined;
