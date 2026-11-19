@@ -152,6 +152,8 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 要检查已保存模块的下一级依赖，调用 `preview_card_opening_module_dependencies`，传入 `id` 和这个父模块的准确 `url`。回执中的 `resolvedUrl` 只有在引用是可确认的静态 HTTPS 地址、或能相对父模块明确解析的 `/`、`./`、`../` 路径时才有值；动态、裸模块名和有歧义的路径只作诊断，`resolvedUrl` 为 `null`，不联网。若要保存其中一项，再用 `confirm_card_opening_module` 明确传入同卡 `id`、父模块的 `parentUrl` 和该项准确的 `url`。每次只确认一项，预览、确认父模块及开局都不会自动请求下一层。
 
+`preview_card_opening_module_plan` 只接收卡片 `id`，返回 `{url, status, saved, pending}`。其中 `saved` 列出本卡已保存模块的地址和字节数，`pending` 列出当前可逐项确认的 `{url, parentUrl}`；入口直接依赖的 `parentUrl` 为 `null`（确认时省略该字段）。只有父模块已保存，才列出它声明的待确认子模块。`status` 区分入口未确认、自包含、缺模块、静态图已完整、额外资源不支持、入口或声明不支持、达到模块限额。预览不请求、不离线链接、不运行代码；`static_graph_complete` 不等于网页一定可打开或作者玩法已适配。
+
 仅新开局选到含该标记的开场、且没有适用的 CHARX 或卡内页面时，才从本地缓存快照自包含的外链入口。页面和开场照旧只读，随本局存档；后来缓存或删除库卡不改旧局。未确认、需要外部资源、或入口形式暂不支持时，酒馆正常开局，owner 分别报告 `entry_unconfirmed`、`entry_needs_resources` 或 `entry_unsupported`，不提供面板。这里检查的是页面声明的资源和脚本依赖，不替代浏览器隔离，也不保证任意旧网页可运行。外链入口和模块的确认目前使用目录 owner 接口，卡库没有确认控件。
 
 另可在新局通过开局接口显式传 `enableOpeningModules: true`，允许使用本卡已经确认且完整的静态模块图。这与 `enableCardScripts` 独立，默认关闭。该方式只支持一个可识别的内联模块脚本，不支持图片、样式表或动态模块等额外资源；已安装 Node.js 和包内 Rolldown 时，KT 离线链接模块，将结果作为本局只读网页快照，玩家仍要在 Dock 中显式打开才运行。依赖未齐、入口不支持或无法链接时保留正常文本开场，不回填旧局。原开场 HTML 和模块缓存仍按原字节保存。

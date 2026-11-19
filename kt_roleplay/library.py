@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from .cards import ParsedCard, card_format, parse_card, read_card_scripts
 
+_DATABASE = 'cards.sqlite3'
+
 
 class CardSummary(TypedDict):
     id: str
@@ -24,7 +26,7 @@ class CardNotFound(KeyError):
 @contextmanager
 def _open(directory: Path) -> Iterator[sqlite3.Connection]:
     directory.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(directory / "cards.sqlite3")) as database, database:
+    with closing(sqlite3.connect(directory / _DATABASE)) as database, database:
         database.execute("PRAGMA foreign_keys = ON")
         database.execute("CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, name TEXT NOT NULL, version INTEGER NOT NULL, original BLOB NOT NULL, portrait BLOB, card TEXT NOT NULL)")
         database.execute("CREATE TABLE IF NOT EXISTS worldbooks (id TEXT PRIMARY KEY, name TEXT NOT NULL, original BLOB NOT NULL, entry_count INTEGER NOT NULL, supported_count INTEGER NOT NULL)")
@@ -33,6 +35,21 @@ def _open(directory: Path) -> Iterator[sqlite3.Connection]:
         database.execute("CREATE TABLE IF NOT EXISTS card_modules (card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE, url TEXT NOT NULL, source BLOB NOT NULL, PRIMARY KEY (card_id, url))")
         database.execute("CREATE TABLE IF NOT EXISTS card_opening_pages (card_id TEXT PRIMARY KEY REFERENCES cards(id) ON DELETE CASCADE, url TEXT NOT NULL, source BLOB NOT NULL)")
         database.execute("CREATE TABLE IF NOT EXISTS card_opening_modules (card_id TEXT NOT NULL REFERENCES card_opening_pages(card_id) ON DELETE CASCADE, url TEXT NOT NULL, source BLOB NOT NULL, PRIMARY KEY (card_id, url))")
+        yield database
+
+
+@contextmanager
+def _open_readonly(directory: Path) -> Iterator[sqlite3.Connection | None]:
+    """Read an existing library without creating its directory, database, or schema."""
+    path = (directory / _DATABASE).resolve()
+    try:
+        database = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
+    except sqlite3.OperationalError as exc:
+        if exc.sqlite_errorcode != sqlite3.SQLITE_CANTOPEN or path.exists():
+            raise
+        yield None
+        return
+    with closing(database), database:
         yield database
 
 

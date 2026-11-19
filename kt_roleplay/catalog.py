@@ -15,8 +15,8 @@ from .library import (CardNotFound, card_scripts_default, import_card, list_card
                       original_card, remove_card, set_card_scripts_default)
 from .library_view import card_detail, media_view, portrait_view
 from .module_library import MAX_CARD_MODULES, snapshot_modules
-from .opening_page_library import (opening_module_dependencies, opening_page_dependencies,
-                                   snapshot_opening_module, snapshot_opening_page)
+from .opening_page_library import (opening_module_dependencies, opening_module_plan,
+                                   opening_page_dependencies, snapshot_opening_module, snapshot_opening_page)
 from .portrait_library import PortraitCopy, portrait_draft, save_portraits_copy
 from .runtime import library_dir
 from .script_dependencies import script_dependencies
@@ -130,6 +130,10 @@ class CardCatalog(UIOwnerMixin):
                 if set(args) != {"id"}:
                     raise OwnerArgumentError("Choose the card with the saved opening page")
                 return await asyncio.to_thread(opening_page_dependencies, directory, _id(args))
+            if action == "preview_card_opening_module_plan":
+                if set(args) != {"id"}:
+                    raise OwnerArgumentError("Choose a card to inspect its saved opening-page modules")
+                return await asyncio.to_thread(opening_module_plan, directory, _id(args))
             if action == "preview_card_opening_module_dependencies":
                 url = args.get("url")
                 if set(args) != {"id", "url"} or not isinstance(url, str) or not 0 < len(url) <= 2048:

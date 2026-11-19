@@ -7,9 +7,10 @@ from typing import Literal, TypedDict
 from urllib.parse import urljoin, urlsplit
 
 from .card_web import WebPanel, _MAX_HTML
+from .cards import ParsedCard
 from .errors import CardError
 from .legacy_web import LegacyRemoteOpening
-from .library import CardNotFound, _open, get_card
+from .library import CardNotFound, _open, _open_readonly, get_card
 from .module_download import _module_target, download_module, download_opening_html
 from .module_linker import ModuleLinkError, _bundle
 from .script_dependencies import ModuleReference, scan_modules
@@ -122,9 +123,8 @@ class _OpeningModuleDeclarations(HTMLParser):
         if tag in {'base', 'frame', 'frameset', 'plaintext'}:
             self.valid = False
             return
-        parents = tuple(self.tags)
         if tag in {'html', 'head', 'body'}:
-            if (tag in self.sections or parents not in ((), ('html',)) or (tag == 'html' and self.sections)
+            if (tag in self.sections or (self.tags and self.tags != ['html']) or (tag == 'html' and self.sections)
                     or (tag == 'head' and 'body' in self.sections)):
                 self.valid = False
                 return
@@ -135,7 +135,7 @@ class _OpeningModuleDeclarations(HTMLParser):
             if any(kind.strip() == 'importmap' for kind in types):
                 self.valid = False
                 return
-            if parents in self._script_parents and types == ['module'] and not any(
+            if len(self.tags) <= 2 and tuple(self.tags) in self._script_parents and types == ['module'] and not any(
                 key in {'src', 'nomodule'} for key, _ in attrs
             ):
                 self.script = []
@@ -264,6 +264,19 @@ class OpeningModuleDependencies(TypedDict):
     unsupported: bool
 
 
+class PendingOpeningModule(TypedDict):
+    url: str
+    parentUrl: str | None
+
+
+class OpeningModulePlan(TypedDict):
+    url: str
+    status: Literal['entry_unconfirmed', 'self_contained', 'modules_missing', 'static_graph_complete',
+                    'other_resources', 'unsupported', 'module_limit']
+    saved: list[OpeningPageSnapshot]
+    pending: list[PendingOpeningModule]
+
+
 def _has_dot_segment(path: str) -> bool:
     return any(part.lower().replace('%2e', '.') in ('.', '..') for part in path.split('/'))
 
@@ -315,7 +328,8 @@ def _opening_module_url(parent: str, ref: ModuleReference) -> str | None:
         return None
 
 
-def _opening_module_graph(entry: str, saved: dict[str, bytes]) -> tuple[list[str], list[dict[str, int]]]:
+def _opening_module_graph(entry: str, saved: dict[str, bytes], *,
+                          pending: dict[str, str | None] | None = None) -> tuple[list[str], list[dict[str, int]]]:
     urls: list[str | None] = [None]  # Entry declarations require absolute HTTPS URLs.
     sources = [entry]
     indexes: dict[str, int] = {}
@@ -339,7 +353,12 @@ def _opening_module_graph(entry: str, saved: dict[str, bytes]) -> tuple[list[str
             if url not in indexes:
                 raw = saved.get(url)
                 if raw is None:
-                    raise ModuleLinkError('dependency_missing')
+                    if pending is None:
+                        raise ModuleLinkError('dependency_missing')
+                    pending.setdefault(url, parent)
+                    if len(pending) + len(saved) > _MAX_OPENING_MODULES:
+                        raise ModuleLinkError('dependency_limit')
+                    continue
                 indexes[url] = len(sources)
                 urls.append(url)
                 sources.append(raw.decode('utf-8-sig'))
@@ -348,39 +367,110 @@ def _opening_module_graph(entry: str, saved: dict[str, bytes]) -> tuple[list[str
     return sources, edges
 
 
-def _cached_linked_opening_panel(directory: Path, card_id: str, title: str, html: str) -> tuple[WebPanel | None, OpeningPageIssue | None]:
-    with _open(directory) as db:
-        saved = dict(db.execute('SELECT url,source FROM card_opening_modules WHERE card_id=?', (card_id,)))
-    if not saved:
-        return None, 'entry_needs_resources'
+def _opening_module_body(html: str) -> tuple[int, int, str] | None:
     availability = _EntryResources(preview=True)
+    try:
+        availability.feed(html)
+        availability.close()
+    except (AssertionError, ValueError) as exc:
+        raise ModuleLinkError('dependency_unsupported') from exc
+    if availability.other_resources:
+        raise ModuleLinkError('other_resources')
+    if availability.unsupported or availability.truncated or availability.inline:
+        raise ModuleLinkError('dependency_unsupported')
+    if not availability.needs_resources:
+        return None
     declarations = _OpeningModuleDeclarations(capture_body=True)
     try:
-        for checker in (availability, declarations):
-            checker.feed(html)
-            checker.close()
-    except (AssertionError, ValueError):
-        return None, 'entry_unsupported'
-    if availability.other_resources:
-        return None, 'entry_needs_resources'
-    if (availability.unsupported or availability.truncated or availability.inline or not declarations.valid
-            or declarations.tags or declarations.script_count != 1 or declarations.body is None):
-        return None, 'entry_unsupported'
+        declarations.feed(html)
+        declarations.close()
+    except (AssertionError, ValueError) as exc:
+        raise ModuleLinkError('dependency_unsupported') from exc
+    if not declarations.valid or declarations.tags or declarations.script_count != 1 or declarations.body is None:
+        raise ModuleLinkError('dependency_unsupported')
     (start_line, start_column), tag_length, (end_line, end_column), code = declarations.body
     # HTMLParser tracks LF offsets, not Unicode line/paragraph separators.
     lines = [0, *(match.end() for match in re.finditer('\n', html))]
     start = lines[start_line - 1] + start_column + tag_length
     end = lines[end_line - 1] + end_column
     if html[start:end] != code:
-        return None, 'entry_unsupported'
-    html_room = _MAX_HTML - len((html[:start] + html[end:]).encode('utf-8'))
+        raise ModuleLinkError('dependency_unsupported')
+    return start, end, code
+
+
+def _opening_module_bytes(db: Connection, card_id: str) -> dict[str, bytes]:
+    return dict(db.execute('SELECT url,source FROM card_opening_modules WHERE card_id=? ORDER BY url', (card_id,)))
+
+
+def _cached_linked_opening_panel(directory: Path, card_id: str, title: str, html: str) -> tuple[WebPanel | None, OpeningPageIssue | None]:
+    with _open(directory) as db:
+        saved = _opening_module_bytes(db, card_id)
+    if not saved:
+        return None, 'entry_needs_resources'
     try:
+        body = _opening_module_body(html)
+        if body is None:
+            return None, 'entry_unsupported'
+        start, end, code = body
+        html_room = _MAX_HTML - len((html[:start] + html[end:]).encode('utf-8'))
         linked = _bundle(*_opening_module_graph(code, saved), max_output_bytes=html_room)
     except ModuleLinkError as exc:
-        return None, 'entry_needs_resources' if str(exc) == 'dependency_missing' else 'entry_unsupported'
+        needs = str(exc) in ('dependency_missing', 'other_resources')
+        return None, 'entry_needs_resources' if needs else 'entry_unsupported'
     if _UNSAFE_SCRIPT_DATA.search(linked):
         return None, 'entry_unsupported'
     return WebPanel(title=title, html=html[:start] + linked + html[end:]), None
+
+
+def opening_module_plan(directory: Path, card_id: str) -> OpeningModulePlan:
+    """Show only locally known edges; discovering or confirming a parent never fetches a child."""
+    with _open_readonly(directory) as db:
+        if db is None:
+            raise CardNotFound(card_id)
+        # Read the declaration, HTML and modules from one snapshot, including
+        # libraries created before the optional opening cache tables existed.
+        db.execute('BEGIN')
+        tables = {name for name, in db.execute(
+            "SELECT name FROM sqlite_schema WHERE type='table' AND name IN "
+            "('cards', 'card_opening_pages', 'card_opening_modules')"
+        )}
+        card = db.execute('SELECT card FROM cards WHERE id=?', (card_id,)).fetchone() if 'cards' in tables else None
+        if card is None:
+            raise CardNotFound(card_id)
+        declared = ParsedCard.model_validate_json(card[0]).legacy_remote_opening
+        if declared is None:
+            raise CardError('This card has no declared external opening page')
+        entry = db.execute('SELECT source FROM card_opening_pages WHERE card_id=? AND url=?',
+                           (card_id, declared.url)).fetchone() if 'card_opening_pages' in tables else None
+        saved = _opening_module_bytes(db, card_id) if entry and 'card_opening_modules' in tables else {}
+    plan = OpeningModulePlan(url=declared.url, status='entry_unconfirmed', pending=[], saved=[
+        OpeningPageSnapshot(url=url, size=len(data)) for url, data in saved.items()
+    ])
+    if not entry:
+        return plan
+    pending: dict[str, str | None] = {}
+    try:
+        body = _opening_module_body(entry[0].decode('utf-8-sig'))
+        if body is None:
+            plan['status'] = 'self_contained'
+            return plan
+        _opening_module_graph(body[2], saved, pending=pending)
+        if pending and sum(map(len, saved.values())) + len(pending) > _MAX_OPENING_MODULE_BYTES:
+            raise ModuleLinkError('dependency_limit')
+    except (UnicodeError, ModuleLinkError) as exc:
+        if str(exc) == 'other_resources':
+            plan['status'] = 'other_resources'
+        elif str(exc) == 'dependency_limit':
+            plan['status'] = 'module_limit'
+        else:
+            plan['status'] = 'unsupported'
+        return plan
+    if pending:
+        plan['status'] = 'modules_missing'
+        plan['pending'] = [PendingOpeningModule(url=url, parentUrl=parent) for url, parent in pending.items()]
+    else:
+        plan['status'] = 'static_graph_complete'
+    return plan
 
 
 def opening_module_dependencies(directory: Path, card_id: str, url: str) -> OpeningModuleDependencies:
