@@ -31,9 +31,10 @@ from .gameplay_pack import GameplayPack, GameplayPackUnavailable, pack_settings,
 from .gameplay import Action, Actions, PlayActions, apply_actions, apply_field_changes
 from .header_summary import MAX_HEADER_PINS, header_summary
 from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, LegacyWebRequest, configured_plugins, request_plugin
-from .legacy_web import (LEGACY_MESSAGE_EVENT_LIMIT, LegacyMessageAnchor, LegacyOpeningState, LegacyReplyCapture,
-                         LegacyReplyState, OpeningCounterGrant, OpeningCounterWrite, completed_legacy_message_anchor,
-                         has_mvu_status_adapter, legacy_web_message, mvu_reply_has_body, selected_message_values)
+from .legacy_web import (LEGACY_MESSAGE_EVENT_LIMIT, LEGACY_MESSAGE_SLOT, LegacyMessageAnchor, LegacyMessageLocator,
+                         LegacyOpeningState, LegacyReplyCapture, LegacyReplyState, OpeningCounterGrant, OpeningCounterWrite,
+                         completed_legacy_message_anchor, has_legacy_message_slot, has_mvu_status_adapter, legacy_web_message,
+                         mvu_reply_has_body, selected_message_values)
 from .novel import Outcome, SceneError, Story
 from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields
 from .state_tool import SetCardState
@@ -84,6 +85,7 @@ class Play(Arguments):
     enableOpeningMvuRead: bool = False
     openingMvuCounter: OpeningCounterGrant | None = None
     openingMvuSchema: OpeningSchemaGrant | None = None
+    legacyMessageSlot: Literal['mes-text-v1'] | None = None
 
     @model_validator(mode='after')
     def _opening_runtime_consent(self) -> 'Play':
@@ -96,6 +98,8 @@ class Play(Arguments):
         if self.openingMvuSchema and (not self.openingMvuCounter or self.enableCardScripts
                                       or 'enableCardScripts' not in self.model_fields_set):
             raise ValueError('The opening schema needs a counter and explicit enableCardScripts: false')
+        if self.legacyMessageSlot is not None and not self.enableOpeningModules:
+            raise ValueError('The message slot requires explicit approval to run the linked opening page')
         return self
 
 
@@ -116,6 +120,11 @@ class Notes(Arguments):
 
 class MvuSelection(Arguments):
     ids: list[str] = Field(max_length=128)
+
+
+class LegacyMessageSlotRequest(Arguments):
+    panelScope: str = Field(min_length=1, max_length=256)
+    locator: LegacyMessageLocator
 
 
 class PanelSelection(Arguments):
@@ -340,10 +349,11 @@ class RoleplayPlugin(BasePlugin):
         if not record or not record.get('web_panel_ready', True) or not (opening := record.get('legacy_opening_web')):
             return
         marked = opening['marker'] in text
-        if not marked and not opening.get('mvu_status_adapter'):
+        slotted = opening.get('message_slot_enabled') is True and has_legacy_message_slot(text)
+        if not marked and not slotted and not opening.get('mvu_status_adapter'):
             return
         play = TavernSession.model_validate(record)
-        if not marked and (not mvu_reply_has_body(text) or not play.mvu or not play.mvu.values
+        if not marked and not slotted and (not mvu_reply_has_body(text) or not play.mvu or not play.mvu.values
                            or not approved(play.scripts, play.script_state)):
             return
         branch = getattr(agent, '_branch_id', None)
@@ -375,6 +385,27 @@ class RoleplayPlugin(BasePlugin):
             return None
         events = await run(recent, binding.agent_name, limit=LEGACY_MESSAGE_EVENT_LIMIT)
         return completed_legacy_message_anchor(reply, events) if still_current() else None
+
+    async def _legacy_message_slot(self, request: LegacyMessageSlotRequest) -> dict:
+        if request.panelScope != self._web_panel_scope:
+            raise OwnerArgumentError('The message slot session changed')
+        record = self._record()
+        play = TavernSession.model_validate(record) if record is not None else None
+        if not play or not play.web_panel or not play.web_panel_ready or not play.legacy_opening_web:
+            return {'slot': None}
+        legacy, reply = play.legacy_opening_web, play.legacy_reply_web
+        if not legacy.message_slot_enabled or reply is None or not has_legacy_message_slot(reply.text):
+            return {'slot': None}
+        locator = request.locator
+        if (reply.turn, reply.branch) != (locator.turn, locator.branchId):
+            return {'slot': None}
+        if await self._web_message_anchor(play, locator.turn) != locator.model_dump() or self._record() != record:
+            return {'slot': None}
+        # Only the compatibility message_id (the tavern turn) goes into the
+        # author frame. The scope, branch and two physical event IDs stay with the owner.
+        selected = play.mvu_public if legacy.mvu_read_enabled else []
+        return {'slot': LEGACY_MESSAGE_SLOT, **play.web_panel.model_dump(),
+                'message': legacy_web_message(reply.turn, reply.text, reply.values, selected)}
 
     async def on_unload(self) -> None:
         if self._legacy_reply_capture is not None:
@@ -671,6 +702,10 @@ class RoleplayPlugin(BasePlugin):
                 view['webPanel']['source'] = 'legacyOpening'
                 if play.legacy_reply_web is not None:
                     view['webPanel']['latestMessageId'] = play.legacy_reply_web.turn
+                    if (play.legacy_opening_web.message_slot_enabled and self._web_panel_scope
+                            and has_legacy_message_slot(play.legacy_reply_web.text)):
+                        view['webPanel']['messageSlot'] = {'mode': LEGACY_MESSAGE_SLOT, 'panelScope': self._web_panel_scope,
+                                                          'turn': play.legacy_reply_web.turn, 'branchId': play.legacy_reply_web.branch}
         elif play.web_panel_issue is not None:
             view['webPanelIssue'] = play.web_panel_issue
         if play.scripts:
@@ -730,6 +765,8 @@ class RoleplayPlugin(BasePlugin):
                 return self.ui_state()
             if action == "cards" and self.mode in ("persona", "tavern"):
                 return cards_view(library_dir())
+            if action == 'card_web_message_slot' and self.mode == 'tavern':
+                return await self._legacy_message_slot(LegacyMessageSlotRequest.model_validate(args))
             if action in ('card_web_panel', 'card_web_state', 'card_web_gameplay', 'card_web_plugin_request',
                           'card_web_message_anchor', 'card_web_mvu_counter') and self.mode == 'tavern':
                 record = self._record()
@@ -1003,21 +1040,25 @@ class RoleplayPlugin(BasePlugin):
                 web_panel, legacy_state, web_panel_issue = card.web_panel, None, None
                 if web_panel is None:
                     rule = next((row for row in card.legacy_web_rules if row.marker in opening), None)
-                    marker, mvu_read_enabled = None, False
+                    marker, mvu_read_enabled, message_slot_enabled = None, False, False
                     if rule is not None:
                         web_panel, marker = rule.panel, rule.marker
                     elif (remote := card.legacy_remote_opening) is not None and remote.marker in opening:
                         web_panel, web_panel_issue = await to_thread(cached_opening_panel, library_dir(), choice.cardId, remote,
                                                                      allow_modules=choice.enableOpeningModules,
                                                                      runtime=choice.openingPageRuntime,
-                                                                     require_linked=choice.enableOpeningMvuRead)
+                                                                     require_linked=choice.enableOpeningMvuRead or choice.legacyMessageSlot is not None)
                         check_opening_target()
                         marker = remote.marker
                         mvu_read_enabled = choice.enableOpeningMvuRead
+                        message_slot_enabled = choice.legacyMessageSlot == LEGACY_MESSAGE_SLOT
                     if web_panel is not None and marker is not None:
                         legacy_state = LegacyOpeningState(marker=marker, values={},
                                                           mvu_status_adapter=has_mvu_status_adapter(marker, card.scripts),
-                                                          mvu_read_enabled=mvu_read_enabled)
+                                                          mvu_read_enabled=mvu_read_enabled,
+                                                          message_slot_enabled=message_slot_enabled)
+                if choice.legacyMessageSlot and not (legacy_state and legacy_state.message_slot_enabled):
+                    raise OwnerArgumentError('The message slot needs the selected approved linked remote opening page')
                 if counter := choice.openingMvuCounter:
                     if not legacy_state or not legacy_state.mvu_read_enabled or not mvu or counter.current(mvu.values) is None:
                         raise OwnerArgumentError('Choose an existing initialized integer in the linked opening for this counter')

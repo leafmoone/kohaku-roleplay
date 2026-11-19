@@ -180,6 +180,29 @@ class LegacyMessageAnchor(TypedDict):
 
 
 LEGACY_MESSAGE_EVENT_LIMIT = 128
+LEGACY_MESSAGE_SLOT = 'mes-text-v1'
+
+
+class LegacyMessageLocator(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    turn: int = Field(ge=1, le=2**53 - 1)
+    branchId: int = Field(ge=1, le=2**53 - 1)
+    eventId: int = Field(ge=1, le=2**53 - 1)
+    roundStartEventId: int = Field(ge=1, le=2**53 - 1)
+
+    @model_validator(mode='after')
+    def _physical_order(self) -> 'LegacyMessageLocator':
+        if self.roundStartEventId >= self.eventId:
+            raise ValueError('The message must follow its physical round start')
+        return self
+
+
+def has_legacy_message_slot(text: str) -> bool:
+    # The public adapter targets an explicit author options block, never generic prose.
+    prefix, start, tail = text.partition('<roleplay_options>')
+    content, end, suffix = tail.partition('</roleplay_options>')
+    return bool(start and end and content.strip() and '<roleplay_options>' not in content + suffix
+                and '</roleplay_options>' not in prefix + suffix)
 
 
 def completed_legacy_message_anchor(reply: LegacyReplyState, events: list[dict]) -> LegacyMessageAnchor | None:
@@ -247,6 +270,7 @@ class LegacyOpeningState(BaseModel):
     mvu_read_enabled: bool = False
     counter: OpeningCounterGrant | None = None
     counter_revision: int = 0
+    message_slot_enabled: bool = False
 
 
 def selected_message_values(values: dict[str, JsonValue], selected: list[str]) -> dict[str, JsonValue]:
