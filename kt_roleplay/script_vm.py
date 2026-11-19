@@ -6,6 +6,10 @@ from time import perf_counter
 
 _MAX_INPUT = 128 * 1024
 _MAX_RESULT = 64 * 1024
+# Canonical MVU, one derived string and the response envelope, all UTF-8.
+OPENING_SCHEMA_RESULT_BYTES = _MAX_RESULT + 4 * 1024
+# QuickJS may spell each number less compactly than the Python wire encoder.
+_MAX_SCHEMA_INTERMEDIATE_BYTES = 128 * 1024
 
 _BRIDGE = r"""
 (raw) => {
@@ -155,24 +159,33 @@ def drain(context, deadline):
     raise VmFailure('script_limit')
 
 
-def load_context(payload, deadline):
+def _sandbox_context():
     import quickjs
 
     context = quickjs.Context()
     context.set_memory_limit(8 * 1024 * 1024)
     context.set_max_stack_size(256 * 1024)
     context.set_time_limit(0.05)
+    return context
+
+
+def _evaluate_module(context, code, deadline):
+    context.eval("globalThis.__ktModuleStatus = 'pending';")
+    context.set('__ktModuleCompletion', context.module(code))
+    context.eval("__ktModuleCompletion.then(() => { __ktModuleStatus = 'ready'; }, "
+                 "error => { __ktModuleStatus = error instanceof ReferenceError ? 'unsupported_api' : 'script_error'; });")
+    drain(context, deadline)
+    stage = context.eval('__ktModuleStatus')
+    if stage != 'ready':
+        raise VmFailure('script_limit' if stage == 'pending' else stage)
+
+
+def load_context(payload, deadline):
+    context = _sandbox_context()
     data = json.dumps({k: payload[k] for k in ('values', 'event', 'args', 'buttons')}, allow_nan=False)
     context.eval('const __kt_card_worker = (' + _BRIDGE + ')(' + json.dumps(data) + ');')
     if payload.get('module'):
-        context.eval("globalThis.__ktModuleStatus = 'pending';")
-        context.set('__ktModuleCompletion', context.module(payload['code']))
-        context.eval("__ktModuleCompletion.then(() => { __ktModuleStatus = 'ready'; }, "
-                     "error => { __ktModuleStatus = error instanceof ReferenceError ? 'unsupported_api' : 'script_error'; });")
-        drain(context, deadline)
-        stage = context.eval('__ktModuleStatus')
-        if stage != 'ready':
-            raise VmFailure('script_limit' if stage == 'pending' else stage)
+        _evaluate_module(context, payload['code'], deadline)
     else:
         context.eval(payload['code'])
         drain(context, deadline)
@@ -204,10 +217,23 @@ def execute(payload: dict) -> dict:
         return {'status': 'script_limit' if 'interrupted' in error.lower() else 'script_error'}
 
 
+def _execute_opening_schema(payload: dict) -> dict:
+    context = _sandbox_context()
+    deadline = perf_counter() + 0.75
+    _evaluate_module(context, payload['code'], deadline)
+    result = context.get('__kt_parse_schema')(json.dumps(payload['values'], allow_nan=False))
+    if not isinstance(result, str):
+        return {'status': 'script_error'}
+    if len(result.encode('utf-8')) > _MAX_SCHEMA_INTERMEDIATE_BYTES:
+        return {'status': 'script_limit'}
+    return {'status': 'ok', 'values': json.loads(result)}
+
+
 def main() -> None:
     try:
         mvu = sys.argv[1:] == ['mvu']
-        limit = 2 * 1024 * 1024 if mvu else _MAX_INPUT
+        schema = sys.argv[1:] == ['schema']
+        limit = (2 * 1024 * 1024 if mvu else 768 * 1024 if schema else _MAX_INPUT)
         raw = sys.stdin.buffer.read(limit + 1)
         if len(raw) > limit:
             result = {'status': 'script_limit'}
@@ -217,6 +243,8 @@ def main() -> None:
             sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
             from kt_roleplay.script_mvu import execute_update
             result = execute_update(json.loads(raw))
+        elif schema:
+            result = _execute_opening_schema(json.loads(raw))
         else:
             result = execute(json.loads(raw))
     except ImportError as exc:
@@ -225,7 +253,14 @@ def main() -> None:
         result = {'status': 'invalid_update', 'reason': str(exc)} if mvu else {'status': 'script_error'}
     except (KeyError, TypeError, RecursionError):
         result = {"status": "script_error"}
-    sys.stdout.buffer.write(json.dumps(result, ensure_ascii=True, allow_nan=False).encode("ascii"))
+    if schema:
+        try:
+            wire = json.dumps(result, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8')
+        except (ValueError, RecursionError):
+            wire = b'{"status":"script_error"}'
+        sys.stdout.buffer.write(wire if len(wire) <= OPENING_SCHEMA_RESULT_BYTES else b'{"status":"script_limit"}')
+    else:
+        sys.stdout.buffer.write(json.dumps(result, ensure_ascii=True, allow_nan=False).encode("ascii"))
 
 
 if __name__ == "__main__":

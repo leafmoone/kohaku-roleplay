@@ -33,21 +33,23 @@ from .header_summary import MAX_HEADER_PINS, header_summary
 from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, LegacyWebRequest, configured_plugins, request_plugin
 from .legacy_web import (LEGACY_MESSAGE_EVENT_LIMIT, LegacyMessageAnchor, LegacyOpeningState, LegacyReplyCapture,
                          LegacyReplyState, OpeningCounterGrant, OpeningCounterWrite, completed_legacy_message_anchor,
-                         has_mvu_status_adapter, legacy_web_message,
-                         mvu_reply_has_body)
+                         has_mvu_status_adapter, legacy_web_message, mvu_reply_has_body, selected_message_values)
 from .novel import Outcome, SceneError, Story
 from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields
 from .state_tool import SetCardState
 from .portraits import PortraitRule, chosen_key, rules_for
 from .library_view import card_detail, cards_view, media_summary, media_view, portrait_view
 from .library import CardNotFound, card_scripts_default, get_card
-from .module_linker import RETRYABLE_MODULE_ISSUES, link_card_scripts
+from .module_linker import RETRYABLE_MODULE_ISSUES, ModuleLinkError, link_card_scripts
 from .lore import LoreBook, active_entries
 from .lore_regex import MatchBudget
 from .lore_timing import LoreTiming
 from .mvu import MvuChange, MvuInit, apply_changes, inspect_initializers, is_initializer, public_options, public_values
 from .mvu_legacy import apply_literal_update, split_opening
+from .mvu_patch import json_equal
 from .mvu_tool import ApplyMvuUpdate, UpdateMvu
+from .opening_mvu_schema import (OpeningSchemaGrant, OpeningSchemaSnapshot, derive_opening_schema,
+                                 link_opening_schema, with_opening_schema_output)
 from .opening_page_library import CALLBACK_RUNTIME, OpeningPageIssue, OpeningPageRuntime, cached_opening_panel
 from .panels import ChoicePanel, InventoryPanel, NativePanel, QuestPanel, public_panels
 from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
@@ -81,6 +83,7 @@ class Play(Arguments):
     openingPageRuntime: OpeningPageRuntime | None = None
     enableOpeningMvuRead: bool = False
     openingMvuCounter: OpeningCounterGrant | None = None
+    openingMvuSchema: OpeningSchemaGrant | None = None
 
     @model_validator(mode='after')
     def _opening_runtime_consent(self) -> 'Play':
@@ -90,6 +93,9 @@ class Play(Arguments):
             raise ValueError('Opening-page MVU reads require the tavern-page-callbacks-v1 runtime')
         if self.openingMvuCounter is not None and not self.enableOpeningMvuRead:
             raise ValueError('An opening counter requires explicit opening-page MVU read permission')
+        if self.openingMvuSchema and (not self.openingMvuCounter or self.enableCardScripts
+                                      or 'enableCardScripts' not in self.model_fields_set):
+            raise ValueError('The opening schema needs a counter and explicit enableCardScripts: false')
         return self
 
 
@@ -149,6 +155,7 @@ class TavernSession(Arguments):
     web_panel_issue: OpeningPageIssue | None = None
     legacy_opening_web: LegacyOpeningState | None = None
     legacy_reply_web: LegacyReplyState | None = None
+    opening_schema: OpeningSchemaSnapshot | None = None
     scripts: list[CardScript] = Field(default_factory=list)
     script_state: SessionScripts = Field(default_factory=lambda: SessionScripts(clock="turn"))
 
@@ -493,6 +500,13 @@ class RoleplayPlugin(BasePlugin):
             if old != new or legacy.counter.current(old) != legacy.counter.current(new):
                 opening = legacy.model_copy(update={'values': new, 'counter_revision': legacy.counter_revision + 1})
                 settled = settled.model_copy(update={'legacy_opening_web': opening})
+                if schema := play.opening_schema:
+                    binding = self.binding
+                    store = binding.session_store if binding else None
+                    settled = await self._derive_opening_schema(settled, schema)
+                    if (not binding or self.binding is not binding or binding.session_store is not store
+                            or self._record() != record or self._script_turn_index() != 0):
+                        raise SceneError('The opening changed while applying the schema')
         self._save(settled.model_dump())
         self.ui_emit('state', self.ui_state())
 
@@ -519,12 +533,34 @@ class RoleplayPlugin(BasePlugin):
         mvu = play.mvu.model_copy(update={"values": values})
         return play.model_copy(update={'mvu': mvu, 'script_state': state})
 
+    async def _derive_opening_schema(self, play: TavernSession, schema: OpeningSchemaSnapshot) -> TavernSession:
+        if play.mvu is None:
+            raise SceneError('An opening schema needs initialized variables')
+        value = await to_thread(derive_opening_schema, schema.code, play.mvu.values, schema.grant)
+        return play.model_copy(update={'opening_schema': schema.model_copy(update={'value': value})})
+
+    @staticmethod
+    def _opening_schema_visible(play: TavernSession, values: dict[str, JsonValue]) -> bool:
+        legacy = play.legacy_opening_web
+        # Both the derived value and the outcome of a write can depend on any input.
+        return bool(legacy and legacy.counter and legacy.counter.public_id() in play.mvu_public
+                    and json_equal(values, selected_message_values(values, play.mvu_public)))
+
+    def _opening_web_message(self, play: TavernSession, values: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        selection = play.mvu_public
+        if play.opening_schema and self._opening_schema_visible(play, values):
+            values = with_opening_schema_output(values, play.opening_schema)
+            selection = [*selection, json.dumps(play.opening_schema.grant.outputPath, ensure_ascii=False)]
+        return legacy_web_message(0, play.greeting, values, selection)
+
     def _opening_counter_value(self, play: TavernSession) -> int | None:
         legacy = play.legacy_opening_web
         agent = self.binding.host_agent if self.binding else None
         if (not agent or agent.is_processing or self._script_turn_index() != 0 or not play.openingSent
                 or not play.web_panel_ready or not play.mvu or not legacy or not legacy.mvu_read_enabled
                 or not legacy.counter or legacy.counter.public_id() not in play.mvu_public):
+            return None
+        if play.opening_schema and not self._opening_schema_visible(play, play.mvu.values):
             return None
         return legacy.counter.current(play.mvu.values)
 
@@ -552,14 +588,16 @@ class RoleplayPlugin(BasePlugin):
                 raise OwnerArgumentError('The opening counter can only change by one step within its granted range')
             change = MvuChange(path=grant.path, op='set', value=requested.value)
             settled = await self._prepare_mvu_update(play, record, [change])
+            if schema := play.opening_schema:
+                settled = await self._derive_opening_schema(settled, schema)
             if (not same_session() or self._record() != record or self._opening_counter_value(play) != now
                     or settled.mvu is None or grant.current(settled.mvu.values) != requested.value):
                 raise OwnerArgumentError('The opening counter could not be settled in the current game')
             after = legacy.model_copy(update={'values': settled.mvu.values, 'counter_revision': legacy.counter_revision + 1})
-            self._save(settled.model_copy(update={'legacy_opening_web': after}).model_dump())
+            settled = settled.model_copy(update={'legacy_opening_web': after})
+            self._save(settled.model_dump())
             self.ui_emit('state', self.ui_state())
-            return {'revision': after.counter_revision,
-                    'data': legacy_web_message(0, play.greeting, after.values, settled.mvu_public)['data']}
+            return {'revision': after.counter_revision, 'data': self._opening_web_message(settled, after.values)['data']}
 
     def story(self) -> Story:
         if not self.novel or self.mode != "novel":
@@ -643,7 +681,7 @@ class RoleplayPlugin(BasePlugin):
                 **s.view(), 'buttons': visible_script_buttons(s, play.script_state.appended_buttons.get(s.id, [])),
             } for s in play.scripts]
             view["cardScripts"] = {"entries": views,
-                                   "canEnable": host_ok and bool(play.mvu and play.mvu.values and any(
+                                   "canEnable": host_ok and play.opening_schema is None and bool(play.mvu and play.mvu.values and any(
                                        s.enabled and (s.issue is None or s.issue in RETRYABLE_MODULE_ISSUES) for s in play.scripts)),
                                    "enabled": bool(runnable),
                                    "issues": issues, 'inactiveEvents': play.script_state.inactive_events}
@@ -703,10 +741,10 @@ class RoleplayPlugin(BasePlugin):
                         raise OwnerArgumentError('The card web panel does not take arguments')
                     panel = {**play.web_panel.model_dump(), 'panelScope': self._web_panel_scope}
                     if legacy := play.legacy_opening_web:
-                        panel['legacyOpening'] = legacy_web_message(0, play.greeting, legacy.values, play.mvu_public)
+                        panel['legacyOpening'] = self._opening_web_message(play, legacy.values)
                         panel['legacyMarker'] = legacy.marker
                         if self._opening_counter_value(play) is not None and play.mvu and legacy.counter:
-                            panel['legacyOpening'] = legacy_web_message(0, play.greeting, play.mvu.values, play.mvu_public)
+                            panel['legacyOpening'] = self._opening_web_message(play, play.mvu.values)
                             panel['legacyMvuCounter'] = {'messageId': 0, **legacy.counter.model_dump(),
                                                          'revision': legacy.counter_revision}
                         if latest := play.legacy_reply_web:
@@ -781,6 +819,8 @@ class RoleplayPlugin(BasePlugin):
                 if set(args) != {"enabled"} or type(args["enabled"]) is not bool:
                     raise OwnerArgumentError("Expected an explicit script enable or disable choice")
                 play = TavernSession.model_validate(record)
+                if args['enabled'] and play.opening_schema:
+                    raise OwnerArgumentError('This opening schema profile runs separately from ordinary card scripts')
                 if args["enabled"] and self._script_turn_index() is None:
                     raise OwnerArgumentError(_SCRIPT_CLOCK_UNAVAILABLE)
                 if args["enabled"]:
@@ -982,6 +1022,17 @@ class RoleplayPlugin(BasePlugin):
                     if not legacy_state or not legacy_state.mvu_read_enabled or not mvu or counter.current(mvu.values) is None:
                         raise OwnerArgumentError('Choose an existing initialized integer in the linked opening for this counter')
                     legacy_state = legacy_state.model_copy(update={'counter': counter})
+                schema = None
+                if grant := choice.openingMvuSchema:
+                    if mvu is None or legacy_state is None:
+                        raise OwnerArgumentError('The schema needs an initialized linked opening')
+                    try:
+                        code = await to_thread(link_opening_schema, library_dir(), choice.cardId, card.scripts, grant)
+                    except ModuleLinkError as exc:
+                        raise OwnerArgumentError(f'Opening MVU schema: {exc}') from exc
+                    value = await to_thread(derive_opening_schema, code, mvu.values, grant)
+                    check_opening_target()
+                    schema = OpeningSchemaSnapshot(grant=grant, code=code, value=value)
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player,
                                      greeting=expand(opening, card.fields.name, choice.player.name, ""),
                                      lore=lore, worldbook=book, worldbookRef=book_ref, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
@@ -991,7 +1042,7 @@ class RoleplayPlugin(BasePlugin):
                                      invalid_native_panels=card.invalid_native_panels, mvu=mvu, mvu_legacy=legacy_mvu,
                                      gameplay_pack=card.gameplay_pack, web_panel=web_panel, web_panel_ready=web_panel is None,
                                      web_panel_issue=web_panel_issue, legacy_opening_web=legacy_state,
-                                     scripts=scripts, script_state=script_state)
+                                     scripts=scripts, script_state=script_state, opening_schema=schema)
                 self._save(play.model_dump())
                 if enable_scripts:
                     await self._scripts.fire("opening", sequence=0)

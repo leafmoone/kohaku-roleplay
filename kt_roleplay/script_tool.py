@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from .card_scripts import CardScript, ScriptButton
 from .mvu import validate_updated_values
 from .script_values import CardScriptError, assert_js_numbers, validated_script_values
+from .script_vm import OPENING_SCHEMA_RESULT_BYTES
 
 
 def effective_buttons(script: CardScript, appended: list[ScriptButton]) -> list[ScriptButton]:
@@ -38,15 +39,16 @@ def _run_worker(script: CardScript, values: dict[str, JsonValue], event: str, ar
     return _worker_result(data)
 
 
-def _worker_result(data: dict, *, mvu: bool = False) -> dict:
+def _worker_result(data: dict, *, mvu: bool = False, schema: bool = False) -> dict:
     try:
         payload = json.dumps(data, ensure_ascii=True, allow_nan=False).encode("ascii")
         worker = Path(__file__).with_name("script_vm.py").resolve()
         env = {k: os.environ[k] for k in ("SYSTEMROOT", "WINDIR") if k in os.environ}
-        argv = [sys.executable, '-I', '-B', str(worker)] + (['mvu'] if mvu else [])
+        argv = [sys.executable, '-I', '-B', str(worker)] + (['mvu'] if mvu else ['schema'] if schema else [])
         process = subprocess.run(argv, cwd=worker.parent, env=env,
                                  input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3.0 if mvu else 2.0)
-        if process.returncode or len(process.stdout) > (256 if mvu else 64) * 1024:
+        output_limit = OPENING_SCHEMA_RESULT_BYTES if schema else (256 if mvu else 64) * 1024
+        if process.returncode or len(process.stdout) > output_limit:
             raise CardScriptError("Card script worker stopped without a result")
         result = json.loads(process.stdout)
     except subprocess.TimeoutExpired as exc:
@@ -60,6 +62,8 @@ def _worker_result(data: dict, *, mvu: bool = False) -> dict:
                   "unsupported_api": "Card script referenced an unavailable JavaScript or Tavern Helper API"}
         if mvu and status == 'invalid_update':
             raise CardScriptError(result['reason'])
+        if schema and status == 'script_error':
+            raise CardScriptError('The selected opening schema failed; no derived state was saved')
         raise CardScriptError(reason.get(status, "Card script used an unsupported API or failed"))
     return result
 
