@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from .card_scripts import CardScript, ScriptButton, script_fingerprint
+from .card_scripts import CardScript, ScriptButton, script_fingerprint, visible_script_buttons
 from .script_tool import CardScriptError, effective_buttons, run_card_script
 
 
@@ -84,8 +84,7 @@ class ScriptSession:
             published = dict(old.appended_buttons)
             if script_id is not None:
                 scripts = [s for s in scripts if s.id == script_id and (
-                    not event.startswith('button:') or any(row.visible and row.name == event[7:]
-                        for row in effective_buttons(s, published.get(s.id, []))))]
+                    not event.startswith('button:') or event[7:] in visible_script_buttons(s, published.get(s.id, [])))]
                 if not scripts:
                     raise CardScriptError("Unknown script or button in the current tavern")
             values = play.mvu.values

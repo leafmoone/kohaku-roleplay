@@ -67,6 +67,8 @@ def get_card(directory: Path, key: str, *, with_scripts: bool = False) -> Parsed
     card = ParsedCard.model_validate_json(row[0])
     if with_scripts:
         missing = {'scripts', 'web_panel', 'legacy_web_rules'} - card.model_fields_set
+        if any('buttons_enabled' not in script.model_fields_set for script in card.scripts):
+            missing.add('scripts')
         if missing:
             # Recover new projections from older imports without changing their bytes or library rows.
             original = parse_card(original_card(directory, key))

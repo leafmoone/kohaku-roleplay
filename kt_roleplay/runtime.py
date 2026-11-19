@@ -21,7 +21,7 @@ from kohakuterrarium.modules.plugin.base import BasePlugin, PluginBlockError, Pl
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError, OwnerForbiddenError
 from kohakuterrarium.utils.config_dir import config_dir
 
-from .card_scripts import CardScript, script_fingerprint
+from .card_scripts import CardScript, script_fingerprint, visible_script_buttons
 from .card_web import WebPanel
 from .cards import CardError, CardFields
 from .charx import CardMedia
@@ -51,7 +51,7 @@ from .worldbook import read_worldbook
 from .worldbook_library import WorldbookNotFound, WorldbookReference, default_worldbook_for_play, snapshot_detail, worldbook_for_play
 from .scene_tools import ingest_report
 from .script_session import ScriptSession, SessionScripts, approved, settled_mvu_scripts, upgrade_button_receipts, upgrade_script_clock
-from .script_tool import CardScriptError, RunCardScript, effective_buttons, run_mvu_update
+from .script_tool import CardScriptError, RunCardScript, run_mvu_update
 from .recovery import resume_scene
 
 
@@ -531,7 +531,7 @@ class RoleplayPlugin(BasePlugin):
             issues = play.script_state.issues if host_ok else {**play.script_state.issues, "$host": _SCRIPT_CLOCK_UNAVAILABLE}
             runnable = {s.id for s in approved(play.scripts, play.script_state)} if host_ok else set()
             views = [s.view() if s.id not in runnable else {
-                **s.view(), 'buttons': [row.name for row in effective_buttons(s, play.script_state.appended_buttons.get(s.id, [])) if row.visible],
+                **s.view(), 'buttons': visible_script_buttons(s, play.script_state.appended_buttons.get(s.id, [])),
             } for s in play.scripts]
             view["cardScripts"] = {"entries": views,
                                    "canEnable": host_ok and bool(play.mvu and play.mvu.values and any(

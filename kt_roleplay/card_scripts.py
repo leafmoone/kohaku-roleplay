@@ -23,11 +23,15 @@ class CardScript(BaseModel):
     content: str
     enabled: bool
     buttons: list[str] = Field(default_factory=list, max_length=8)
+    buttons_enabled: bool = True
     issue: str | None = None
     module: bool = False
 
     def view(self) -> dict[str, object]:
-        return self.model_dump(exclude={"content"})
+        view = self.model_dump(exclude={'content', 'buttons_enabled'})
+        if not self.buttons_enabled:
+            view['buttons'] = []
+        return view
 
 
 def inspect_card_scripts(extensions: dict | None) -> list[CardScript]:
@@ -65,9 +69,12 @@ def inspect_card_scripts(extensions: dict | None) -> list[CardScript]:
             code, issue = "", "invalid_script"
         elif _LOCAL_IMPORT.search(code):
             issue = "module_dependency"
-        buttons = data.get("buttons", data.get("button", []))
+        group = data.get('button')
+        buttons = data.get('buttons', group)
+        buttons_enabled = not isinstance(group, dict) or group.get('enabled', True) is True
         if isinstance(buttons, dict):
-            buttons = buttons.get("buttons", []) if buttons.get("enabled") is True else []
+            buttons_enabled = buttons_enabled and buttons.get('enabled', True) is True
+            buttons = buttons.get('buttons', [])
         visible = []
         if isinstance(buttons, list):
             for button in buttons[:8]:
@@ -77,11 +84,25 @@ def inspect_card_scripts(extensions: dict | None) -> list[CardScript]:
                 if isinstance(title, str) and 0 < len(title.strip()) <= 80 and title.strip() not in visible:
                     visible.append(title.strip().encode("utf-8", errors="replace").decode("utf-8"))
         result.append(CardScript(id=key, name=name or f"Script {index + 1}", content=code,
-                                 enabled=data.get("enabled") is True, buttons=visible, issue=issue))
+                                 enabled=data.get('enabled') is True, buttons=visible, buttons_enabled=buttons_enabled, issue=issue))
     return result
+
+
+def visible_script_buttons(script: CardScript, appended: list[ScriptButton]) -> list[str]:
+    if not script.buttons_enabled:
+        return []
+    return [*script.buttons, *(row.name for row in appended if row.visible)]
 
 
 def script_fingerprint(bundle: list[CardScript]) -> str:
     """Scope explicit consent to this version of the declared scripts, not just a card name."""
-    return sha256("\x1e".join(script.model_dump_json(ensure_ascii=True, exclude=set() if script.module else {"module"})
-                               for script in bundle).encode("ascii")).hexdigest()
+    def encode(script: CardScript) -> str:
+        omitted = set()
+        if not script.module:
+            omitted.add('module')
+        if script.buttons_enabled:
+            # Existing snapshots had implicit permission for their visible buttons.
+            omitted.add('buttons_enabled')
+        return script.model_dump_json(ensure_ascii=True, exclude=omitted)
+
+    return sha256('\x1e'.join(map(encode, bundle)).encode('ascii')).hexdigest()
