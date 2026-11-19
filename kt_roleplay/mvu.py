@@ -2,6 +2,7 @@
 
 import json
 from collections import Counter
+from collections.abc import Callable
 from copy import deepcopy
 from math import isfinite
 from typing import Literal
@@ -152,7 +153,11 @@ def _kind(value: JsonValue) -> type:
     return float if type(value) in (int, float) else type(value)
 
 
-def apply_changes(values: dict[str, JsonValue], changes: list[MvuChange]) -> dict[str, JsonValue]:
+MvuObserver = Callable[[dict[str, JsonValue], list[str], JsonValue, JsonValue], dict[str, JsonValue]]
+
+
+def apply_changes(values: dict[str, JsonValue], changes: list[MvuChange], *, observe: MvuObserver | None = None,
+                  guard: Callable[[tuple[str, ...], JsonValue], None] | None = None) -> dict[str, JsonValue]:
     """Validate a batch before replacing the current session snapshot."""
     updated = deepcopy(values)
     seen = set()
@@ -168,6 +173,8 @@ def apply_changes(values: dict[str, JsonValue], changes: list[MvuChange]) -> dic
         if _kind(change.value) != _kind(parent[key]):
             raise ValueError("Unknown or incompatible MVU variable")
         original = parent[key]
+        if guard is not None:
+            guard(path, original)
         if change.op == "add" and type(original) in (int, float) and type(change.value) in (int, float):
             value = original + change.value
         elif change.op == "set" and not isinstance(original, dict):
@@ -176,6 +183,8 @@ def apply_changes(values: dict[str, JsonValue], changes: list[MvuChange]) -> dic
             raise ValueError("Unsupported MVU update")
         _budget(value)
         parent[key] = value
+        if observe is not None:
+            updated = observe(updated, change.path, original, value)
     return validate_updated_values(updated)
 
 

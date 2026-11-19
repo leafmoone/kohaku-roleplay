@@ -12,42 +12,32 @@ from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResul
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from .card_scripts import CardScript
-from .mvu import MvuChange, _kind, apply_changes
-from .mvu_patch import json_equal
-
-_MAX_SAFE_INTEGER = 2**53 - 1
-_MAX_CHANGES = 32
-
-
-class CardScriptError(ValueError):
-    pass
-
-
-def _assert_js_numbers(value: JsonValue) -> None:
-    if type(value) is int and abs(value) > _MAX_SAFE_INTEGER:
-        raise CardScriptError("Scripts cannot receive integers outside JavaScript's exact range")
-    if isinstance(value, (list, dict)):
-        for part in value if isinstance(value, list) else value.values():
-            _assert_js_numbers(part)
+from .mvu import validate_updated_values
+from .script_values import CardScriptError, assert_js_numbers, validated_script_values
 
 
 def _run_worker(script: CardScript, values: dict[str, JsonValue], event: str, args: JsonValue) -> dict:
     if not script.enabled or script.issue:
         raise CardScriptError("This card script is not runnable")
-    _assert_js_numbers(values)
-    _assert_js_numbers(args)
+    assert_js_numbers(values)
+    assert_js_numbers(args)
     data = {"values": values, "event": event, "args": args, "buttons": script.buttons,
             "code": script.content, "module": script.module}
+    # User/reply text is already bounded in characters by the host, before JSON escaping.
+    if event == "tool" and len(json.dumps(args, ensure_ascii=True, allow_nan=False).encode("ascii")) > 4096:
+        raise CardScriptError("Card script arguments are too large")
+    return _worker_result(data)
+
+
+def _worker_result(data: dict, *, mvu: bool = False) -> dict:
     try:
-        # User/reply text is already bounded in characters by the host, before JSON escaping.
-        if event == "tool" and len(json.dumps(args, ensure_ascii=True, allow_nan=False).encode("ascii")) > 4096:
-            raise CardScriptError("Card script arguments are too large")
         payload = json.dumps(data, ensure_ascii=True, allow_nan=False).encode("ascii")
         worker = Path(__file__).with_name("script_vm.py").resolve()
         env = {k: os.environ[k] for k in ("SYSTEMROOT", "WINDIR") if k in os.environ}
-        process = subprocess.run([sys.executable, "-I", "-B", str(worker)], cwd=worker.parent, env=env,
-                                 input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=2.0)
-        if process.returncode or len(process.stdout) > 64 * 1024:
+        argv = [sys.executable, '-I', '-B', str(worker)] + (['mvu'] if mvu else [])
+        process = subprocess.run(argv, cwd=worker.parent, env=env,
+                                 input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3.0 if mvu else 2.0)
+        if process.returncode or len(process.stdout) > (256 if mvu else 64) * 1024:
             raise CardScriptError("Card script worker stopped without a result")
         result = json.loads(process.stdout)
     except subprocess.TimeoutExpired as exc:
@@ -57,38 +47,29 @@ def _run_worker(script: CardScript, values: dict[str, JsonValue], event: str, ar
     if not isinstance(result, dict) or result.get("status") != "ok":
         status = result.get("status") if isinstance(result, dict) else None
         reason = {"engine_missing": "Card script engine is not installed", "script_limit": "Card script exceeded its limits",
+                  "worker_dependency_missing": "The card script worker is missing a required package dependency",
                   "unsupported_api": "Card script referenced an unavailable JavaScript or Tavern Helper API"}
+        if mvu and status == 'invalid_update':
+            raise CardScriptError(result['reason'])
         raise CardScriptError(reason.get(status, "Card script used an unsupported API or failed"))
     return result
 
 
-def _validated(values: dict[str, JsonValue], proposed: JsonValue) -> dict[str, JsonValue]:
-    changes = []
-
-    def gather(before: JsonValue, after: JsonValue, path: list[str]) -> None:
-        if _kind(before) is not _kind(after):
-            raise CardScriptError("Card script changed the type of a declared variable")
-        if isinstance(before, dict):
-            if before.keys() != after.keys():
-                raise CardScriptError("Card scripts can only change declared variable paths")
-            for key, value in before.items():
-                gather(value, after[key], [*path, key])
-        elif not json_equal(before, after):
-            if len(changes) == _MAX_CHANGES:
-                raise CardScriptError("Too many card script changes in one batch")
-            changes.append(MvuChange(path=path, op="set", value=after))
-
-    gather(values, proposed, [])
-    return apply_changes(values, changes) if changes else values
+def run_mvu_update(scripts, values: dict[str, JsonValue], update) -> dict[str, JsonValue]:
+    bundle = [{'id': s.id, 'code': s.content, 'buttons': s.buttons, 'module': s.module} for s in scripts]
+    result = _worker_result({'scripts': bundle, 'values': values, 'update': update}, mvu=True)
+    if not isinstance(result.get('values'), dict):
+        raise CardScriptError('Invalid response from MVU worker')
+    return validate_updated_values(result['values'])
 
 
 async def run_card_script(script: CardScript, values: dict[str, JsonValue], event: str,
-                          args: JsonValue = None) -> tuple[bool, dict[str, JsonValue]]:
+                          args: JsonValue = None) -> tuple[bool, dict[str, JsonValue], bool]:
     try:
         result = await asyncio.to_thread(_run_worker, script, values, event, args)
-        if type(result.get("handled")) is not bool or "values" not in result:
+        if type(result.get("handled")) is not bool or type(result.get('listensMvu')) is not bool or "values" not in result:
             raise CardScriptError("Invalid response from card script worker")
-        return result["handled"], _validated(values, result["values"])
+        return result["handled"], validated_script_values(values, result["values"]), result['listensMvu']
     except (RecursionError, UnicodeError) as exc:
         raise CardScriptError("Card script returned invalid variable data") from exc
 

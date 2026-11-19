@@ -14,8 +14,8 @@ class MvuChanges(BaseModel):
 
 
 class MvuHost(Protocol):
-    def apply_mvu_changes(self, changes: list[MvuChange]) -> None: ...
-    def apply_mvu_legacy(self, update: str) -> None: ...
+    async def apply_mvu_changes(self, changes: list[MvuChange]) -> None: ...
+    async def apply_mvu_legacy(self, update: str) -> None: ...
 
 
 class UpdateMvu(BaseTool):
@@ -35,7 +35,7 @@ class UpdateMvu(BaseTool):
         return MvuChanges.model_json_schema()
 
     async def _execute(self, args: dict) -> ToolResult:
-        self.host.apply_mvu_changes(MvuChanges.model_validate(args).changes)
+        await self.host.apply_mvu_changes(MvuChanges.model_validate(args).changes)
         return ToolResult(output="Updated session variables. Continue the story without repeating the update.")
 
 
@@ -56,5 +56,5 @@ class ApplyMvuUpdate(UpdateMvu):
         return MvuLegacyArgs.model_json_schema()
 
     async def _execute(self, args: dict) -> ToolResult:
-        self.host.apply_mvu_legacy(MvuLegacyArgs.model_validate(args).update)
+        await self.host.apply_mvu_legacy(MvuLegacyArgs.model_validate(args).update)
         return ToolResult(output="Applied the literal update to this session. Continue the story without repeating it.")

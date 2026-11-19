@@ -6,7 +6,7 @@ from copy import deepcopy
 
 from pydantic import JsonValue
 
-from .mvu import _json_mapping, _kind, array_index, existing_key, validate_updated_values
+from .mvu import MvuObserver, _json_mapping, _kind, array_index, existing_key, validate_updated_values
 
 
 def json_equal(left: JsonValue, right: JsonValue) -> bool:
@@ -19,7 +19,7 @@ def json_equal(left: JsonValue, right: JsonValue) -> bool:
     return left == right
 
 
-def apply_json_patch(values: dict[str, JsonValue], text: str, limit: int) -> dict[str, JsonValue]:
+def apply_json_patch(values: dict[str, JsonValue], text: str, limit: int, *, observe: MvuObserver | None = None) -> dict[str, JsonValue]:
     try:
         commands = json.loads(text, object_pairs_hook=_json_mapping)
     except (ValueError, RecursionError) as exc:
@@ -46,10 +46,13 @@ def apply_json_patch(values: dict[str, JsonValue], text: str, limit: int) -> dic
             if not isinstance(parent, list):
                 raise ValueError("MVU JSON Patch add and remove only support arrays")
             index = array_index(parts[-1], len(parent), inserting=op == "add")
+            previous = list(parent) if observe is not None else None
             if op == "add":
                 parent.insert(index, command["value"])
             else:
                 parent.pop(index)
+            if observe is not None:
+                updated = observe(updated, parts[:-1], previous, parent)
             continue
         key = existing_key(parent, parts[-1])
         current, value = parent[key], command["value"]
@@ -60,4 +63,6 @@ def apply_json_patch(values: dict[str, JsonValue], text: str, limit: int) -> dic
             raise ValueError("MVU JSON Patch can only replace a non-object with the same type")
         else:
             parent[key] = value
+            if observe is not None:
+                updated = observe(updated, parts, current, value)
     return validate_updated_values(updated)

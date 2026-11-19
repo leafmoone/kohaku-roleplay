@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from pydantic import JsonValue
 
-from .mvu import MvuChange, apply_changes, existing_key
+from .mvu import MvuChange, MvuObserver, apply_changes
 from .mvu_patch import apply_json_patch, json_equal
 
 _BLOCK = re.compile(r"<UpdateVariable>\s*(.*?)\s*</UpdateVariable>\s*\Z", re.S)
@@ -94,17 +94,13 @@ def read_update(body: str) -> list[LiteralUpdate]:
     return result
 
 
-def apply_literal_update(values: dict[str, JsonValue], text: str) -> dict[str, JsonValue]:
+def apply_literal_update(values: dict[str, JsonValue], text: str, *, observe: MvuObserver | None = None) -> dict[str, JsonValue]:
     body = _body(text)
     if patch := _PATCH.fullmatch(body):
-        return apply_json_patch(values, patch[1], _MAX_COMMANDS)
+        return apply_json_patch(values, patch[1], _MAX_COMMANDS, observe=observe)
     updates = read_update(body)
-    for update in updates:
-        if update.expected is _UNCHECKED:
-            continue
-        actual = values
-        for part in update.change.path:
-            actual = actual[existing_key(actual, part)]
-        if not json_equal(actual, update.expected):
-            raise ValueError("MVU update has a stale expected value")
-    return apply_changes(values, [item.change for item in updates])
+    expected = {tuple(item.change.path): item.expected for item in updates if item.expected is not _UNCHECKED}
+    def guard(path, current):
+        if path in expected and not json_equal(current, expected[path]):
+            raise ValueError('MVU update has a stale expected value')
+    return apply_changes(values, [item.change for item in updates], observe=observe, guard=guard)

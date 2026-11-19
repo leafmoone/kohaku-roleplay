@@ -46,7 +46,7 @@ from .worldbook import read_worldbook
 from .worldbook_library import WorldbookNotFound, WorldbookReference, default_worldbook_for_play, snapshot_detail, worldbook_for_play
 from .scene_tools import ingest_report
 from .script_session import ScriptSession, SessionScripts, approved, upgrade_script_clock
-from .script_tool import CardScriptError, RunCardScript
+from .script_tool import CardScriptError, RunCardScript, run_mvu_update
 from .recovery import resume_scene
 
 
@@ -374,20 +374,36 @@ class RoleplayPlugin(BasePlugin):
         self._save(play.model_copy(update={"values": values}).model_dump())
         self.ui_emit("state", self.ui_state())
 
-    def apply_mvu_changes(self, changes: list[MvuChange]) -> None:
-        self._update_mvu(lambda values: apply_changes(values, changes))
+    async def apply_mvu_changes(self, changes: list[MvuChange]) -> None:
+        await self._update_mvu(changes)
 
-    def apply_mvu_legacy(self, update: str) -> None:
-        self._update_mvu(lambda values: apply_literal_update(values, update), legacy=True)
+    async def apply_mvu_legacy(self, update: str) -> None:
+        await self._update_mvu(update)
 
-    def _update_mvu(self, calculate, *, legacy: bool = False) -> None:
+    async def _update_mvu(self, update: str | list[MvuChange]) -> None:
+        async with self._scripts.lock:
+            await self._settle_mvu(update)
+
+    async def _settle_mvu(self, update: str | list[MvuChange]) -> None:
         if self.mode != "tavern" or (record := self._record()) is None:
             raise SceneError("Bind a card in a tavern session before changing variables")
         play = TavernSession.model_validate(record)
-        if play.mvu is None or not play.mvu.values or (legacy and not play.mvu_legacy):
+        if play.mvu is None or not play.mvu.values or (isinstance(update, str) and not play.mvu_legacy):
             raise SceneError("This tavern has no initialized variables for this update format")
         try:
-            values = calculate(play.mvu.values)
+            scripts = approved(play.scripts, play.script_state) if self._script_turn_index() is not None else []
+            # Known non-listeners (e.g. buttons) never pay for a worker. A script that has
+            # never loaded has its own visible diagnostic, not an implicit rule on every update.
+            scripts = [s for s in scripts if play.script_state.mvu_listeners.get(s.id, s.id not in play.script_state.issues)]
+            if scripts:
+                wire = update if isinstance(update, str) else [change.model_dump() for change in update]
+                values = await to_thread(run_mvu_update, scripts, play.mvu.values, wire)
+                if self._record() != record:
+                    raise ValueError('The tavern changed during the MVU update; try again')
+            elif isinstance(update, str):
+                values = apply_literal_update(play.mvu.values, update)
+            else:
+                values = apply_changes(play.mvu.values, update)
         except ValueError as exc:
             raise SceneError(str(exc)) from exc
         mvu = play.mvu.model_copy(update={"values": values})
@@ -530,7 +546,10 @@ class RoleplayPlugin(BasePlugin):
                         self.ui_emit("state", self.ui_state())
                         raise _no_compatible_scripts(play.scripts)
                 consent = script_fingerprint(play.scripts) if args["enabled"] else None
-                self._save(play.model_copy(update={"script_state": play.script_state.model_copy(update={"approved": consent})}).model_dump())
+                permission = play.script_state.model_copy(update={'approved': consent})
+                if consent != play.script_state.approved:
+                    permission = permission.model_copy(update={'mvu_listeners': {}, 'issues': {}})
+                self._save(play.model_copy(update={'script_state': permission}).model_dump())
                 view = self.ui_state()
                 self.ui_emit("state", view)
                 return view
