@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .cards import CardFields
 from .lore import LoreEntry
+from .lore_outlet import outlet_expander, referenced_outlets
 
 
 class Persona(BaseModel):
@@ -46,16 +47,21 @@ def render_tavern_text(value: str, card: CardFields, player: Player) -> str:
     return expand(value, card.name, player.name, _TAVERN_DIRECTION)
 
 
+def tavern_outlets(card: CardFields) -> frozenset[str]:
+    return referenced_outlets(card.system_prompt, card.post_history_instructions)
+
+
 def story_context(card: CardFields, player: Player, entries: list[LoreEntry], notes: str) -> str:
     def render(value: str) -> str:
         return render_tavern_text(value, card, player)
+    fill_outlet = outlet_expander(entries, render)
     data = {
         "player": player.model_dump(),
         "lore_before_character": [render(e.content) for e in entries if e.position == "before_char"],
         "character": {key: render(value) for key, value in {"name": card.name, "description": card.description, "personality": card.personality, "scenario": card.scenario, "examples": card.mes_example}.items()},
-        "lore_after_character": [render(e.content) for e in entries if e.position not in ("before_char", "before_notes", "after_notes", "at_depth")],
-        "card_roleplay_direction": render(card.system_prompt),
-        "scene_direction": render(card.post_history_instructions),
+        "lore_after_character": [render(e.content) for e in entries if e.position not in ("before_char", "before_notes", "after_notes", "at_depth", "outlet")],
+        "card_roleplay_direction": fill_outlet(render(card.system_prompt)),
+        "scene_direction": fill_outlet(render(card.post_history_instructions)),
     }
     if before := [render(e.content) for e in entries if e.position == "before_notes"]:
         data["lore_before_notes"] = before

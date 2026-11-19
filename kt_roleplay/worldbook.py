@@ -11,7 +11,7 @@ from .lore_regex import is_regex_key, valid_regex_key
 
 
 _POSITIONS: dict[int, LorePosition] = {
-    0: "before_char", 1: "after_char", 2: "before_notes", 3: "after_notes", 4: "at_depth",
+    0: "before_char", 1: "after_char", 2: "before_notes", 3: "after_notes", 4: "at_depth", 7: "outlet",
 }
 _LOGIC: dict[int, SecondaryLogic] = {0: "and_any", 1: "not_all", 2: "not_any", 3: "and_all"}
 _SCRIPT_CONTENT = re.compile(r"<%|<\s*(?:script|iframe)\b", re.IGNORECASE)
@@ -39,6 +39,9 @@ def _read_entry(item: object, *, standalone: bool) -> LoreEntry:
         position = _POSITIONS.get(position)
     if not isinstance(position, str) or position not in _POSITIONS.values():
         raise _SkippedEntry("unsupported_position")
+    outlet = fields.get("outletName", fields.get("outlet_name", "")) if position == "outlet" else ""
+    if not isinstance(outlet, str) or (position == "outlet" and not outlet.strip()):
+        raise _SkippedEntry("invalid_entry")
     keys = item.get("key" if standalone else "keys", [])
     secondary = item.get("keysecondary" if standalone else "secondary_keys", [])
     if not isinstance(keys, list) or not isinstance(secondary, list):
@@ -79,7 +82,7 @@ def _read_entry(item: object, *, standalone: bool) -> LoreEntry:
     order = item.get("order" if standalone else "insertion_order", 100)
     try:
         return LoreEntry.model_validate({
-            "keys": keys, "secondary_keys": secondary, "content": text, "position": position,
+            "keys": keys, "secondary_keys": secondary, "content": text, "position": position, "outlet_name": outlet.strip(),
             "enabled": not item.get("disable", False) if standalone else item.get("enabled"),
             "insertion_order": order,
             "priority": item.get("priority", order if standalone else 0),

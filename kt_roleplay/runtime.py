@@ -36,7 +36,7 @@ from .mvu import MvuChange, MvuInit, apply_changes, inspect_initializers, is_ini
 from .mvu_legacy import apply_literal_update, split_opening
 from .mvu_tool import ApplyMvuUpdate, UpdateMvu
 from .panels import ChoicePanel, InventoryPanel, NativePanel, QuestPanel, public_panels
-from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context
+from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
 from .worldbook import read_worldbook
 from .scene_tools import ingest_report
 from .recovery import resume_scene
@@ -592,8 +592,10 @@ class RoleplayPlugin(BasePlugin):
                 return _cost(render_tavern_text(text, play.card, play.player))
 
             regex_budget = MatchBudget()
+            outlets = tavern_outlets(play.card)
             for book in books:
-                chosen = active_entries(book, history, lore_cost, remaining, chat_messages=chat_count, regex_budget=regex_budget)
+                chosen = active_entries(book, history, lore_cost, remaining, chat_messages=chat_count,
+                                        regex_budget=regex_budget, outlets=outlets)
                 entries.extend(chosen)
                 remaining -= sum(lore_cost(e.content) for e in chosen)
             content = story_context(play.card, play.player, entries, play.notes)

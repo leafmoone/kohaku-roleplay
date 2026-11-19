@@ -11,7 +11,7 @@ from .lore_regex import MatchBudget, is_regex_key
 
 
 SecondaryLogic = Literal["and_any", "not_all", "not_any", "and_all"]
-LorePosition = Literal["before_char", "after_char", "before_notes", "after_notes", "at_depth"]
+LorePosition = Literal["before_char", "after_char", "before_notes", "after_notes", "at_depth", "outlet"]
 
 
 class LoreEntry(BaseModel):
@@ -41,6 +41,7 @@ class LoreEntry(BaseModel):
     group_weight: int = Field(default=100, ge=1, le=10_000)
     group_scoring: bool | None = None
     delay_messages: int = Field(default=0, ge=0)
+    outlet_name: str = Field(default="", max_length=120, pattern=r"^[^{}\r\n]*$")
 
     def matches(self, text: str) -> bool:
         try:
@@ -112,7 +113,8 @@ def _weighted_winner(group: list[tuple[int, LoreEntry]]) -> int:
 
 
 def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str], int], allowance: int,
-                   *, chat_messages: int | None = None, regex_budget: MatchBudget | None = None) -> list[LoreEntry]:
+                   *, chat_messages: int | None = None, regex_budget: MatchBudget | None = None,
+                   outlets: frozenset[str] = frozenset()) -> list[LoreEntry]:
     if regex_budget is None:
         regex_budget = MatchBudget()
     budget = min(book.token_budget, allowance)
@@ -134,7 +136,8 @@ def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str],
         scores = {}
         for index, entry in ordered:
             if (index in selected or index in blocked or memberships[index] & accepted_groups
-                    or entry.delay_messages > message_count):
+                    or entry.delay_messages > message_count
+                    or (entry.position == "outlet" and entry.outlet_name not in outlets)):
                 continue
             if (level and entry.exclude_recursion) or (not level and entry.delay_until_recursion):
                 continue
