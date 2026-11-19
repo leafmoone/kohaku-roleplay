@@ -46,6 +46,7 @@ from .lore_timing import LoreTiming
 from .mvu import MvuChange, MvuInit, apply_changes, inspect_initializers, is_initializer, public_options, public_values
 from .mvu_legacy import apply_literal_update, split_opening
 from .mvu_tool import ApplyMvuUpdate, UpdateMvu
+from .opening_page_library import OpeningPageIssue, cached_opening_panel
 from .panels import ChoicePanel, InventoryPanel, NativePanel, QuestPanel, public_panels
 from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
 from .worldbook import read_worldbook
@@ -124,6 +125,7 @@ class TavernSession(Arguments):
     legacy_plugins: list[str] = Field(default_factory=list)
     web_panel: WebPanel | None = None
     web_panel_ready: bool = True
+    web_panel_issue: OpeningPageIssue | None = None
     legacy_opening_web: LegacyOpeningState | None = None
     legacy_reply_web: LegacyReplyState | None = None
     scripts: list[CardScript] = Field(default_factory=list)
@@ -532,6 +534,8 @@ class RoleplayPlugin(BasePlugin):
                 view['webPanel']['source'] = 'legacyOpening'
                 if play.legacy_reply_web is not None:
                     view['webPanel']['latestMessageId'] = play.legacy_reply_web.turn
+        elif play.web_panel_issue is not None:
+            view['webPanelIssue'] = play.web_panel_issue
         if play.scripts:
             host_ok = self._script_turn_index() is not None
             issues = play.script_state.issues if host_ok else {**play.script_state.issues, "$host": _SCRIPT_CLOCK_UNAVAILABLE}
@@ -837,13 +841,19 @@ class RoleplayPlugin(BasePlugin):
                     except (ValueError, RecursionError):
                         mvu = mvu.model_copy(update={'issues': {**mvu.issues, 'invalid_opening_update': 1}})
                     check_opening_target()
-                web_panel, legacy_state = card.web_panel, None
+                web_panel, legacy_state, web_panel_issue = card.web_panel, None, None
                 if web_panel is None:
                     rule = next((row for row in card.legacy_web_rules if row.marker in opening), None)
+                    marker = None
                     if rule is not None:
-                        web_panel = rule.panel
-                        legacy_state = LegacyOpeningState(marker=rule.marker, values={},
-                                                          mvu_status_adapter=has_mvu_status_adapter(rule.marker, card.scripts))
+                        web_panel, marker = rule.panel, rule.marker
+                    elif (remote := card.legacy_remote_opening) is not None and remote.marker in opening:
+                        web_panel, web_panel_issue = await to_thread(cached_opening_panel, library_dir(), choice.cardId, remote)
+                        check_opening_target()
+                        marker = remote.marker
+                    if web_panel is not None and marker is not None:
+                        legacy_state = LegacyOpeningState(marker=marker, values={},
+                                                          mvu_status_adapter=has_mvu_status_adapter(marker, card.scripts))
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player,
                                      greeting=expand(opening, card.fields.name, choice.player.name, ""),
                                      lore=lore, worldbook=book, worldbookRef=book_ref, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
@@ -852,7 +862,7 @@ class RoleplayPlugin(BasePlugin):
                                      scene_media_rules=card.scene_media_rules, native_panels=card.native_panels,
                                      invalid_native_panels=card.invalid_native_panels, mvu=mvu, mvu_legacy=legacy_mvu,
                                      gameplay_pack=card.gameplay_pack, web_panel=web_panel, web_panel_ready=web_panel is None,
-                                     legacy_opening_web=legacy_state,
+                                     web_panel_issue=web_panel_issue, legacy_opening_web=legacy_state,
                                      scripts=scripts, script_state=script_state)
                 self._save(play.model_dump())
                 if enable_scripts:
