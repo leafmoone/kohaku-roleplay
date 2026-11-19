@@ -18,6 +18,7 @@ class CardScript(BaseModel):
     enabled: bool
     buttons: list[str] = Field(default_factory=list, max_length=8)
     issue: str | None = None
+    module: bool = False
 
     def view(self) -> dict[str, object]:
         return self.model_dump(exclude={"content"})
@@ -76,4 +77,5 @@ def inspect_card_scripts(extensions: dict | None) -> list[CardScript]:
 
 def script_fingerprint(bundle: list[CardScript]) -> str:
     """Scope explicit consent to this version of the declared scripts, not just a card name."""
-    return sha256("\x1e".join(script.model_dump_json(ensure_ascii=True) for script in bundle).encode("ascii")).hexdigest()
+    return sha256("\x1e".join(script.model_dump_json(ensure_ascii=True, exclude=set() if script.module else {"module"})
+                               for script in bundle).encode("ascii")).hexdigest()

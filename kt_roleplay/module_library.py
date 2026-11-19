@@ -19,6 +19,10 @@ class ModuleSnapshot(TypedDict):
     size: int
 
 
+class PackagedModuleMissing(CardError):
+    """A valid relative module path has no source file in this card."""
+
+
 def read_packaged_module(original: bytes, referring_member: str, specifier: str) -> tuple[str, bytes]:
     if not specifier.startswith(("./", "../")) or any(mark in specifier for mark in ("\\", ":", "?", "#", "%")):
         raise CardError("Use a plain relative path for a packaged module")
@@ -26,11 +30,11 @@ def read_packaged_module(original: bytes, referring_member: str, specifier: str)
     if member.startswith(("/", "../")) or PurePosixPath(member).suffix not in (".js", ".mjs"):
         raise CardError("A packaged module must be a JavaScript file inside the CHARX archive")
     if not is_charx(original):
-        raise CardError("Relative module is missing: only CHARX can carry separate files")
+        raise PackagedModuleMissing("Relative module is missing: only CHARX can carry separate files")
     with open_charx(original) as (archive, index):
         item = index.get(member)
         if item is None:
-            raise CardError(f"Relative module is missing from the CHARX archive: {member}")
+            raise PackagedModuleMissing(f"Relative module is missing from the CHARX archive: {member}")
         if item.file_size > MAX_MODULE_BYTES:
             raise CardError("The packaged module exceeds 1 MiB")
         data = _member(archive, item)

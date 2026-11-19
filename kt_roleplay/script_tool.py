@@ -36,7 +36,8 @@ def _run_worker(script: CardScript, values: dict[str, JsonValue], event: str, ar
         raise CardScriptError("This card script is not runnable")
     _assert_js_numbers(values)
     _assert_js_numbers(args)
-    data = {"values": values, "event": event, "args": args, "buttons": script.buttons, "code": script.content}
+    data = {"values": values, "event": event, "args": args, "buttons": script.buttons,
+            "code": script.content, "module": script.module}
     try:
         if len(json.dumps(args, ensure_ascii=True, allow_nan=False).encode("ascii")) > 4096:
             raise CardScriptError("Card script arguments are too large")
@@ -54,7 +55,8 @@ def _run_worker(script: CardScript, values: dict[str, JsonValue], event: str, ar
         raise CardScriptError("Card script worker failed") from exc
     if not isinstance(result, dict) or result.get("status") != "ok":
         status = result.get("status") if isinstance(result, dict) else None
-        reason = {"engine_missing": "Card script engine is not installed", "script_limit": "Card script exceeded its limits"}
+        reason = {"engine_missing": "Card script engine is not installed", "script_limit": "Card script exceeded its limits",
+                  "unsupported_api": "Card script referenced an unavailable JavaScript or Tavern Helper API"}
         raise CardScriptError(reason.get(status, "Card script used an unsupported API or failed"))
     return result
 

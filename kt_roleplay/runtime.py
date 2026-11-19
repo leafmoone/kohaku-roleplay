@@ -32,6 +32,7 @@ from .state_tool import SetCardState
 from .portraits import PortraitRule, chosen_key, rules_for
 from .library_view import card_detail, cards_view, media_summary, media_view, portrait_view
 from .library import CardNotFound, card_scripts_default, get_card
+from .module_linker import RETRYABLE_MODULE_ISSUES, link_card_scripts
 from .lore import LoreBook, active_entries
 from .lore_regex import MatchBudget
 from .lore_timing import LoreTiming
@@ -66,6 +67,12 @@ class Play(Arguments):
     greetingIndex: int = Field(ge=0)
     worldbookId: str | None = Field(default=None, min_length=1)
     enableCardScripts: bool = False
+
+
+def _no_compatible_scripts(scripts: list[CardScript]) -> OwnerArgumentError:
+    detail = ", ".join(f"{script.id}: {script.issue}" for script in scripts if script.enabled and script.issue)
+    message = "This tavern has no compatible scripts and initialized variables"
+    return OwnerArgumentError(f"{message} ({detail})" if detail else message)
 
 
 class Notes(Arguments):
@@ -452,7 +459,8 @@ class RoleplayPlugin(BasePlugin):
             host_ok = self._script_turn_index() is not None
             issues = play.script_state.issues if host_ok else {**play.script_state.issues, "$host": _SCRIPT_CLOCK_UNAVAILABLE}
             view["cardScripts"] = {"entries": [s.view() for s in play.scripts],
-                                   "canEnable": host_ok and bool(play.mvu and play.mvu.values and any(s.enabled and not s.issue for s in play.scripts)),
+                                   "canEnable": host_ok and bool(play.mvu and play.mvu.values and any(
+                                       s.enabled and (s.issue is None or s.issue in RETRYABLE_MODULE_ISSUES) for s in play.scripts)),
                                    "enabled": host_ok and bool(approved(play.scripts, play.script_state)),
                                    "issues": issues}
         selected = chosen_key(play.portrait_rules, play.state_fields, play.values)
@@ -503,8 +511,20 @@ class RoleplayPlugin(BasePlugin):
                 play = TavernSession.model_validate(record)
                 if args["enabled"] and self._script_turn_index() is None:
                     raise OwnerArgumentError(_SCRIPT_CLOCK_UNAVAILABLE)
-                if args["enabled"] and (not play.mvu or not play.mvu.values or not any(s.enabled and not s.issue for s in play.scripts)):
-                    raise OwnerArgumentError("This tavern has no compatible scripts and initialized variables")
+                if args["enabled"]:
+                    if not play.mvu or not play.mvu.values:
+                        raise _no_compatible_scripts(play.scripts)
+                    if not approved(play.scripts, play.script_state) and any(
+                            s.enabled and not s.module and (s.issue is None or s.issue in RETRYABLE_MODULE_ISSUES)
+                            for s in play.scripts):
+                        scripts = await to_thread(link_card_scripts, library_dir(), play.cardId, play.scripts)
+                        if self._record() != record:
+                            raise OwnerArgumentError("The tavern changed while linking modules; try again")
+                        play = play.model_copy(update={"scripts": scripts})
+                    if not any(s.enabled and not s.issue for s in play.scripts):
+                        self._save(play.model_dump())
+                        self.ui_emit("state", self.ui_state())
+                        raise _no_compatible_scripts(play.scripts)
                 consent = script_fingerprint(play.scripts) if args["enabled"] else None
                 self._save(play.model_copy(update={"script_state": play.script_state.model_copy(update={"approved": consent})}).model_dump())
                 view = self.ui_state()
@@ -619,15 +639,21 @@ class RoleplayPlugin(BasePlugin):
                         except (ValueError, RecursionError):
                             mvu = mvu.model_copy(update={"issues": {**mvu.issues, "invalid_opening_update": 1}})
                 script_host_ok = self._script_turn_index() is not None
-                script_card_ok = bool(mvu and mvu.values and any(s.enabled and not s.issue for s in card.scripts))
+                scripts = card.scripts
+                enable_requested = (choice.enableCardScripts if "enableCardScripts" in choice.model_fields_set
+                                    else script_host_ok and bool(mvu and mvu.values) and any(s.enabled for s in scripts)
+                                    and card_scripts_default(library_dir()))
+                if enable_requested and script_host_ok and mvu and mvu.values:
+                    scripts = await to_thread(link_card_scripts, library_dir(), choice.cardId, scripts)
+                    if self._record() is not None or (agent is not None and agent.is_processing):
+                        raise OwnerArgumentError("The session changed before its opening could be set")
+                script_card_ok = bool(mvu and mvu.values and any(s.enabled and not s.issue for s in scripts))
                 if choice.enableCardScripts and not script_host_ok:
                     raise OwnerArgumentError(_SCRIPT_CLOCK_UNAVAILABLE)
                 if choice.enableCardScripts and not script_card_ok:
-                    raise OwnerArgumentError("This card has no compatible scripts and initialized variables")
-                enable_scripts = choice.enableCardScripts
-                if "enableCardScripts" not in choice.model_fields_set and script_host_ok and script_card_ok:
-                    enable_scripts = card_scripts_default(library_dir())
-                script_state = SessionScripts(clock="turn", approved=script_fingerprint(card.scripts) if enable_scripts else None)
+                    raise _no_compatible_scripts(scripts)
+                enable_scripts = enable_requested and script_host_ok and script_card_ok
+                script_state = SessionScripts(clock="turn", approved=script_fingerprint(scripts) if enable_scripts else None)
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player,
                                      greeting=expand(opening, card.fields.name, choice.player.name, ""),
                                      lore=lore, worldbook=book, worldbookRef=book_ref, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
@@ -635,7 +661,7 @@ class RoleplayPlugin(BasePlugin):
                                      media=card.media, media_issues=card.media_issues,
                                      scene_media_rules=card.scene_media_rules, native_panels=card.native_panels,
                                      invalid_native_panels=card.invalid_native_panels, mvu=mvu, mvu_legacy=legacy_mvu,
-                                     scripts=card.scripts, script_state=script_state)
+                                     scripts=scripts, script_state=script_state)
                 self._save(play.model_dump())
                 if enable_scripts:
                     await self._scripts.fire("opening", sequence=0)
