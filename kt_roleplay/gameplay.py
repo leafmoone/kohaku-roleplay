@@ -3,9 +3,10 @@
 from typing import Annotated, Literal, Protocol, TypeGuard
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .card_state import FieldKey, FieldUpdate, StateField, Value, update_values
+from .errors import SettlementRejected
 from .panels import InventoryPanel, NativePanel, QuestPanel
 
 
@@ -34,7 +35,10 @@ Action = Annotated[ItemAction | ObjectiveAction | QuestAction, Field(discriminat
 
 class Actions(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
-    actions: list[Action] = Field(min_length=1, max_length=24)
+    actions: list[Action] = Field(min_length=1, max_length=24, description=(
+        'Ordered steps of ONE in-world action that must succeed together. Submit unrelated actions in separate calls, '
+        'even within the same player turn.'
+    ))
 
 
 def _completes(panel: NativePanel, key: str, value: Value) -> TypeGuard[QuestPanel]:
@@ -105,9 +109,9 @@ class GameplayHost(Protocol):
 
 class PlayActions(BaseTool):
     tool_name = 'rp_apply_gameplay'
-    description = ('Apply justified item gains, consumption and quest progress to declared tavern panels. '
-                   'Use a panel ID from the current session; objectives use a zero-based index. '
-                   'The entire batch is rejected if any action is invalid.')
+    description = ('Settle one in-world action on declared inventory or quest panels. Group only inseparable steps; '
+                   'use separate calls for independent actions in the same turn. A rejected call changes nothing '
+                   'and does not undo other calls. Use panel IDs and zero-based objective indices.')
     execution_mode = ExecutionMode.DIRECT
 
     def __init__(self, host: GameplayHost):
@@ -118,5 +122,9 @@ class PlayActions(BaseTool):
         return Actions.model_json_schema()
 
     async def _execute(self, args: dict) -> ToolResult:
-        self.host.apply_gameplay_actions(Actions.model_validate(args).actions)
+        try:
+            actions = Actions.model_validate(args).actions
+        except ValidationError as exc:
+            raise SettlementRejected(str(exc)) from exc
+        self.host.apply_gameplay_actions(actions)
         return ToolResult(output='Updated the current tavern inventory or quest. Continue without repeating the update.')

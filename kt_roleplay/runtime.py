@@ -24,6 +24,7 @@ from .card_scripts import CardScript, script_fingerprint
 from .cards import CardError, CardFields
 from .charx import CardMedia
 from .cast import NovelBinding
+from .errors import SettlementRejected
 from .gameplay import Action, PlayActions, apply_actions, apply_field_changes
 from .header_summary import MAX_HEADER_PINS, header_summary
 from .novel import Outcome, SceneError, Story
@@ -355,7 +356,10 @@ class RoleplayPlugin(BasePlugin):
         if self.mode != "tavern" or self._record() is None:
             raise SceneError("Bind a card in a tavern session before changing state")
         play = TavernSession.model_validate(self._record())
-        values = apply_field_changes(play.native_panels, play.state_fields, play.values, changes)
+        try:
+            values = apply_field_changes(play.native_panels, play.state_fields, play.values, changes)
+        except ValueError as exc:
+            raise SettlementRejected(str(exc)) from exc
         self._save(play.model_copy(update={"values": values}).model_dump())
         self.ui_emit("state", self.ui_state())
 
@@ -366,7 +370,7 @@ class RoleplayPlugin(BasePlugin):
         try:
             values = apply_actions(play.native_panels, play.state_fields, play.values, actions)
         except ValueError as exc:
-            raise SceneError(str(exc)) from exc
+            raise SettlementRejected(str(exc)) from exc
         self._save(play.model_copy(update={"values": values}).model_dump())
         self.ui_emit("state", self.ui_state())
 
@@ -803,7 +807,10 @@ class RoleplayPlugin(BasePlugin):
             content = story_context(play.card, play.player, entries, play.notes)
             messages = insert_depth_lore(messages, entries, play.card, play.player)
             if play.state_fields:
-                content += "\nUse rp_set_card_state for changed declared fields only. Keep private fields out of prose.\n" + json.dumps(model_fields(play.state_fields, play.values), ensure_ascii=False)
+                content += ("\nUse rp_set_card_state for changed declared fields only. Settle independent in-world actions "
+                            "in separate tool calls, even in the same turn. Group only steps that must succeed together. "
+                            "Do not replay successful calls if a different call fails. Keep private fields out of prose.\n"
+                            + json.dumps(model_fields(play.state_fields, play.values), ensure_ascii=False))
             gameplay = public_panels([panel for panel in play.native_panels if isinstance(panel, (InventoryPanel, QuestPanel))],
                                      play.state_fields, play.values)
             if gameplay:
