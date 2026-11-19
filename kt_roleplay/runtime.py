@@ -47,7 +47,7 @@ from .lore_timing import LoreTiming
 from .mvu import MvuChange, MvuInit, apply_changes, inspect_initializers, is_initializer, public_options, public_values
 from .mvu_legacy import apply_literal_update, split_opening
 from .mvu_tool import ApplyMvuUpdate, UpdateMvu
-from .opening_page_library import OpeningPageIssue, OpeningPageRuntime, cached_opening_panel
+from .opening_page_library import CALLBACK_RUNTIME, OpeningPageIssue, OpeningPageRuntime, cached_opening_panel
 from .panels import ChoicePanel, InventoryPanel, NativePanel, QuestPanel, public_panels
 from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
 from .worldbook import read_worldbook
@@ -78,11 +78,14 @@ class Play(Arguments):
     enableCardScripts: bool = False
     enableOpeningModules: bool = False
     openingPageRuntime: OpeningPageRuntime | None = None
+    enableOpeningMvuRead: bool = False
 
     @model_validator(mode='after')
     def _opening_runtime_consent(self) -> 'Play':
         if self.openingPageRuntime is not None and not self.enableOpeningModules:
             raise ValueError('An opening-page runtime also needs explicit opening module permission')
+        if self.enableOpeningMvuRead and self.openingPageRuntime != CALLBACK_RUNTIME:
+            raise ValueError('Opening-page MVU reads require the tavern-page-callbacks-v1 runtime')
         return self
 
 
@@ -647,6 +650,10 @@ class RoleplayPlugin(BasePlugin):
                         panel['legacyMarker'] = legacy.marker
                         if latest := play.legacy_reply_web:
                             panel['legacyLatest'] = legacy_web_message(latest.turn, latest.text, latest.values, play.mvu_public)
+                        if legacy.mvu_read_enabled and any(
+                            panel[key]['data']['stat_data'] for key in ('legacyOpening', 'legacyLatest') if key in panel
+                        ):
+                            panel['legacyMvuRead'] = {'mode': 'kt-message-stat-data-v1'}
                     return panel
                 if args.get('panelScope') != self._web_panel_scope:
                     raise OwnerArgumentError('The card web panel session changed; open the panel again')
@@ -889,18 +896,21 @@ class RoleplayPlugin(BasePlugin):
                 web_panel, legacy_state, web_panel_issue = card.web_panel, None, None
                 if web_panel is None:
                     rule = next((row for row in card.legacy_web_rules if row.marker in opening), None)
-                    marker = None
+                    marker, mvu_read_enabled = None, False
                     if rule is not None:
                         web_panel, marker = rule.panel, rule.marker
                     elif (remote := card.legacy_remote_opening) is not None and remote.marker in opening:
                         web_panel, web_panel_issue = await to_thread(cached_opening_panel, library_dir(), choice.cardId, remote,
                                                                      allow_modules=choice.enableOpeningModules,
-                                                                     runtime=choice.openingPageRuntime)
+                                                                     runtime=choice.openingPageRuntime,
+                                                                     require_linked=choice.enableOpeningMvuRead)
                         check_opening_target()
                         marker = remote.marker
+                        mvu_read_enabled = choice.enableOpeningMvuRead
                     if web_panel is not None and marker is not None:
                         legacy_state = LegacyOpeningState(marker=marker, values={},
-                                                          mvu_status_adapter=has_mvu_status_adapter(marker, card.scripts))
+                                                          mvu_status_adapter=has_mvu_status_adapter(marker, card.scripts),
+                                                          mvu_read_enabled=mvu_read_enabled)
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player,
                                      greeting=expand(opening, card.fields.name, choice.player.name, ""),
                                      lore=lore, worldbook=book, worldbookRef=book_ref, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,

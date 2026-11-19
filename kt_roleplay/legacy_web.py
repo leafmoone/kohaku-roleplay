@@ -215,6 +215,7 @@ class LegacyOpeningState(BaseModel):
     marker: str
     values: dict[str, JsonValue]
     mvu_status_adapter: bool = False
+    mvu_read_enabled: bool = False
 
 
 def selected_message_values(values: dict[str, JsonValue], selected: list[str]) -> dict[str, JsonValue]:

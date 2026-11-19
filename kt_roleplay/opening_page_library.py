@@ -18,7 +18,7 @@ from .script_dependencies import ModuleReference, scan_modules
 OpeningPageIssue = Literal['entry_unconfirmed', 'entry_needs_resources', 'entry_unsupported']
 OpeningPageRuntime = Literal['vue-3.5.22', 'vue-3.5.22-lodash-4.18.1', 'vue-3.5.22-lodash-4.18.1-zod-4.6.7',
                              'tavern-page-callbacks-v1']
-_CALLBACK_RUNTIME = 'tavern-page-callbacks-v1'
+CALLBACK_RUNTIME = 'tavern-page-callbacks-v1'
 _LODASH_RUNTIME = 'vue-3.5.22-lodash-4.18.1'
 _ZOD_RUNTIME = 'vue-3.5.22-lodash-4.18.1-zod-4.6.7'
 _LODASH_BYTES = 96 * 1024
@@ -233,7 +233,8 @@ def _cached_page_bytes(directory: Path, card_id: str, url: str) -> bytes | None:
 
 def cached_opening_panel(directory: Path, card_id: str, declared: LegacyRemoteOpening, *,
                          allow_modules: bool = False,
-                         runtime: OpeningPageRuntime | None = None) -> tuple[WebPanel | None, OpeningPageIssue | None]:
+                         runtime: OpeningPageRuntime | None = None,
+                         require_linked: bool = False) -> tuple[WebPanel | None, OpeningPageIssue | None]:
     source = _cached_page_bytes(directory, card_id, declared.url)
     if source is None:
         return None, 'entry_unconfirmed'
@@ -251,7 +252,7 @@ def cached_opening_panel(directory: Path, card_id: str, declared: LegacyRemoteOp
         if allow_modules:
             return _cached_linked_opening_panel(directory, card_id, declared.title, html, runtime=runtime)
         return None, 'entry_needs_resources'
-    return WebPanel(title=declared.title, html=html), None
+    return (None, 'entry_unsupported') if require_linked else (WebPanel(title=declared.title, html=html), None)
 
 
 class OpeningPageDependencies(TypedDict):
@@ -440,17 +441,17 @@ Object.defineProperty(globalThis, "Vue", { value: vue });'''
         routes = {'kt:opening-prelude': len(sources) + 1, 'kt:author-entry': 1}
         shifted = [{name: index + 1 for name, index in scope.items()} for scope in edges]
         prelude_routes = {'kt:approved-vue': vue[0] + 1}
-        if runtime in (_LODASH_RUNTIME, _ZOD_RUNTIME, _CALLBACK_RUNTIME):
+        if runtime in (_LODASH_RUNTIME, _ZOD_RUNTIME, CALLBACK_RUNTIME):
             prelude = 'import lodash from "kt:installed-lodash";\n' + prelude + '''
 if (typeof lodash !== "function" || lodash.VERSION !== "4.18.1") {
     throw new Error("The installed Lodash runtime is not version 4.18.1");
 }
 Object.defineProperty(globalThis, "_", { value: lodash });'''
             prelude_routes['kt:installed-lodash'] = len(sources) + 2
-            if runtime in (_ZOD_RUNTIME, _CALLBACK_RUNTIME):
+            if runtime in (_ZOD_RUNTIME, CALLBACK_RUNTIME):
                 prelude_routes['kt:installed-zod-classic'] = -1  # The runner's fixed installed-library edge.
                 prelude = 'import zod from "kt:installed-zod-classic";\n' + prelude + '\nObject.defineProperty(globalThis, "z", { value: zod });'
-            if runtime == _CALLBACK_RUNTIME:
+            if runtime == CALLBACK_RUNTIME:
                 prelude += _CALLBACK_PRELUDE
             return [wrapper, *sources, prelude, _installed_lodash_module()], [routes, *shifted, prelude_routes, {}]
         return [wrapper, *sources, prelude], [routes, *shifted, prelude_routes]
@@ -505,8 +506,8 @@ def _cached_linked_opening_panel(directory: Path, card_id: str, title: str, html
         start, end, code = body
         # Only the generated artifact grows for installed runtime assets;
         # raw HTML and cache budgets do not change.
-        extra = _LODASH_BYTES if runtime in (_LODASH_RUNTIME, _ZOD_RUNTIME, _CALLBACK_RUNTIME) else 0
-        if runtime in (_ZOD_RUNTIME, _CALLBACK_RUNTIME):
+        extra = _LODASH_BYTES if runtime in (_LODASH_RUNTIME, _ZOD_RUNTIME, CALLBACK_RUNTIME) else 0
+        if runtime in (_ZOD_RUNTIME, CALLBACK_RUNTIME):
             extra += _ZOD_BYTES
         html_room = _MAX_HTML + extra - len((html[:start] + html[end:]).encode('utf-8'))
         linked = _bundle(*_opening_module_graph(code, saved, runtime=runtime), max_output_bytes=html_room)

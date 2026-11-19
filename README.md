@@ -168,7 +168,9 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 如作者页还使用 Zod classic 的 `object`、`record`、`string`、`enum` 和 `coerce`，可显式选择 `openingPageRuntime: "vue-3.5.22-lodash-4.18.1-zod-4.6.7"`，仍需 `enableOpeningModules: true`。它从同一 npm 锁定的 Zod 4.6.7 离线链接这些真实导出，只在作者框提供 `z` 和 `z.z`（不提供完整 Zod 命名空间）；MIT 许可保留在快照。缺少本地包时不挂面板，生成快照限额为 480 KiB，其他路径不变。
 
-实验性 `openingPageRuntime: "tavern-page-callbacks-v1"` 在相同 Vue／Lodash／Zod 版本与模块许可上增加两项作者页回调：`errorCatched(fn)` 保留函数结果，向本页控制台记录并原样抛回同步异常或 Promise 拒绝；`$(fn)` 只在本页 DOM 就绪后异步调用 `fn`，不提供选择器、加载、AJAX、父页面或宿主日志／toast 接口。生成快照上限仍为 480 KiB。以上选项均不提供完整 Tavern Helper、jQuery、MVU 就绪或变量写回。
+实验性 `openingPageRuntime: "tavern-page-callbacks-v1"` 在相同 Vue／Lodash／Zod 版本与模块许可上增加两项作者页回调：`errorCatched(fn)` 保留函数结果，向本页控制台记录并原样抛回同步异常或 Promise 拒绝；`$(fn)` 只在本页 DOM 就绪后异步调用 `fn`，不提供选择器、加载、AJAX、父页面或宿主日志／toast 接口。生成快照上限仍为 480 KiB。以上选项均不提供完整 Tavern Helper、jQuery 或变量写回。
+
+新局也可通过开局接口显式传 `enableOpeningMvuRead: true`，另须 `enableOpeningModules: true` 和 `openingPageRuntime: "tavern-page-callbacks-v1"`。这项许可只适用于所选开场实际使用已确认并离线链接的远程网页；可信宿主的 `card_web_panel` 回包只有在已有非空公开快照时才附 `legacyMvuRead: {mode: "kt-message-stat-data-v1"}`。它不是上游 MVU 引擎已启动的信号，不增加公开字段、历史楼层访问或任何变量写入权限。
 
 ### 酒馆原生面板
 
