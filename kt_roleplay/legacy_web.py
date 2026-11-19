@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 from kohakuterrarium.modules.output.base import BaseOutputModule
 from kohakuterrarium.modules.output.event import OutputEvent
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from .card_scripts import CardScript
 from .card_web import WebPanel, _MAX_HTML
@@ -210,12 +210,43 @@ def completed_legacy_message_anchor(reply: LegacyReplyState, events: list[dict])
     return None
 
 
+class OpeningCounterGrant(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    path: list[str] = Field(min_length=1, max_length=16)
+    minimum: int = Field(ge=-(2**53 - 1), le=2**53 - 1)
+    maximum: int = Field(ge=-(2**53 - 1), le=2**53 - 1)
+
+    @model_validator(mode='after')
+    def _counter_range(self) -> 'OpeningCounterGrant':
+        if self.minimum >= self.maximum or any(not part or len(part) > 160 for part in self.path):
+            raise ValueError('Choose an existing counter path and increasing integer bounds')
+        return self
+
+    def public_id(self) -> str:
+        return json.dumps(self.path, ensure_ascii=False)
+
+    def current(self, values: dict[str, JsonValue]) -> int | None:
+        rows = public_values(values, [self.public_id()])
+        value = rows[0]['value'] if rows else None
+        return value if type(value) is int and self.minimum <= value <= self.maximum else None
+
+
+class OpeningCounterWrite(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    messageId: int = Field(ge=0, le=0)
+    revision: int = Field(ge=0, le=2**53 - 1)
+    expected: int = Field(ge=-(2**53 - 1), le=2**53 - 1)
+    value: int = Field(ge=-(2**53 - 1), le=2**53 - 1)
+
+
 class LegacyOpeningState(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
     marker: str
     values: dict[str, JsonValue]
     mvu_status_adapter: bool = False
     mvu_read_enabled: bool = False
+    counter: OpeningCounterGrant | None = None
+    counter_revision: int = 0
 
 
 def selected_message_values(values: dict[str, JsonValue], selected: list[str]) -> dict[str, JsonValue]:

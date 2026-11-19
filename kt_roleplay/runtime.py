@@ -32,7 +32,8 @@ from .gameplay import Action, Actions, PlayActions, apply_actions, apply_field_c
 from .header_summary import MAX_HEADER_PINS, header_summary
 from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, LegacyWebRequest, configured_plugins, request_plugin
 from .legacy_web import (LEGACY_MESSAGE_EVENT_LIMIT, LegacyMessageAnchor, LegacyOpeningState, LegacyReplyCapture,
-                         LegacyReplyState, completed_legacy_message_anchor, has_mvu_status_adapter, legacy_web_message,
+                         LegacyReplyState, OpeningCounterGrant, OpeningCounterWrite, completed_legacy_message_anchor,
+                         has_mvu_status_adapter, legacy_web_message,
                          mvu_reply_has_body)
 from .novel import Outcome, SceneError, Story
 from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields
@@ -79,6 +80,7 @@ class Play(Arguments):
     enableOpeningModules: bool = False
     openingPageRuntime: OpeningPageRuntime | None = None
     enableOpeningMvuRead: bool = False
+    openingMvuCounter: OpeningCounterGrant | None = None
 
     @model_validator(mode='after')
     def _opening_runtime_consent(self) -> 'Play':
@@ -86,6 +88,8 @@ class Play(Arguments):
             raise ValueError('An opening-page runtime also needs explicit opening module permission')
         if self.enableOpeningMvuRead and self.openingPageRuntime != CALLBACK_RUNTIME:
             raise ValueError('Opening-page MVU reads require the tavern-page-callbacks-v1 runtime')
+        if self.openingMvuCounter is not None and not self.enableOpeningMvuRead:
+            raise ValueError('An opening counter requires explicit opening-page MVU read permission')
         return self
 
 
@@ -481,6 +485,18 @@ class RoleplayPlugin(BasePlugin):
         if self.mode != "tavern" or (record := self._record()) is None:
             raise SceneError("Bind a card in a tavern session before changing variables")
         play = TavernSession.model_validate(record)
+        settled = await self._prepare_mvu_update(play, record, update)
+        legacy = play.legacy_opening_web
+        if legacy and legacy.counter and play.mvu and settled.mvu and self._script_turn_index() == 0:
+            # Integer eligibility is stricter than Python's numeric equality (35 == 35.0).
+            old, new = play.mvu.values, settled.mvu.values
+            if old != new or legacy.counter.current(old) != legacy.counter.current(new):
+                opening = legacy.model_copy(update={'values': new, 'counter_revision': legacy.counter_revision + 1})
+                settled = settled.model_copy(update={'legacy_opening_web': opening})
+        self._save(settled.model_dump())
+        self.ui_emit('state', self.ui_state())
+
+    async def _prepare_mvu_update(self, play: TavernSession, record: dict, update: str | list[MvuChange]) -> TavernSession:
         if play.mvu is None or not play.mvu.values or (isinstance(update, str) and not play.mvu_legacy):
             raise SceneError("This tavern has no initialized variables for this update format")
         try:
@@ -501,8 +517,49 @@ class RoleplayPlugin(BasePlugin):
         except ValueError as exc:
             raise SceneError(str(exc)) from exc
         mvu = play.mvu.model_copy(update={"values": values})
-        self._save(play.model_copy(update={"mvu": mvu, 'script_state': state}).model_dump())
-        self.ui_emit("state", self.ui_state())
+        return play.model_copy(update={'mvu': mvu, 'script_state': state})
+
+    def _opening_counter_value(self, play: TavernSession) -> int | None:
+        legacy = play.legacy_opening_web
+        agent = self.binding.host_agent if self.binding else None
+        if (not agent or agent.is_processing or self._script_turn_index() != 0 or not play.openingSent
+                or not play.web_panel_ready or not play.mvu or not legacy or not legacy.mvu_read_enabled
+                or not legacy.counter or legacy.counter.public_id() not in play.mvu_public):
+            return None
+        return legacy.counter.current(play.mvu.values)
+
+    async def _write_opening_counter(self, requested: OpeningCounterWrite, token: str) -> dict:
+        binding = self.binding
+        if not binding or (store := binding.session_store) is None or (agent := binding.host_agent) is None:
+            raise OwnerArgumentError('The opening counter requires a persistent tavern session')
+
+        def same_session() -> bool:
+            return (self.binding is binding and binding.session_store is store and binding.host_agent is agent
+                    and token == self._web_panel_scope)
+
+        async with self._scripts.lock:
+            if not same_session() or not (record := self._record()):
+                raise OwnerArgumentError('The card web panel session changed; open the panel again')
+            play = TavernSession.model_validate(record)
+            legacy = play.legacy_opening_web
+            now = self._opening_counter_value(play)
+            if now is None or legacy is None or legacy.counter is None:
+                raise OwnerArgumentError('The opening counter is no longer writable')
+            if requested.revision != legacy.counter_revision or requested.expected != now:
+                raise OwnerArgumentError('The opening counter changed; read the current value again')
+            grant = legacy.counter
+            if abs(requested.value - now) != 1 or not grant.minimum <= requested.value <= grant.maximum:
+                raise OwnerArgumentError('The opening counter can only change by one step within its granted range')
+            change = MvuChange(path=grant.path, op='set', value=requested.value)
+            settled = await self._prepare_mvu_update(play, record, [change])
+            if (not same_session() or self._record() != record or self._opening_counter_value(play) != now
+                    or settled.mvu is None or grant.current(settled.mvu.values) != requested.value):
+                raise OwnerArgumentError('The opening counter could not be settled in the current game')
+            after = legacy.model_copy(update={'values': settled.mvu.values, 'counter_revision': legacy.counter_revision + 1})
+            self._save(settled.model_copy(update={'legacy_opening_web': after}).model_dump())
+            self.ui_emit('state', self.ui_state())
+            return {'revision': after.counter_revision,
+                    'data': legacy_web_message(0, play.greeting, after.values, settled.mvu_public)['data']}
 
     def story(self) -> Story:
         if not self.novel or self.mode != "novel":
@@ -636,7 +693,7 @@ class RoleplayPlugin(BasePlugin):
             if action == "cards" and self.mode in ("persona", "tavern"):
                 return cards_view(library_dir())
             if action in ('card_web_panel', 'card_web_state', 'card_web_gameplay', 'card_web_plugin_request',
-                          'card_web_message_anchor') and self.mode == 'tavern':
+                          'card_web_message_anchor', 'card_web_mvu_counter') and self.mode == 'tavern':
                 record = self._record()
                 play = TavernSession.model_validate(record) if record is not None else None
                 if play is None or play.web_panel is None or not play.web_panel_ready or not self._web_panel_scope:
@@ -648,6 +705,10 @@ class RoleplayPlugin(BasePlugin):
                     if legacy := play.legacy_opening_web:
                         panel['legacyOpening'] = legacy_web_message(0, play.greeting, legacy.values, play.mvu_public)
                         panel['legacyMarker'] = legacy.marker
+                        if self._opening_counter_value(play) is not None and play.mvu and legacy.counter:
+                            panel['legacyOpening'] = legacy_web_message(0, play.greeting, play.mvu.values, play.mvu_public)
+                            panel['legacyMvuCounter'] = {'messageId': 0, **legacy.counter.model_dump(),
+                                                         'revision': legacy.counter_revision}
                         if latest := play.legacy_reply_web:
                             panel['legacyLatest'] = legacy_web_message(latest.turn, latest.text, latest.values, play.mvu_public)
                         if legacy.mvu_read_enabled and any(
@@ -658,6 +719,8 @@ class RoleplayPlugin(BasePlugin):
                 if args.get('panelScope') != self._web_panel_scope:
                     raise OwnerArgumentError('The card web panel session changed; open the panel again')
                 payload = {key: value for key, value in args.items() if key != 'panelScope'}
+                if action == 'card_web_mvu_counter':
+                    return await self._write_opening_counter(OpeningCounterWrite.model_validate(payload), self._web_panel_scope)
                 if action == 'card_web_message_anchor':
                     message_id = payload.get('messageId')
                     if set(payload) != {'messageId'} or type(message_id) is not int or message_id < 1:
@@ -776,7 +839,11 @@ class RoleplayPlugin(BasePlugin):
                 ):
                     raise OwnerArgumentError("Choose existing variable paths only")
                 pins = [key for key in play.header_pins if not key.startswith("mvu:") or key[4:] in selection]
-                self._save(play.model_copy(update={"mvu_public": selection, "header_pins": pins}).model_dump())
+                legacy = play.legacy_opening_web
+                if legacy and legacy.counter and set(selection) != set(play.mvu_public):
+                    legacy = legacy.model_copy(update={'counter_revision': legacy.counter_revision + 1})
+                self._save(play.model_copy(update={'mvu_public': selection, 'header_pins': pins,
+                                                  'legacy_opening_web': legacy}).model_dump())
                 view = self.ui_state()
                 self.ui_emit("state", view)
                 return view
@@ -911,6 +978,10 @@ class RoleplayPlugin(BasePlugin):
                         legacy_state = LegacyOpeningState(marker=marker, values={},
                                                           mvu_status_adapter=has_mvu_status_adapter(marker, card.scripts),
                                                           mvu_read_enabled=mvu_read_enabled)
+                if counter := choice.openingMvuCounter:
+                    if not legacy_state or not legacy_state.mvu_read_enabled or not mvu or counter.current(mvu.values) is None:
+                        raise OwnerArgumentError('Choose an existing initialized integer in the linked opening for this counter')
+                    legacy_state = legacy_state.model_copy(update={'counter': counter})
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player,
                                      greeting=expand(opening, card.fields.name, choice.player.name, ""),
                                      lore=lore, worldbook=book, worldbookRef=book_ref, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
