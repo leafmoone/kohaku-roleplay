@@ -1,7 +1,7 @@
 name: kohaku-roleplay
 version: 0.5.0
 description: Tavern character cards and session-scoped roleplay for KohakuTerrarium.
-python_dependencies: ['regex>=2024.11.6']
+python_dependencies: ['regex>=2024.11.6', 'quickjs-ng>=0.18,<0.19']
 creatures:
   - name: rp_agent
 plugins:
@@ -18,5 +18,6 @@ ui:
   contributes:
     - {kind: settings, id: library, label: Roleplay Cards, owner: package, icon: i-carbon-user-avatar}
     - {kind: tab, id: studio, label: Roleplay Library, owner: package, icon: i-carbon-book}
+    - {kind: tab, id: worldbooks, label: Worldbook Library, owner: package, icon: i-carbon-notebook}
     - {kind: panel, id: roleplay, label: role, owner: 'plugin:roleplay', icon: i-carbon-theater, dock: true}
     - {kind: message-renderer, id: choices, label: Roleplay Choices, owner: 'plugin:roleplay', renderer: kt_roleplay.choices}

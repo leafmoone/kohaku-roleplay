@@ -6,6 +6,77 @@
 
 export const DEFAULT_MAX_CARD_BYTES = 12 * 1024 * 1024;
 export const DEFAULT_MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
+export const DEFAULT_MAX_WORLDBOOK_BYTES = 2 * 1024 * 1024;
+
+export function validateWorldbookFile(file, maxBytes = DEFAULT_MAX_WORLDBOOK_BYTES) {
+  if (!file || typeof file.size !== "number") {
+    return { ok: false, code: "size" };
+  }
+  const name = String(file.name || "").toLowerCase();
+  const mime = String(file.type || "").toLowerCase();
+  const isJson = name.endsWith(".json") || mime === "application/json" || mime === "text/json";
+  if (!isJson) {
+    return { ok: false, code: "type" };
+  }
+  if (file.size <= 0 || file.size > maxBytes) {
+    return { ok: false, code: "size" };
+  }
+  return { ok: true };
+}
+
+export function stripWorldbookExtension(filename) {
+  const raw = String(filename || "").trim();
+  const stripped = raw.toLowerCase().endsWith(".json") ? raw.slice(0, -5).trim() : raw;
+  return (stripped || "Worldbook").slice(0, 120);
+}
+
+export function normalizeWorldbookDiagnostics(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const totalEntries = Number(raw.totalEntries);
+  const supportedEntries = Number(raw.supportedEntries);
+  if (!Number.isFinite(totalEntries) || !Number.isFinite(supportedEntries)) return null;
+  const rawIssues = Array.isArray(raw.issues) ? raw.issues : [];
+  const issues = rawIssues
+    .filter((item) => item && typeof item === "object" && typeof item.code === "string" && item.code)
+    .map((item) => ({
+      code: item.code,
+      count: Math.max(0, Number(item.count) || 0),
+    }))
+    .filter((item) => item.count > 0);
+  const skippedEntries = Math.max(
+    0,
+    totalEntries - supportedEntries,
+    issues.reduce((sum, item) => sum + item.count, 0),
+  );
+  return {
+    totalEntries: Math.max(0, totalEntries),
+    supportedEntries: Math.max(0, supportedEntries),
+    skippedEntries,
+    issues,
+  };
+}
+
+export function normalizeWorldbookEntries(rawEntries) {
+  if (!Array.isArray(rawEntries)) return [];
+  return rawEntries.map((item, idx) => {
+    const src = item && typeof item === "object" ? item : {};
+    const index = Number.isInteger(src.index) ? src.index : idx;
+    const keys = Array.isArray(src.keys) ? src.keys.filter((k) => typeof k === "string" && k.trim()) : [];
+    const secondaryKeys = Array.isArray(src.secondaryKeys)
+      ? src.secondaryKeys.filter((k) => typeof k === "string" && k.trim())
+      : [];
+    return {
+      index,
+      name: typeof src.name === "string" ? src.name.trim() : "",
+      content: typeof src.content === "string" ? src.content : "",
+      keys,
+      secondaryKeys,
+      position: typeof src.position === "string" ? src.position : null,
+      enabled: Boolean(src.enabled),
+      issue: typeof src.issue === "string" && src.issue ? src.issue : null,
+    };
+  });
+}
 
 const STORY_OR_INSTRUCTION_LINE_RE =
   /(\{\{(char|user|original)\}\}|<\/?[a-z_]+>|^(system|instruction|rules?|scenario|example|dialogue|plot)\s*:|^\s*["“「*])/i;
