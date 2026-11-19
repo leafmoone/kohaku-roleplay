@@ -104,7 +104,7 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 受信任的宿主组件可在本局开场完成、玩家打开面板时调用 `card_web_panel` 取 `{title, html, panelScope}`。组件在读 `card_web_state` 或向 `card_web_gameplay` 提交 `{"actions": [...]}` 时带上同一 `panelScope`，仍由本局 owner 处理；切局误转发或重新挂载前的迟到请求会被拒绝。作用域标记不写存档，恢复后要重新打开面板。背包和任务沿用原生校验，状态及结算回包是 `{fields, panels, mvu}`，不返回会话历史、笔记或未公开变量。原 HTML 不可直接插入 KT 主页面；前端隔离容器未完成。请求已启用的外部插件走上文单独接口；这些后端接口不是整套 Tavern Helper。
 
-旧卡如果用仅显示、仅作用于助理文本的 `regex_scripts`，把开场中的一个字面标记替换为完整围栏 HTML，KT 可识别这类页面；不会运行脚本、通用正则替换或把 HTML 发给模型。显式 CHARX 网页优先。旧卡页面只读，`card_web_panel` 额外返回 `legacyMarker` 及 `legacyOpening`（开场消息编号 `0` 和发布当时的 `data.stat_data`，只含玩家当前选择公开的路径）；继续对话的当前值不会被冒充为开场值。其他历史楼层、`display_data` / `delta_data`、整个酒馆页面或虚拟浏览器 API 不在这个后端切片。
+旧卡如果用仅显示、仅作用于助理文本的 `regex_scripts`，把开场中的一个字面标记替换为完整围栏 HTML，KT 可识别这类页面；不会运行脚本、通用正则替换或把 HTML 发给模型。显式 CHARX 网页优先。旧卡页面只读，`card_web_panel` 额外返回 `legacyMarker` 及 `legacyOpening`（开场消息编号 `0` 和发布当时的 `data.stat_data`）。若后续一条已完成的助理回复含同一标记，还返回最近一份 `legacyLatest`（编号是本面板内的会话回合号，不是酒馆的任意楼层索引）。两份快照都只含玩家当前选择公开的路径；继续对话的当前值不会冒充当时值。流式片段、模型工具调用和回放不产生快照。其他历史楼层、`display_data` / `delta_data`、整个酒馆页面或虚拟浏览器 API 不在这个后端切片。
 
 ### 酒馆原生面板
 

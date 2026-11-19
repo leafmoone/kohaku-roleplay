@@ -31,7 +31,7 @@ from .gameplay_pack import GameplayPack, GameplayPackUnavailable, pack_settings,
 from .gameplay import Action, Actions, PlayActions, apply_actions, apply_field_changes
 from .header_summary import MAX_HEADER_PINS, header_summary
 from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, LegacyWebRequest, configured_plugins, request_plugin
-from .legacy_web import LegacyOpeningState, selected_opening_values
+from .legacy_web import LegacyOpeningState, LegacyReplyCapture, LegacyReplyState, legacy_web_message
 from .novel import Outcome, SceneError, Story
 from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields
 from .state_tool import SetCardState
@@ -124,6 +124,7 @@ class TavernSession(Arguments):
     web_panel: WebPanel | None = None
     web_panel_ready: bool = True
     legacy_opening_web: LegacyOpeningState | None = None
+    legacy_reply_web: LegacyReplyState | None = None
     scripts: list[CardScript] = Field(default_factory=list)
     script_state: SessionScripts = Field(default_factory=lambda: SessionScripts(clock="turn"))
 
@@ -168,6 +169,7 @@ class RoleplayPlugin(BasePlugin):
         self.binding: PluginContext | None = None
         self._scripts = ScriptSession(self)
         self._web_panel_scope = ''
+        self._legacy_reply_capture: LegacyReplyCapture | None = None
         self.report_watch = None
         self.can_open_scene = False
         self._committed_prose: str | None = None
@@ -177,6 +179,9 @@ class RoleplayPlugin(BasePlugin):
         self.binding = context
         self._web_panel_scope = uuid4().hex if self.mode == 'tavern' else ''
         agent = context.host_agent
+        if self.mode == 'tavern' and agent is not None:
+            self._legacy_reply_capture = LegacyReplyCapture(self._capture_legacy_reply)
+            agent.output_router.add_secondary(self._legacy_reply_capture)
         if self.mode != "novel" or agent is None:
             return
         original = agent._collect_and_push_feedback
@@ -295,7 +300,27 @@ class RoleplayPlugin(BasePlugin):
         state = upgrade_script_clock(play.script_state, turn - int(before_current))
         self._save(play.model_copy(update={"script_state": state}).model_dump())
 
+    def _capture_legacy_reply(self, text: str) -> None:
+        agent = self.binding.host_agent if self.binding else None
+        turn = self._script_turn_index()
+        if agent is None or not agent.is_processing or turn is None or turn == 0:
+            return
+        record = self._record()
+        marker = ((record or {}).get('legacy_opening_web') or {}).get('marker')
+        if not marker or marker not in text or not record.get('web_panel_ready', True):
+            return
+        play = TavernSession.model_validate(record)
+        reply = LegacyReplyState(turn=turn, text=text, values=play.mvu.values if play.mvu else {})
+        if reply != play.legacy_reply_web:
+            self._save(play.model_copy(update={'legacy_reply_web': reply}).model_dump())
+            self.ui_emit('state', self.ui_state())
+
     async def on_unload(self) -> None:
+        if self._legacy_reply_capture is not None:
+            self._legacy_reply_capture.detach()
+            if self.binding and self.binding.host_agent:
+                self.binding.host_agent.output_router.remove_secondary(self._legacy_reply_capture)
+            self._legacy_reply_capture = None
         self._web_panel_scope = ''
         self._unwatch_reports()
         if self._restore_feedback is not None:
@@ -501,6 +526,8 @@ class RoleplayPlugin(BasePlugin):
             view['webPanel'] = {'title': play.web_panel.title}
             if play.legacy_opening_web is not None:
                 view['webPanel']['source'] = 'legacyOpening'
+                if play.legacy_reply_web is not None:
+                    view['webPanel']['latestMessageId'] = play.legacy_reply_web.turn
         if play.scripts:
             host_ok = self._script_turn_index() is not None
             issues = play.script_state.issues if host_ok else {**play.script_state.issues, "$host": _SCRIPT_CLOCK_UNAVAILABLE}
@@ -564,10 +591,10 @@ class RoleplayPlugin(BasePlugin):
                         raise OwnerArgumentError('The card web panel does not take arguments')
                     panel = {**play.web_panel.model_dump(), 'panelScope': self._web_panel_scope}
                     if legacy := play.legacy_opening_web:
-                        panel['legacyOpening'] = {'message_id': 0, 'role': 'assistant', 'message': play.greeting,
-                                                  'is_hidden': False,
-                                                  'data': {'stat_data': selected_opening_values(legacy.values, play.mvu_public)}}
+                        panel['legacyOpening'] = legacy_web_message(0, play.greeting, legacy.values, play.mvu_public)
                         panel['legacyMarker'] = legacy.marker
+                        if latest := play.legacy_reply_web:
+                            panel['legacyLatest'] = legacy_web_message(latest.turn, latest.text, latest.values, play.mvu_public)
                     return panel
                 if args.get('panelScope') != self._web_panel_scope:
                     raise OwnerArgumentError('The card web panel session changed; open the panel again')
