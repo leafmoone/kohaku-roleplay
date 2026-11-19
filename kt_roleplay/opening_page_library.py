@@ -14,7 +14,15 @@ from .script_dependencies import ModuleReference, scan_modules
 OpeningPageIssue = Literal['entry_unconfirmed', 'entry_needs_resources', 'entry_unsupported']
 _RESOURCES = {'src', 'srcset', 'href', 'xlink:href', 'poster', 'action', 'formaction', 'data'}
 _CSS_REFERENCE = re.compile(r'@import\b|\burl\s*\(', re.I)
-_JS_TYPES = {'', 'module', 'text/javascript', 'application/javascript'}
+# The HTML script types include legacy JavaScript MIME type essences.
+_JS_TYPES = {
+    '', 'module', 'application/ecmascript', 'application/javascript',
+    'application/x-ecmascript', 'application/x-javascript', 'text/ecmascript',
+    'text/javascript', 'text/javascript1.0', 'text/javascript1.1',
+    'text/javascript1.2', 'text/javascript1.3', 'text/javascript1.4',
+    'text/javascript1.5', 'text/jscript', 'text/livescript',
+    'text/x-ecmascript', 'text/x-javascript',
+}
 _MAX_PAGE_REFERENCES = 32
 
 
@@ -62,11 +70,12 @@ class _EntryResources(HTMLParser):
             return
         if self.inline == 'style' and _CSS_REFERENCE.search(data):
             self.other_resources = self.needs_resources = True
-        elif self.inline == 'script' and data.strip() and not self.truncated:
+        elif self.inline == 'script' and data.strip():
             references, invalid, truncated = scan_modules(data)
             self.needs_resources |= bool(references)
             self.unsupported |= invalid
-            if self.preview:
+            # Cap the returned references without suppressing syntax checks of later blocks.
+            if self.preview and not self.truncated:
                 for ref in references:
                     if ref in self.references:
                         continue
