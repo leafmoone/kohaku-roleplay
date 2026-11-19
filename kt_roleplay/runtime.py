@@ -399,14 +399,17 @@ class RoleplayPlugin(BasePlugin):
             raise SceneError("This tavern has no initialized variables for this update format")
         try:
             scripts = approved(play.scripts, play.script_state) if self._script_turn_index() is not None else []
-            # Known non-listeners (e.g. buttons) never pay for a worker. A script that has
-            # never loaded has its own visible diagnostic, not an implicit rule on every update.
-            scripts = [s for s in scripts if play.script_state.mvu_listeners.get(s.id, s.id not in play.script_state.issues)]
+            # An old diagnostic is not proof of absent listeners: re-probe unknown registrations.
+            scripts = [s for s in scripts if play.script_state.mvu_listeners.get(s.id, True)]
             if scripts:
                 wire = update if isinstance(update, str) else [change.model_dump() for change in update]
-                values = await to_thread(run_mvu_update, scripts, play.mvu.values, wire)
+                values, notices = await to_thread(run_mvu_update, scripts, play.mvu.values, wire)
                 if self._record() != record:
                     raise ValueError('The tavern changed during the MVU update; try again')
+                inactive = {**play.script_state.inactive_events, **notices}
+                play = play.model_copy(update={'script_state': play.script_state.model_copy(update={
+                    'inactive_events': {key: names for key, names in inactive.items() if names}
+                })})
             elif isinstance(update, str):
                 values = apply_literal_update(play.mvu.values, update)
             else:
@@ -489,7 +492,7 @@ class RoleplayPlugin(BasePlugin):
                                    "canEnable": host_ok and bool(play.mvu and play.mvu.values and any(
                                        s.enabled and (s.issue is None or s.issue in RETRYABLE_MODULE_ISSUES) for s in play.scripts)),
                                    "enabled": host_ok and bool(approved(play.scripts, play.script_state)),
-                                   "issues": issues}
+                                   "issues": issues, 'inactiveEvents': play.script_state.inactive_events}
         selected = chosen_key(play.portrait_rules, play.state_fields, play.values)
         if selected is not None:
             view.update(hasPortrait=True, portraitKey=selected)
@@ -555,7 +558,7 @@ class RoleplayPlugin(BasePlugin):
                 consent = script_fingerprint(play.scripts) if args["enabled"] else None
                 permission = play.script_state.model_copy(update={'approved': consent})
                 if consent != play.script_state.approved:
-                    permission = permission.model_copy(update={'mvu_listeners': {}, 'issues': {}})
+                    permission = permission.model_copy(update={'mvu_listeners': {}, 'issues': {}, 'inactive_events': {}})
                 self._save(play.model_copy(update={'script_state': permission}).model_dump())
                 view = self.ui_state()
                 self.ui_emit("state", view)
@@ -661,6 +664,7 @@ class RoleplayPlugin(BasePlugin):
                     ]})
                 opening = greetings[choice.greetingIndex]
                 legacy_mvu = False
+                block = None
                 if mvu is not None and mvu.values:
                     prose, block = split_opening(opening)
                     directions = [card.fields.mes_example, card.fields.system_prompt, card.fields.post_history_instructions]
@@ -671,10 +675,6 @@ class RoleplayPlugin(BasePlugin):
                     )
                     if block is not None:
                         opening = prose
-                        try:
-                            mvu = mvu.model_copy(update={"values": apply_literal_update(mvu.values, block)})
-                        except (ValueError, RecursionError):
-                            mvu = mvu.model_copy(update={"issues": {**mvu.issues, "invalid_opening_update": 1}})
                 script_host_ok = self._script_turn_index() is not None
                 scripts = card.scripts
                 enable_requested = (choice.enableCardScripts if "enableCardScripts" in choice.model_fields_set
@@ -691,6 +691,18 @@ class RoleplayPlugin(BasePlugin):
                     raise _no_compatible_scripts(scripts)
                 enable_scripts = enable_requested and script_host_ok and script_card_ok
                 script_state = SessionScripts(clock="turn", approved=script_fingerprint(scripts) if enable_scripts else None)
+                if block is not None:
+                    try:
+                        if enable_scripts:
+                            values, notices = await to_thread(run_mvu_update, approved(scripts, script_state), mvu.values, block)
+                            script_state = script_state.model_copy(update={'inactive_events': {k: v for k, v in notices.items() if v}})
+                        else:
+                            values = apply_literal_update(mvu.values, block)
+                        mvu = mvu.model_copy(update={'values': values})
+                    except (ValueError, RecursionError):
+                        mvu = mvu.model_copy(update={'issues': {**mvu.issues, 'invalid_opening_update': 1}})
+                    if self._record() is not None or (agent is not None and agent.is_processing):
+                        raise OwnerArgumentError('The session changed before its opening could be set')
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player,
                                      greeting=expand(opening, card.fields.name, choice.player.name, ""),
                                      lore=lore, worldbook=book, worldbookRef=book_ref, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,

@@ -13,8 +13,10 @@ _BRIDGE = r"""
   const parse = JSON.parse, stringify = JSON.stringify, MissingGlobal = ReferenceError;
   const clone = v => parse(stringify(v));
   const phases = Object.freeze({CHAT_CHANGED:'opening', MESSAGE_SENT:'user', MESSAGE_RECEIVED:'assistant', KT_TOOL:'tool'});
-  const mvuEvents = Object.freeze({VARIABLE_UPDATE_STARTED:'mag_variable_update_started',
+  const mvuEvents = Object.freeze({VARIABLE_UPDATE_STARTED:'mag_variable_update_started', COMMAND_PARSED:'mag_command_parsed',
     SINGLE_VARIABLE_UPDATED:'mag_variable_updated', VARIABLE_UPDATE_ENDED:'mag_variable_update_ended'});
+  const deferred = new Set(['mag_variable_initialized','mag_before_message_update']);
+  const inactive = new Set();
   const allowed = new Set([...Object.values(phases), ...Object.values(mvuEvents), ...buttons.map(n => 'button:' + n)]);
   const handlers = [];
   let state = values, firing = false, result;
@@ -30,12 +32,24 @@ _BRIDGE = r"""
   };
   Object.defineProperties(globalThis, {
     tavern_events: {value: phases},
-    Mvu: {value: Object.freeze({events:mvuEvents})},
+    Mvu: {value: Object.freeze({events:Object.freeze({...mvuEvents, VARIABLE_INITIALIZED:'mag_variable_initialized',
+      BEFORE_MESSAGE_UPDATE:'mag_before_message_update'})})},
     eventOn: {value: (name, fn) => {
-      if (firing || !allowed.has(name) || typeof fn !== 'function' || handlers.length >= 32)
+      if (firing || typeof fn !== 'function' || handlers.length >= 32)
         throw new Error('Unsupported card script event registration');
+      if (deferred.has(name)) { inactive.add(name); return; }
+      if (!allowed.has(name)) throw new Error('Unsupported card script event registration');
       handlers.push([name, fn]);
     }},
+    _: {configurable:true, writable:true, value: Object.freeze({remove(list, predicate) {
+      if (!Array.isArray(list) || typeof predicate !== 'function') throw new Error('Expected an array and a predicate');
+      const indexes = [], removed = [];
+      for (let i = 0, length = list.length; i < length; i++) {
+        if (predicate(list[i], i, list)) { indexes.push(i); removed.push(list[i]); }
+      }
+      for (let i = indexes.length - 1; i >= 0; i--) list.splice(indexes[i], 1);
+      return removed;
+    }})},
     getButtonEvent: {value: n => {
       if (typeof n !== 'string' || !buttons.includes(n)) throw new Error('Unknown card script button');
       return 'button:' + n;
@@ -70,26 +84,30 @@ _BRIDGE = r"""
           handled = true;
           await fn(clone(args));
         }
-        result = stringify({status:'ok', handled, values:state, listensMvu:handlers.some(([n]) => Object.values(mvuEvents).includes(n))});
+        result = stringify({status:'ok', handled, values:state, inactive:[...inactive], listensMvu:handlers.some(([n]) => Object.values(mvuEvents).includes(n))});
       } catch (error) {
         result = stringify({status: error instanceof MissingGlobal ? 'unsupported_api' : 'script_error'});
       }
     },
     hasMvu: name => handlers.some(([key]) => key === name),
+    inactiveEvents: () => stringify([...inactive]),
     mvu: async (name, rawState, rawDetail) => {
       firing = true;
       result = undefined;
       state = parse(rawState);
       const detail = parse(rawDetail);
       const frame = {get stat_data() {return state;}, set stat_data(next) {state = next;}};
+      if (name === mvuEvents.VARIABLE_UPDATE_ENDED) frame.display_data = detail.display;
+      const commands = detail?.commands;
       try {
         for (const [key, fn] of handlers) {
           if (key !== name) continue;
           if (name === mvuEvents.VARIABLE_UPDATE_STARTED) await fn(frame);
+          else if (name === mvuEvents.COMMAND_PARSED) await fn(frame, commands, detail.text);
           else if (name === mvuEvents.SINGLE_VARIABLE_UPDATED) await fn(state, detail.path, clone(detail.old), clone(detail.next));
           else if (name === mvuEvents.VARIABLE_UPDATE_ENDED) await fn(frame, {stat_data:clone(detail.before)});
         }
-        result = stringify({status:'ok', values:state});
+        result = stringify({status:'ok', values:state, commands, display:detail?.forwardDisplay ? frame.display_data : undefined});
       } catch (error) {
         result = stringify({status:error instanceof MissingGlobal ? 'unsupported_api' : 'script_error'});
       } finally { firing = false; }
@@ -137,10 +155,10 @@ def load_context(payload, deadline):
     return context
 
 
-def read_result(context, deadline):
+def read_result(context, deadline, limit=_MAX_RESULT):
     drain(context, deadline)
     result = context.eval('__kt_card_worker.result();')
-    if not isinstance(result, str) or len(result.encode('utf-8')) > _MAX_RESULT:
+    if not isinstance(result, str) or len(result.encode('utf-8')) > limit:
         raise VmFailure('script_limit')
     return json.loads(result)
 

@@ -3,6 +3,7 @@
 import json
 import re
 from ast import literal_eval
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from pydantic import JsonValue
@@ -26,7 +27,8 @@ _UNCHECKED = object()
 @dataclass(frozen=True)
 class LiteralUpdate:
     change: MvuChange
-    expected: object = _UNCHECKED
+    expected: object
+    command: dict[str, JsonValue]
 
 
 def split_opening(text: str) -> tuple[str, str | None]:
@@ -75,32 +77,50 @@ def read_update(body: str) -> list[LiteralUpdate]:
         match = _COMMAND.match(line)
         if match is None or len(result) >= _MAX_COMMANDS:
             raise ValueError("Only literal _.set and _.add commands are supported")
-        path, pos = _literal(line, match.end())
+        start = match.end()
+        path, pos = _literal(line, start)
+        tokens = [line[start:pos].strip()]
         if not isinstance(path, str):
             raise ValueError("MVU requires a literal path")
         args = []
         while comma := re.match(r"\s*,", line[pos:]):
-            value, pos = _literal(line, pos + comma.end())
+            start = pos + comma.end()
+            value, pos = _literal(line, start)
+            tokens.append(line[start:pos].strip())
             args.append(value)
             if len(args) > 2:
                 raise ValueError("Too many MVU command arguments")
         op = match[1]
         if not _TERMINATOR.fullmatch(line, pos) or len(args) not in ((1, 2) if op == "set" else (1,)):
             raise ValueError("Invalid MVU command arguments or trailing code")
+        tail, _, reason = line[pos:].partition('//')
+        command = {'type': op, 'full_match': (line[:pos] + tail).strip(), 'args': tokens, 'reason': reason.strip()}
         result.append(LiteralUpdate(MvuChange(path=_legacy_path(path), op=op, value=args[-1]),
-                                    args[0] if len(args) == 2 else _UNCHECKED))
+                                    args[0] if len(args) == 2 else _UNCHECKED, command))
     if not result:
         raise ValueError("MVU update block is empty")
     return result
 
 
-def apply_literal_update(values: dict[str, JsonValue], text: str, *, observe: MvuObserver | None = None) -> dict[str, JsonValue]:
+CommandFilter = Callable[[dict[str, JsonValue], list[dict[str, JsonValue]], str], tuple[dict[str, JsonValue], list[int]]]
+
+
+def apply_literal_update(values: dict[str, JsonValue], text: str, *, observe: MvuObserver | None = None,
+                         command_filter: CommandFilter | None = None) -> dict[str, JsonValue]:
     body = _body(text)
     if patch := _PATCH.fullmatch(body):
+        if command_filter is not None:
+            raise ValueError('A command-parsed listener requires literal _.set/_.add commands, not JSON Patch')
         return apply_json_patch(values, patch[1], _MAX_COMMANDS, observe=observe)
     updates = read_update(body)
+    if command_filter is not None:
+        values, keep = command_filter(values, [item.command for item in updates], text)
+        updates = [updates[i] for i in keep]
     expected = {tuple(item.change.path): item.expected for item in updates if item.expected is not _UNCHECKED}
     def guard(path, current):
         if path in expected and not json_equal(current, expected[path]):
             raise ValueError('MVU update has a stale expected value')
-    return apply_changes(values, [item.change for item in updates], observe=observe, guard=guard)
+    meta = values.get('$meta')
+    strict_set = isinstance(meta, dict) and meta.get('strictSet') is True
+    return apply_changes(values, [item.change for item in updates], observe=observe, guard=guard,
+                         legacy_descriptions=not strict_set)

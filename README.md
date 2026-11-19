@@ -65,7 +65,11 @@
 
 可识别 `TavernHelper_scripts` 与 `tavern_helper.scripts` 的本地脚本声明；导入不会执行脚本。新酒馆默认运行卡片已启用、具备可用 `[InitVar]` 的兼容脚本。关闭默认选项只影响之后新开的酒馆，既有局保留自己的开关状态。宿主若没有可用的持久会话回合号，脚本不能启用，已有许可也不会开放按钮或 Tool。新局启用后可运行一次开场事件；在已经开局的会话中开启不重放开场。玩家输入及最终回复按 KT 对话回合去重；工具续轮不重跑同一阶段，历史改写或分叉不会回滚脚本已写入的变量。支持 `eventOn`、`getVariables`、`replaceVariables`、`updateVariablesWith` 和已声明按钮的 `getButtonEvent`；`rp_run_card_script` 只接收本局登记的 ID 和 JSON 参数。只把当前会话的 MVU 副本交给有时间和内存上限的独立 JS 进程，变量更新整批校验。不会给脚本提供文件、网络、浏览器 DOM、其他会话或宿主 Tool；完整 Tavern Helper、EJS 和斜杠命令链仍不支持。此模式适合确认来源的卡，不等同于操作系统级沙箱或原样运行所有卡。
 
-两个 MVU 更新工具支持 `Mvu.events.VARIABLE_UPDATE_STARTED`、`SINGLE_VARIABLE_UPDATED`、`VARIABLE_UPDATE_ENDED`（以及对应的 `mag_variable_*` 事件名）。一次调用先传 `{stat_data}`，每次写入后传 `(stat_data, 路径, 旧值, 新值)`，最后传 `(当前帧, 更新前的帧)`。监听器可修改已声明的值；修改会参与下一步校验，不触发递归事件。更新或已登记监听器失败时不保存半成品。开场初始化、按钮及脚本自身写入不是更新工具调用。只提供这些数据和事件，不冒充完整 MVU/Zod、`display_data` 或 `delta_data`。
+旧卡常把值保存为 `[标量, 说明文字]`。字面量 `_.set('路径', 新标量)` 在同类型时只改第 0 项，说明不变；带旧值的写法也只比较该标量。监听器收到原路径和新旧标量，而不是 `路径.0`。根 `$meta.strictSet: true` 时不作这个解释。原生 typed 更新、JSON Pointer 和显式整数组替换仍按实际存储类型处理。
+
+启用脚本时，一次 MVU 更新依次触发 `Mvu.events.VARIABLE_UPDATE_STARTED`、`COMMAND_PARSED`（如有监听）、每次写入的 `SINGLE_VARIABLE_UPDATED` 和 `VARIABLE_UPDATE_ENDED`。parsed 回调收到 `(当前帧, 命令列表, 更新块文本)`，支持筛除命令和 `_.remove(列表, 判断函数)`；不接受新增、改写或重排命令。typed 调用没有原文，有 parsed 监听时会提供由其参数生成的规范字面量文本；不能无损表示的路径会拒绝。有 parsed 监听的卡目前须使用 `_.set` / `_.add` 而非 JSON Patch，不会跳过监听器直接写入。
+
+逐项回调收到 `(stat_data, 路径, 旧值, 新值)`，结束回调收到 `(当前帧, 更新前的帧)`。结束帧的 `display_data` 是本次更新的临时显示副本，可传给后面的结束监听器，但不写入 MVU 状态、不替代前端。已有路径的 `stat_data` 修改会参与下一步校验，不递归派发事件；失败不保存半成品。带尾部更新块的开场也按此规则结算一次，按钮及脚本自身写入不自动重放更新事件。`mag_variable_initialized`、`mag_before_message_update` 的注册不会挡住其他已支持回调，但当前不触发，会在本局 `cardScripts.inactiveEvents` 列明。这里不是完整的 MVU、Lodash 或 Zod。
 
 若依赖预览注明 `external_mvu_zod_schema`，表示该段导入了 MVU Zod 的 `registerMvuSchema` 助手，而不是表示其约束已在 KT 生效。即使模块已缓存，也不自动注入全局 Zod、模拟楼层变量或翻译 `coerce`、`union`、`tuple` 等动态规则。KT 原生卡要表达初值、数值范围和有限选项，可用 `state` 的 `initial`、`min` / `max`、`enum` / `options`；原生状态在写入时校验，不需要脚本。没有此提示也不代表脚本的所有 API 都受支持。
 

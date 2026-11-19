@@ -157,22 +157,32 @@ MvuObserver = Callable[[dict[str, JsonValue], list[str], JsonValue, JsonValue], 
 
 
 def apply_changes(values: dict[str, JsonValue], changes: list[MvuChange], *, observe: MvuObserver | None = None,
-                  guard: Callable[[tuple[str, ...], JsonValue], None] | None = None) -> dict[str, JsonValue]:
+                  guard: Callable[[tuple[str, ...], JsonValue], None] | None = None,
+                  legacy_descriptions: bool = False) -> dict[str, JsonValue]:
     """Validate a batch before replacing the current session snapshot."""
     updated = deepcopy(values)
     seen = set()
     for change in changes:
         path = tuple(change.path)
-        if path in seen:
-            raise ValueError("Repeated MVU variable in one batch")
-        seen.add(path)
         parent = updated
         for part in path[:-1]:
             parent = parent[existing_key(parent, part)]
         key = existing_key(parent, path[-1])
-        if _kind(change.value) != _kind(parent[key]):
-            raise ValueError("Unknown or incompatible MVU variable")
+        slot = parent[key]
+        # Legacy scalar _.set addresses the value of a [value, description] pair.
+        # Explicit array replacements and JSON Pointer / typed writes retain their old meaning.
+        described = (legacy_descriptions and change.op == 'set' and isinstance(slot, list) and len(slot) == 2
+                     and isinstance(slot[1], str) and not isinstance(slot[0], (dict, list))
+                     and not isinstance(change.value, (dict, list)))
+        target = (*path, '0') if described else path
+        if path in seen or target in seen:
+            raise ValueError('Repeated MVU variable in one batch')
+        seen.update((path, target))
+        if described:
+            parent, key = slot, 0
         original = parent[key]
+        if _kind(change.value) != _kind(original):
+            raise ValueError('Unknown or incompatible MVU variable')
         if guard is not None:
             guard(path, original)
         if change.op == "add" and type(original) in (int, float) and type(change.value) in (int, float):

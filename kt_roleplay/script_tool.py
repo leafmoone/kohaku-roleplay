@@ -55,21 +55,33 @@ def _worker_result(data: dict, *, mvu: bool = False) -> dict:
     return result
 
 
-def run_mvu_update(scripts, values: dict[str, JsonValue], update) -> dict[str, JsonValue]:
+def _inactive(names: object) -> list[str]:
+    if not isinstance(names, list) or len(names) > 2 or any(
+        name not in ('mag_variable_initialized', 'mag_before_message_update') for name in names
+    ):
+        raise CardScriptError('Invalid event diagnostics from card script worker')
+    return names
+
+
+def run_mvu_update(scripts, values: dict[str, JsonValue], update) -> tuple[dict[str, JsonValue], dict[str, list[str]]]:
     bundle = [{'id': s.id, 'code': s.content, 'buttons': s.buttons, 'module': s.module} for s in scripts]
     result = _worker_result({'scripts': bundle, 'values': values, 'update': update}, mvu=True)
     if not isinstance(result.get('values'), dict):
         raise CardScriptError('Invalid response from MVU worker')
-    return validate_updated_values(result['values'])
+    inactive = result.get('inactive')
+    if not isinstance(inactive, dict) or set(inactive) != {s.id for s in scripts}:
+        raise CardScriptError('Invalid event diagnostics from MVU worker')
+    return validate_updated_values(result['values']), {k: _inactive(names) for k, names in inactive.items()}
 
 
 async def run_card_script(script: CardScript, values: dict[str, JsonValue], event: str,
-                          args: JsonValue = None) -> tuple[bool, dict[str, JsonValue], bool]:
+                          args: JsonValue = None) -> tuple[bool, dict[str, JsonValue], bool, list[str]]:
     try:
         result = await asyncio.to_thread(_run_worker, script, values, event, args)
         if type(result.get("handled")) is not bool or type(result.get('listensMvu')) is not bool or "values" not in result:
             raise CardScriptError("Invalid response from card script worker")
-        return result["handled"], validated_script_values(values, result["values"]), result['listensMvu']
+        inactive = _inactive(result.get('inactive'))
+        return result['handled'], validated_script_values(values, result['values']), result['listensMvu'], inactive
     except (RecursionError, UnicodeError) as exc:
         raise CardScriptError("Card script returned invalid variable data") from exc
 

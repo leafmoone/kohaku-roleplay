@@ -16,6 +16,7 @@ class SessionScripts(BaseModel):
     seen: dict[Literal["opening", "user", "assistant"], int] = Field(default_factory=dict)
     issues: dict[str, str] = Field(default_factory=dict)
     mvu_listeners: dict[str, bool] = Field(default_factory=dict)
+    inactive_events: dict[str, list[str]] = Field(default_factory=dict)
 
 
 def upgrade_script_clock(state: SessionScripts, last_turn: int) -> SessionScripts:
@@ -65,10 +66,15 @@ class ScriptSession:
             values = play.mvu.values
             errors = dict(old.issues)
             listeners = dict(old.mvu_listeners)
+            inactive = dict(old.inactive_events)
             handled = False
             for script in scripts:
                 try:
-                    used, values, listeners[script.id] = await run_card_script(script, values, event, args)
+                    used, values, listeners[script.id], skipped = await run_card_script(script, values, event, args)
+                    if skipped:
+                        inactive[script.id] = skipped
+                    else:
+                        inactive.pop(script.id, None)
                     errors.pop(script.id, None)
                     handled = handled or used
                 except ValueError as exc:
@@ -84,6 +90,6 @@ class ScriptSession:
             seen = {**old.seen, event: sequence} if sequence is not None else old.seen
             self.host._save(play.model_copy(update={
                 "mvu": play.mvu.model_copy(update={"values": values}),
-                "script_state": old.model_copy(update={"seen": seen, "issues": errors, "mvu_listeners": listeners}),
+                "script_state": old.model_copy(update={"seen": seen, "issues": errors, "mvu_listeners": listeners, 'inactive_events': inactive}),
             }).model_dump())
             self.host.ui_emit("state", self.host.ui_state())
