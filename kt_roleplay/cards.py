@@ -18,6 +18,7 @@ from .panels import NativePanel, read_panels
 from .portraits import PortraitAsset, PortraitRule, read_portraits
 from .scene_media import read_scene_media
 from .worldbook import read_worldbook
+from .card_scripts import CardScript, inspect_card_scripts
 
 MAX_CARD_BYTES = 12 * 1024 * 1024
 PNG_HEADER = b"\x89PNG\r\n\x1a\n"
@@ -72,6 +73,7 @@ class ParsedCard(BaseModel):
     scene_media_rules: list[PortraitRule] = Field(default_factory=list)
     native_panels: list[NativePanel] = Field(default_factory=list)
     invalid_native_panels: int = 0
+    scripts: list[CardScript] = Field(default_factory=list)
 
     @cached_property
     def lore(self) -> LoreBook | None:
@@ -160,7 +162,7 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
     extensions = data.get("extensions")
     definitions = decode_fields(extensions)
     if extensions and (not isinstance(extensions, dict) or set(extensions) - {"kohaku-roleplay"}):
-        warnings.append("Card extensions are retained in the original; external scripts are not executed.")
+        warnings.append("Card extensions are retained in the original; script compatibility is opt-in.")
     if data.get("assets") and fmt != "charx":
         warnings.append("V3 assets outside a CHARX archive are retained, not automatically fetched.")
     namespace = extensions.get("kohaku-roleplay", {}) if isinstance(extensions, dict) else {}
@@ -171,7 +173,8 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
         portrait = base64.b64decode(cover.data)
     card = ParsedCard(version=version, fields=fields, book=book, warnings=warnings,
                       portrait=portrait, state_fields=definitions, portraits=portraits, source_format=fmt,
-                      native_panels=panels, invalid_native_panels=bad_panels)
+                      native_panels=panels, invalid_native_panels=bad_panels,
+                      scripts=inspect_card_scripts(extensions))
     if book is not None:
         _ = card.lore
     return card

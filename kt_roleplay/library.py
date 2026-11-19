@@ -45,12 +45,15 @@ def list_cards(directory: Path) -> list[CardSummary]:
         return [CardSummary(id=k, name=n, version=v, hasPortrait=bool(p)) for k,n,v,p in db.execute("SELECT id,name,version,portrait IS NOT NULL FROM cards ORDER BY name COLLATE NOCASE,id")]
 
 
-def get_card(directory: Path, key: str) -> ParsedCard:
+def get_card(directory: Path, key: str, *, with_scripts: bool = False) -> ParsedCard:
     with _open(directory) as db:
         row = db.execute("SELECT card,portrait,substr(original,1,8) FROM cards WHERE id=?", (key,)).fetchone()
     if row is None:
         raise CardNotFound(key)
     card = ParsedCard.model_validate_json(row[0])
+    if with_scripts and "scripts" not in card.model_fields_set:
+        # Older imports retain the original card, so no re-import or mutation is necessary.
+        card = card.model_copy(update={"scripts": parse_card(original_card(directory, key)).scripts})
     return card.model_copy(update={"portrait": row[1], "source_format": card.source_format or card_format(row[2])})
 
 

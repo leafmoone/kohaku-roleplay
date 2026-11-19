@@ -13,7 +13,7 @@ def cards_view(directory: Path) -> dict:
 
 
 def card_detail(directory: Path, key: str) -> dict:
-    card = get_card(directory, key)
+    card = get_card(directory, key, with_scripts=True)
     book = card.lore
     summary = None
     if book is not None:
@@ -22,7 +22,8 @@ def card_detail(directory: Path, key: str) -> dict:
                    "tokenBudget": book.token_budget, "diagnostics": diagnostics}
     return {"id": key, "version": card.version, "fields": card.fields.model_dump(), "warnings": card.warnings,
             "hasPortrait": card.portrait is not None, "hasWorldbook": book is not None, "bookSummary": summary,
-            "sourceFormat": card.source_format, "media": media_summary(card.media), "mediaIssues": card.media_issues}
+            "sourceFormat": card.source_format, "media": media_summary(card.media), "mediaIssues": card.media_issues,
+            "cardScripts": [item.view() for item in card.scripts]}
 
 
 def media_summary(assets: list[CardMedia]) -> list[dict[str, str]]:

@@ -120,10 +120,14 @@ def remove_worldbook(directory: Path, key: str) -> None:
             raise WorldbookNotFound(key)
 
 
-def default_worldbook(directory: Path, card_id: str) -> str | None:
+def default_worldbook_for_play(directory: Path, card_id: str) -> tuple[WorldbookReference | None, LoreBook | None]:
     with _open(directory) as db:
-        row = db.execute("SELECT worldbook_id FROM card_worldbooks WHERE card_id=?", (card_id,)).fetchone()
-    return row[0] if row else None
+        row = db.execute("SELECT w.id,w.name,w.original FROM card_worldbooks d JOIN worldbooks w ON w.id=d.worldbook_id WHERE d.card_id=?",
+                         (card_id,)).fetchone()
+    if row is None:
+        return None, None
+    key, name, original = row
+    return WorldbookReference(id=key, name=name), read_worldbook(_document(original))
 
 
 def set_default_worldbook(directory: Path, card_id: str, book_id: str | None) -> None:

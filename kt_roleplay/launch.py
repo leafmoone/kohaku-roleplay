@@ -12,7 +12,8 @@ from kohakuterrarium.terrarium import LocalTerrariumService, TerrariumService
 
 from .cast import CastMember, cast_recipe
 from .library import CardNotFound, get_card
-from .runtime import Arguments, Play, RoleplayPlugin, library_dir
+from .runtime import Arguments, Play, RoleplayPlugin, library_dir, resolve_tavern_worldbook
+from .worldbook_library import WorldbookNotFound
 from .portraits import rules_for
 
 
@@ -43,6 +44,10 @@ async def start_tavern(body: Play, host: StudioDep) -> dict[str, str]:
     card = _library_card(body.cardId)
     if body.greetingIndex > len(card.fields.alternate_greetings):
         raise HTTPException(422, "Opening index is out of range")
+    try:
+        book = resolve_tavern_worldbook(body)
+    except WorldbookNotFound as exc:
+        raise HTTPException(404, "The selected worldbook is no longer in the library") from exc
     session = await host.sessions.start_creature("@kohaku-roleplay/creatures/rp_agent", name=card.fields.name)
     sid = session.session_id
     try:
@@ -50,7 +55,7 @@ async def start_tavern(body: Play, host: StudioDep) -> dict[str, str]:
         plugin = entry.agent.plugins.get_plugin("roleplay")
         if not isinstance(plugin, RoleplayPlugin) or plugin.mode != "tavern":
             raise OwnerArgumentError("The selected creature did not load the tavern plugin")
-        await plugin.ui_call("start_tavern", body.model_dump(exclude_unset=True), None)
+        await plugin.ui_call("start_tavern", body.model_dump(exclude_unset=True), None, prepared_worldbook=book)
         return {"sessionId": sid, "creatureId": entry.creature_id}
     except Exception:
         await host.sessions.end(sid)

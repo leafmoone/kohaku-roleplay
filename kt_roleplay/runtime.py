@@ -13,17 +13,19 @@ from kohakuterrarium.modules.tool.base import ToolContext
 from kohakuterrarium.terrarium.tools.context import resolve_group_context, resolve_group_target
 from pydantic import TypeAdapter
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 from kohakuterrarium.core.conversation.elide import TOOL_FEEDBACK_KIND, estimate_message_tokens
 from kohakuterrarium.llm.message import UserMessage
 from kohakuterrarium.modules.plugin.base import BasePlugin, PluginBlockError, PluginContext, ToolVisibility
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError, OwnerForbiddenError
 from kohakuterrarium.utils.config_dir import config_dir
 
+from .card_scripts import CardScript, script_fingerprint
 from .cards import CardError, CardFields
 from .charx import CardMedia
 from .cast import NovelBinding
 from .gameplay import Action, PlayActions, apply_actions
+from .header_summary import MAX_HEADER_PINS, header_summary
 from .novel import Outcome, SceneError, Story
 from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields, update_values
 from .state_tool import SetCardState
@@ -39,8 +41,10 @@ from .mvu_tool import ApplyMvuUpdate, UpdateMvu
 from .panels import ChoicePanel, InventoryPanel, NativePanel, QuestPanel, public_panels
 from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
 from .worldbook import read_worldbook
-from .worldbook_library import WorldbookNotFound, WorldbookReference, default_worldbook, snapshot_detail, worldbook_for_play
+from .worldbook_library import WorldbookNotFound, WorldbookReference, default_worldbook_for_play, snapshot_detail, worldbook_for_play
 from .scene_tools import ingest_report
+from .script_session import ScriptSession, SessionScripts, approved
+from .script_tool import CardScriptError, RunCardScript
 from .recovery import resume_scene
 
 
@@ -58,6 +62,7 @@ class Play(Arguments):
     player: Player
     greetingIndex: int = Field(ge=0)
     worldbookId: str | None = Field(default=None, min_length=1)
+    enableCardScripts: bool = False
 
 
 class Notes(Arguments):
@@ -95,12 +100,24 @@ class TavernSession(Arguments):
     invalid_native_panels: int = 0
     mvu: MvuInit | None = None
     mvu_public: list[str] = Field(default_factory=list)
+    header_pins: list[str] = Field(default_factory=list)
     mvu_legacy: bool = False
     lore_activation: dict[Literal["lore", "worldbook"], dict[str, int]] = Field(default_factory=dict)
+    scripts: list[CardScript] = Field(default_factory=list)
+    script_state: SessionScripts = Field(default_factory=SessionScripts)
 
 
 def library_dir() -> Path:
     return config_dir() / "kohaku-roleplay"
+
+
+WorldbookSnapshot = tuple[WorldbookReference | None, LoreBook | None]
+
+
+def resolve_tavern_worldbook(choice: Play) -> WorldbookSnapshot:
+    if "worldbookId" not in choice.model_fields_set:
+        return default_worldbook_for_play(library_dir(), choice.cardId)
+    return worldbook_for_play(library_dir(), choice.worldbookId) if choice.worldbookId is not None else (None, None)
 
 
 def _text(message: dict[str, object]) -> str:
@@ -128,6 +145,7 @@ class RoleplayPlugin(BasePlugin):
         self.mode = TypeAdapter(Literal["persona", "tavern", "novel", "npc"]).validate_python(mode)
         self.novel = NovelBinding(self.mode == "npc") if self.mode in ("novel", "npc") else None
         self.binding: PluginContext | None = None
+        self._scripts = ScriptSession(self)
         self.report_watch = None
         self.can_open_scene = False
         self._committed_prose: str | None = None
@@ -258,6 +276,10 @@ class RoleplayPlugin(BasePlugin):
                     allowed.add("rp_apply_mvu_update")
             if record and any(p.get("type") in ("inventory", "quest") for p in record.get("native_panels", [])):
                 allowed.add("rp_apply_gameplay")
+            if record and (record.get("script_state") or {}).get("approved") and (record.get("mvu") or {}).get("values"):
+                play = TavernSession.model_validate(record)
+                if approved(play.scripts, play.script_state):
+                    allowed.add("rp_run_card_script")
             return ToolVisibility(allowed_tools=frozenset(allowed), allowed_subagents=frozenset())
         if self.novel is None:
             return None
@@ -287,8 +309,16 @@ class RoleplayPlugin(BasePlugin):
 
     def contribute_tools(self):
         if self.mode == "tavern":
-            return [SetCardState(self), UpdateMvu(self), ApplyMvuUpdate(self), PlayActions(self)]
+            return [SetCardState(self), UpdateMvu(self), ApplyMvuUpdate(self), PlayActions(self), RunCardScript(self)]
         return self.novel.tools(self) if self.novel else []
+
+    def script_record(self) -> tuple[dict, TavernSession]:
+        if self.mode != "tavern" or (record := self._record()) is None:
+            raise CardScriptError("Card scripts are only available in an active tavern")
+        return record, TavernSession.model_validate(record)
+
+    async def invoke_card_script(self, script_id: str, args: JsonValue) -> None:
+        await self._scripts.fire("tool", script_id=script_id, args=args)
 
     def apply_card_changes(self, changes: list[FieldUpdate]) -> None:
         if self.mode != "tavern" or self._record() is None:
@@ -394,6 +424,11 @@ class RoleplayPlugin(BasePlugin):
                 "cardLoreDiagnostics": play.lore.diagnostics() if play.lore else None,
                 "lore": self.binding.get_state("loreView") if self.binding else None,
                 "media": media_summary(play.media), "mediaIssues": play.media_issues}
+        if play.scripts:
+            view["cardScripts"] = {"entries": [s.view() for s in play.scripts],
+                                   "canEnable": bool(play.mvu and play.mvu.values and any(s.enabled and not s.issue for s in play.scripts)),
+                                   "enabled": bool(approved(play.scripts, play.script_state)),
+                                   "issues": play.script_state.issues}
         selected = chosen_key(play.portrait_rules, play.state_fields, play.values)
         if selected is not None:
             view.update(hasPortrait=True, portraitKey=selected)
@@ -411,9 +446,11 @@ class RoleplayPlugin(BasePlugin):
                            "invalidOpeningUpdates": play.mvu.issues.get("invalid_opening_update", 0),
                            "options": public_options(play.mvu.values), "selected": play.mvu_public,
                            "values": public_values(play.mvu.values, play.mvu_public)}
+        view["headerSummary"] = header_summary(view, play.header_pins)
         return view
 
-    async def ui_call(self, action: str, args: dict[str, object], context) -> dict[str, object] | None:
+    async def ui_call(self, action: str, args: dict[str, object], context, *,
+                      prepared_worldbook: WorldbookSnapshot | None = None) -> dict[str, object] | None:
         if context is not None and context.multi_user:
             raise OwnerForbiddenError("Roleplay currently supports single-user KT hosts only")
         try:
@@ -434,6 +471,39 @@ class RoleplayPlugin(BasePlugin):
                     return snapshot_detail(play.card.name, play.lore) if play.lore is not None else None
                 name = play.worldbookRef["name"] if play.worldbookRef else ""
                 return snapshot_detail(name, play.worldbook) if play.worldbook is not None else None
+            if action == "set_card_scripts" and self.mode == "tavern" and (record := self._record()) is not None:
+                if set(args) != {"enabled"} or type(args["enabled"]) is not bool:
+                    raise OwnerArgumentError("Expected an explicit script enable or disable choice")
+                play = TavernSession.model_validate(record)
+                if args["enabled"] and (not play.mvu or not play.mvu.values or not any(s.enabled and not s.issue for s in play.scripts)):
+                    raise OwnerArgumentError("This tavern has no compatible scripts and initialized variables")
+                consent = script_fingerprint(play.scripts) if args["enabled"] else None
+                self._save(play.model_copy(update={"script_state": play.script_state.model_copy(update={"approved": consent})}).model_dump())
+                view = self.ui_state()
+                self.ui_emit("state", view)
+                return view
+            if action == "invoke_script_button" and self.mode == "tavern" and self._record() is not None:
+                script_id, button = args.get("scriptId"), args.get("button")
+                if set(args) != {"scriptId", "button"} or not isinstance(script_id, str) or not isinstance(button, str):
+                    raise OwnerArgumentError("Expected a script id and a declared button")
+                agent = self.binding.host_agent if self.binding else None
+                if agent and agent.is_processing:
+                    raise OwnerArgumentError("Wait for the tavern to finish responding before using a script button")
+                await self._scripts.fire("button:" + button, script_id=script_id)
+                return self.ui_state()
+            if action == "set_header_pins" and self.mode == "tavern" and (record := self._record()) is not None:
+                pins = args.get("ids")
+                if (set(args) != {"ids"} or not isinstance(pins, list) or len(pins) > MAX_HEADER_PINS
+                        or any(not isinstance(key, str) for key in pins) or len(set(pins)) != len(pins)):
+                    raise OwnerArgumentError("Choose up to eight different public summary items")
+                view = self.ui_state()
+                if not set(pins).issubset(item["id"] for item in view["headerSummary"]["options"]):
+                    raise OwnerArgumentError("Only current public summary items can be pinned")
+                play = TavernSession.model_validate(record)
+                self._save(play.model_copy(update={"header_pins": pins}).model_dump())
+                view = self.ui_state()
+                self.ui_emit("state", view)
+                return view
             if action == "set_mvu_public" and self.mode == "tavern" and (record := self._record()) is not None:
                 selection = MvuSelection.model_validate(args).ids
                 play = TavernSession.model_validate(record)
@@ -441,7 +511,8 @@ class RoleplayPlugin(BasePlugin):
                     item["id"] for item in public_options(play.mvu.values)
                 ):
                     raise OwnerArgumentError("Choose existing variable paths only")
-                self._save(play.model_copy(update={"mvu_public": selection}).model_dump())
+                pins = [key for key in play.header_pins if not key.startswith("mvu:") or key[4:] in selection]
+                self._save(play.model_copy(update={"mvu_public": selection, "header_pins": pins}).model_dump())
                 view = self.ui_state()
                 self.ui_emit("state", view)
                 return view
@@ -491,12 +562,11 @@ class RoleplayPlugin(BasePlugin):
                 if agent is not None and agent.is_processing:
                     raise OwnerArgumentError("Wait for the session to become idle before setting its opening")
                 choice = Play.model_validate(args)
-                card = get_card(library_dir(), choice.cardId)
+                card = get_card(library_dir(), choice.cardId, with_scripts=True)
                 greetings = [card.fields.first_mes, *card.fields.alternate_greetings]
                 if choice.greetingIndex >= len(greetings):
                     raise OwnerArgumentError("Opening index is out of range")
-                book_id = choice.worldbookId if "worldbookId" in choice.model_fields_set else default_worldbook(library_dir(), choice.cardId)
-                book_ref, book = worldbook_for_play(library_dir(), book_id) if book_id is not None else (None, None)
+                book_ref, book = prepared_worldbook if prepared_worldbook is not None else resolve_tavern_worldbook(choice)
                 lore = card.lore
                 mvu = inspect_initializers(card.book)
                 if mvu is not None and lore is not None:
@@ -520,14 +590,20 @@ class RoleplayPlugin(BasePlugin):
                             mvu = mvu.model_copy(update={"values": apply_literal_update(mvu.values, block)})
                         except (ValueError, RecursionError):
                             mvu = mvu.model_copy(update={"issues": {**mvu.issues, "invalid_opening_update": 1}})
+                if choice.enableCardScripts and (not mvu or not mvu.values or not any(s.enabled and not s.issue for s in card.scripts)):
+                    raise OwnerArgumentError("This card has no compatible scripts and initialized variables")
+                script_state = SessionScripts(approved=script_fingerprint(card.scripts) if choice.enableCardScripts else None)
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player,
                                      greeting=expand(opening, card.fields.name, choice.player.name, ""),
                                      lore=lore, worldbook=book, worldbookRef=book_ref, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
                                      portrait_rules=rules_for(card.portraits), state_fields=card.state_fields,
                                      media=card.media, media_issues=card.media_issues,
                                      scene_media_rules=card.scene_media_rules, native_panels=card.native_panels,
-                                     invalid_native_panels=card.invalid_native_panels, mvu=mvu, mvu_legacy=legacy_mvu)
+                                     invalid_native_panels=card.invalid_native_panels, mvu=mvu, mvu_legacy=legacy_mvu,
+                                     scripts=card.scripts, script_state=script_state)
                 self._save(play.model_dump())
+                if choice.enableCardScripts:
+                    await self._scripts.fire("opening", sequence=0)
                 if play.greeting:
                     await self.publish_opening(play.greeting)
                     latest = TavernSession.model_validate(self._record())
@@ -552,7 +628,7 @@ class RoleplayPlugin(BasePlugin):
                 self._save(existing.model_copy(update=Notes.model_validate(args).model_dump()).model_dump())
             else:
                 raise OwnerArgumentError(f"Action {action!r} is not available in the current {self.mode} session")
-        except (ValidationError, CardError, CardNotFound, WorldbookNotFound, SceneError) as exc:
+        except (ValidationError, CardError, CardNotFound, WorldbookNotFound, CardScriptError, SceneError) as exc:
             raise OwnerArgumentError(f"Invalid roleplay request: {exc}") from exc
         view = self.ui_state()
         self.ui_emit("state", view)
@@ -589,7 +665,28 @@ class RoleplayPlugin(BasePlugin):
         await self.binding.emit(OutputEvent(type="text", content=text))
         await self.binding.emit(OutputEvent(type="assistant_message", payload={"message": message.to_dict()}))
 
+    def _script_controller(self):
+        record = self._record() if self.mode == "tavern" else None
+        if record and (record.get("script_state") or {}).get("approved") and self.binding:
+            return self.binding.controller
+        return None
+
+    async def post_llm_call(self, messages: list[dict], response: str, usage: dict, **kwargs: object) -> None:
+        controller = self._script_controller()
+        if controller is None or not response.strip():
+            return
+        message = controller._completed_assistant_message
+        history = controller.conversation.get_messages()
+        if message is not None and history and history[-1] is message and not message.tool_calls:
+            await self._scripts.fire("assistant", sequence=len(history), args={"text": response[:900]})
+
     async def pre_llm_call(self, messages: list[dict], **kwargs: object) -> list[dict] | None:
+        if (controller := self._script_controller()) is not None:
+            history = controller.conversation.get_messages()
+            if history:
+                message = history[-1]
+                if message.role == "user" and (message.metadata or {}).get("kind") != TOOL_FEEDBACK_KIND:
+                    await self._scripts.fire("user", sequence=len(history), args={"text": message.get_text_content()[:900]})
         record = self._record()
         if self.novel:
             content = self.novel.prompt(self.binding)
@@ -648,6 +745,10 @@ class RoleplayPlugin(BasePlugin):
                             "their values into prose.\n" + json.dumps({"mvu_variables": play.mvu.values,
                                                                        "mvu_displayed_paths": [json.loads(key) for key in play.mvu_public]},
                                                                       ensure_ascii=False))
+            if play.script_state.approved:
+                script_choices = [{"id": script.id, "name": script.name} for script in approved(play.scripts, play.script_state)]
+                if script_choices:
+                    content += "\nOnly use rp_run_card_script for a justified action with a registered ID from this list:\n" + json.dumps(script_choices, ensure_ascii=False)
             if play.mvu_legacy:
                 content += "\nIf the card requests a literal <UpdateVariable> block, call rp_apply_mvu_update instead of printing the block. Do not apply the same change through both update tools."
             if books and self.binding:
