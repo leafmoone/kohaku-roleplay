@@ -37,6 +37,16 @@ _BRIDGE = r"""
       if (typeof n !== 'string' || !buttons.includes(n)) throw new Error('Unknown card script button');
       return 'button:' + n;
     }},
+    getChatMessages: {value: (range, options) => {
+      if (range !== -1 && range !== '-1') throw new Error('Only the current chat message (-1) is available');
+      if (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options) ||
+          Object.keys(options).some(key => key !== 'role') ||
+          (options.role !== undefined && !['all', 'user', 'assistant'].includes(options.role))))
+        throw new Error('Only a user or assistant role filter is available');
+      if (!firing || (event !== 'user' && event !== 'assistant') || typeof args?.text !== 'string' ||
+          (options?.role && options.role !== 'all' && options.role !== event)) return [];
+      return [{role: event, message: args.text, is_hidden: false}];
+    }},
     getVariables: {value: get},
     replaceVariables: {value: set},
     updateVariablesWith: {value: (fn, opts) => {

@@ -39,7 +39,8 @@ def _run_worker(script: CardScript, values: dict[str, JsonValue], event: str, ar
     data = {"values": values, "event": event, "args": args, "buttons": script.buttons,
             "code": script.content, "module": script.module}
     try:
-        if len(json.dumps(args, ensure_ascii=True, allow_nan=False).encode("ascii")) > 4096:
+        # User/reply text is already bounded in characters by the host, before JSON escaping.
+        if event == "tool" and len(json.dumps(args, ensure_ascii=True, allow_nan=False).encode("ascii")) > 4096:
             raise CardScriptError("Card script arguments are too large")
         payload = json.dumps(data, ensure_ascii=True, allow_nan=False).encode("ascii")
         worker = Path(__file__).with_name("script_vm.py").resolve()
