@@ -7,6 +7,7 @@ from .charx import CardMedia, read_charx_image
 from .errors import CardError
 from .library import get_card, list_cards, original_card
 from .module_library import saved_modules
+from .opening_page_library import opening_page_snapshot
 from .script_dependencies import script_dependencies
 
 
@@ -27,6 +28,8 @@ def card_detail(directory: Path, key: str) -> dict:
             'webPanel': {'title': card.web_panel.title} if card.web_panel else None,
             **({'legacyOpeningPanels': [{'title': rule.panel.title, 'marker': rule.marker} for rule in card.legacy_web_rules]}
                if card.legacy_web_rules else {}),
+            **({'remoteOpeningPage': {**page.model_dump(), 'snapshot': opening_page_snapshot(directory, key)}}
+               if (page := card.legacy_remote_opening) else {}),
             "hasPortrait": card.portrait is not None, "hasWorldbook": book is not None, "bookSummary": summary,
             "sourceFormat": card.source_format, "media": media_summary(card.media), "mediaIssues": card.media_issues,
             "cardScripts": [item.view() for item in card.scripts],

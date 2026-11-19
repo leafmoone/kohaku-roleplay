@@ -15,7 +15,7 @@ from .card_web import WebPanel, read_web_panel
 from .charx import CardMedia, inspect_charx_media, is_charx, open_charx, read_charx_card
 from .errors import CardError
 from .gameplay_pack import GameplayPack
-from .legacy_web import LegacyWebRule, opening_web_rules
+from .legacy_web import LegacyRemoteOpening, LegacyWebRule, opening_web_rules
 from .lore import LoreBook
 from .panels import NativePanel, read_panels
 from .portraits import PortraitAsset, PortraitRule, read_portraits
@@ -80,6 +80,7 @@ class ParsedCard(BaseModel):
     gameplay_pack: GameplayPack | None = None
     web_panel: WebPanel | None = None
     legacy_web_rules: list[LegacyWebRule] = Field(default_factory=list)
+    legacy_remote_opening: LegacyRemoteOpening | None = None
 
     @cached_property
     def lore(self) -> LoreBook | None:
@@ -201,11 +202,12 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
     if cover is not None:
         portrait = base64.b64decode(cover.data)
     openings = [fields.first_mes, *fields.alternate_greetings]
-    legacy_web = opening_web_rules(extensions, openings, warnings)
+    legacy_web, remote_opening = opening_web_rules(extensions, openings, warnings)
     card = ParsedCard(version=version, fields=fields, book=book, warnings=warnings,
                       portrait=portrait, state_fields=definitions, portraits=portraits, source_format=fmt,
                       native_panels=panels, invalid_native_panels=bad_panels,
-                      scripts=inspect_card_scripts(extensions), gameplay_pack=pack, legacy_web_rules=legacy_web)
+                      scripts=inspect_card_scripts(extensions), gameplay_pack=pack, legacy_web_rules=legacy_web,
+                      legacy_remote_opening=remote_opening)
     if book is not None:
         _ = card.lore
     return card

@@ -129,7 +129,9 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 旧卡如果用仅显示、仅作用于助理文本的 `regex_scripts`，把开场中的一个字面标记替换为完整围栏 HTML，KT 可识别这类页面；不会运行脚本、通用正则替换或把 HTML 发给模型。显式 CHARX 网页优先。旧卡页面只读，`card_web_panel` 额外返回 `legacyMarker` 及 `legacyOpening`（开场消息编号 `0` 和发布当时的 `data.stat_data`）。若后续一条已完成的助理回复含同一标记，还返回最近一份 `legacyLatest`（编号是本面板内的会话回合号，不是酒馆的任意楼层索引）。对声明了可识别的 MagVarUpdate `beta` 模块与 `<StatusPlaceHolderImpl/>` 页面的新酒馆，若已开启兼容脚本且 MVU 已初始化，则参照[上游状态栏触发规则](https://github.com/MagicalAstrogy/MagVarUpdate/blob/d03b7dc8a6ebf9bd611c7e2dc91f3b35462deebc/src/function/update_variables.ts#L1672-L1768)，完整回复无需由模型输出该标记也可更新页面快照，即使变量未改变。KT 只保存快照和原回复，不把标记加进会话正文、不下载或执行上游模块；其他卡仍要求显式标记。两份快照都只含玩家当前选择公开的路径；继续对话的当前值不会冒充当时值。流式片段、模型工具调用和回放不产生快照。其他历史楼层、`display_data` / `delta_data`、整个酒馆页面或虚拟浏览器 API 不在这个后端切片。
 
-对于用 `$('body').load(...)` 加载外部 HTTPS 网页的旧开场，导入时识别到这种作者声明，卡片详情会明确标记该页面不受支持。原卡照常保留；KT 不执行加载代码、不请求外部 HTML，也不把静态脚本模块的下载许可用于网页。
+对于用 `$('body').load(...)` 加载外部 HTTPS 网页的旧开场，导入时识别到这种作者声明，卡片详情会明确标记尚不能打开该页面。导入、预览和开局都不执行加载代码、不请求外部 HTML，也不把静态脚本模块的下载许可用于网页。
+
+目录 owner 的 `preview_card_dependencies` 可列出一个符合条件的 `remoteOpeningPage`（`title`、`marker`、`url`），不会下载。只有单独明确确认，才可通过 `confirm_card_opening_page` 传入已入库的 `id` 和完全一致的 `url`，取得 `{openingPage: {url, size}}`。来源限公网 HTTPS 443，路径不得含 `.`／`..` 路径段，不跟重定向；响应限无压缩的 UTF-8 `text/html`，最多 256 KiB。副本按卡保存，详情的 `remoteOpeningPage.snapshot` 可检查是否保存；再次确认已保存的入口直接返回同一份副本。它不改原卡，不确认或下载页面引用的其他资源，也不挂载作者网页。此处仅是后端入口缓存，没有卡库确认控件或远程网页实玩支持。此前已入库且未识别此声明的原件需重新导入才有这份元数据。
 
 ### 酒馆原生面板
 

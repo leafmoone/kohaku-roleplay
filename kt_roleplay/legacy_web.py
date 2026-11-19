@@ -11,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 
 from .card_scripts import CardScript
 from .card_web import WebPanel, _MAX_HTML
+from .errors import CardError
+from .module_download import opening_html_target
 from .mvu import public_values
 from .script_dependencies import script_dependencies
 
@@ -34,25 +36,33 @@ class LegacyWebRule(BaseModel):
     panel: WebPanel
 
 
-def _is_remote_body_loader(html: str) -> bool:
+class LegacyRemoteOpening(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    marker: str
+    title: str
+    url: str
+
+
+def _remote_body_loader_url(html: str) -> str | None:
     match = _REMOTE_BODY_LOAD.fullmatch(html.strip())
     if match is None:
-        return False
+        return None
+    url = match['url']
     try:
-        return bool(urlsplit(match['url']).hostname)
+        return url if urlsplit(url).hostname else None
     except ValueError:
-        return False
+        return None
 
 
-def opening_web_rules(extensions: object, openings: list[str], warnings: list[str]) -> list[LegacyWebRule]:
-    """Find self-contained opening pages; diagnose a literal remote body loader without running it."""
+def opening_web_rules(extensions: object, openings: list[str], warnings: list[str]) -> tuple[list[LegacyWebRule], LegacyRemoteOpening | None]:
+    """Find self-contained opening pages and one declared external source; never load it here."""
     rules = extensions.get('regex_scripts') if isinstance(extensions, dict) else None
     matches: list[LegacyWebRule] = []
+    remote = None
     if not isinstance(rules, list):
-        return matches
-    found_remote = _REMOTE_PAGE_WARNING in warnings
+        return matches, remote
     for rule in rules:
-        if len(matches) >= 4 and found_remote:
+        if len(matches) >= 4 and remote is not None:
             break
         if (not isinstance(rule, dict) or rule.get('disabled') or rule.get('markdownOnly') is not True
                 or rule.get('promptOnly') or rule.get('placement') != [2] or rule.get('trimStrings')
@@ -76,9 +86,15 @@ def opening_web_rules(extensions: object, openings: list[str], warnings: list[st
             continue
         html = match['html']
         if not _DOCUMENT.match(html.lstrip()) or not html.rstrip().lower().endswith('</html>'):
-            if not found_remote and _is_remote_body_loader(html):
-                warnings.append(_REMOTE_PAGE_WARNING)
-                found_remote = True
+            if remote is None and (url := _remote_body_loader_url(html)) is not None:
+                if _REMOTE_PAGE_WARNING not in warnings:
+                    warnings.append(_REMOTE_PAGE_WARNING)
+                try:
+                    opening_html_target(url)
+                    name.encode('utf-8')
+                except (CardError, UnicodeEncodeError):
+                    continue
+                remote = LegacyRemoteOpening(marker=marker, title=name.strip(), url=url)
             continue
         if len(matches) >= 4:
             continue
@@ -89,7 +105,7 @@ def opening_web_rules(extensions: object, openings: list[str], warnings: list[st
         except UnicodeEncodeError:
             continue
         matches.append(LegacyWebRule(marker=marker, panel=WebPanel(title=name.strip(), html=html)))
-    return matches
+    return matches, remote
 
 
 def has_mvu_status_adapter(marker: str, scripts: list[CardScript]) -> bool:

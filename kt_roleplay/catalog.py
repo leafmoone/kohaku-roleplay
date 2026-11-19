@@ -15,6 +15,7 @@ from .library import (CardNotFound, card_scripts_default, import_card, list_card
                       original_card, remove_card, set_card_scripts_default)
 from .library_view import card_detail, media_view, portrait_view
 from .module_library import MAX_CARD_MODULES, snapshot_modules
+from .opening_page_library import snapshot_opening_page
 from .portrait_library import PortraitCopy, portrait_draft, save_portraits_copy
 from .runtime import library_dir
 from .script_dependencies import script_dependencies
@@ -52,7 +53,8 @@ def _card_upload(args: dict[str, object]) -> bytes:
 
 def _preview_card_dependencies(args: dict[str, object]) -> dict:
     card = parse_card(_card_upload(args))
-    return {"name": card.fields.name, "scripts": script_dependencies(card.scripts)}
+    return {"name": card.fields.name, "scripts": script_dependencies(card.scripts),
+            **({"remoteOpeningPage": page.model_dump()} if (page := card.legacy_remote_opening) else {})}
 
 
 class CardCatalog(UIOwnerMixin):
@@ -117,6 +119,12 @@ class CardCatalog(UIOwnerMixin):
                     raise OwnerArgumentError("Confirm the card and up to six literal HTTPS module sources")
                 modules = await asyncio.to_thread(snapshot_modules, directory, _id(args), urls)
                 return {"modules": modules}
+            if action == "confirm_card_opening_page":
+                url = args.get("url")
+                if set(args) != {"id", "url"} or not isinstance(url, str) or not 0 < len(url) <= 2048:
+                    raise OwnerArgumentError("Confirm the card and its exact external opening page URL")
+                page = await asyncio.to_thread(snapshot_opening_page, directory, _id(args), url)
+                return {"openingPage": page}
             if action == "import":
                 card = await asyncio.to_thread(import_card, directory, _card_upload(args))
                 self.ui_emit("state", await self.ui_state(context))
