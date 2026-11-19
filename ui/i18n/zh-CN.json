@@ -298,6 +298,8 @@
   "worldbookConfirmImportBtn": "确认入库",
   "worldbookCancelPreviewBtn": "放弃预览",
   "worldbookImportedToast": "世界书已入库。",
+  "worldbookImportedRefreshFailed": "世界书「{name}」已入库，但列表刷新失败。",
+  "worldbookRetryRefreshBtn": "重试刷新列表",
   "worldbookRemovedToast": "已从世界书库移除。",
   "worldbookRemoveBtn": "移除世界书",
   "worldbookRemoveConfirm": "确定从世界书库移除「{name}」？进行中的会话仍保留当前快照。",

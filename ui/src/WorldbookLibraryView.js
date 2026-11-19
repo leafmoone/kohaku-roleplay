@@ -1,15 +1,19 @@
 import { computed, ref, watch } from "vue";
 import {
   ActionButton,
+  confirm,
   notify,
+  openTab,
   useOwner,
 } from "@kohakuterrarium/ui-sdk";
 
 import {
   DEFAULT_MAX_WORLDBOOK_BYTES,
+  base64ToUint8Array,
   normalizeWorldbookDiagnostics,
   normalizeWorldbookEntries,
   readFileAsBase64,
+  sanitizeDownloadFilename,
   stripWorldbookExtension,
   validateWorldbookFile,
 } from "./helpers.js";
@@ -47,8 +51,11 @@ export const WorldbookLibraryView = {
     const detail = ref(null);
     const detailLoading = ref(false);
     const detailError = ref("");
+    const detailReloadTick = ref(0);
     const busy = ref(false);
+    const exporting = ref(false);
     const actionError = ref("");
+    const pendingImportedBook = ref(null);
 
     const previewDraft = ref(null);
     const previewName = ref("");
@@ -56,6 +63,9 @@ export const WorldbookLibraryView = {
     const entryQuery = ref("");
     const entryFilter = ref("all");
     const selectedEntryIndex = ref(null);
+
+    let detailSeq = 0;
+    let previewSeq = 0;
 
     const state = computed(() => owner.state.value || {});
     const maxWorldbookBytes = computed(
@@ -104,7 +114,9 @@ export const WorldbookLibraryView = {
         if (mode === "supported" && entry.issue) return false;
         if (mode === "issues" && !entry.issue) return false;
         if (!q) return true;
-        const title = (entry.name || t("worldbookEntryUntitled", { index: entry.index + 1 })).toLowerCase();
+        const title = (
+          entry.name || t("worldbookEntryUntitled", { index: entry.index + 1 })
+        ).toLowerCase();
         if (title.includes(q)) return true;
         if (entry.keys.some((k) => k.toLowerCase().includes(q))) return true;
         if (entry.secondaryKeys.some((k) => k.toLowerCase().includes(q))) return true;
@@ -149,9 +161,8 @@ export const WorldbookLibraryView = {
       { immediate: true },
     );
 
-    let detailSeq = 0;
     watch(
-      () => [selectedId.value, owner.status.value],
+      () => [selectedId.value, owner.status.value, detailReloadTick.value],
       async ([id, status], _, onCleanup) => {
         let stale = false;
         onCleanup(() => {
@@ -161,6 +172,7 @@ export const WorldbookLibraryView = {
         detailError.value = "";
         if (!id || status !== "ready") {
           detail.value = null;
+          detailLoading.value = false;
           return;
         }
         detailLoading.value = true;
@@ -195,16 +207,38 @@ export const WorldbookLibraryView = {
       selectedEntryIndex.value = null;
     }
 
+    function retryDetailLoad() {
+      if (!selectedId.value) return;
+      detailReloadTick.value += 1;
+    }
+
     function selectWorldbook(id) {
+      if (busy.value) return;
+      previewSeq += 1;
       previewDraft.value = null;
       previewName.value = "";
       actionError.value = "";
+      pendingImportedBook.value = null;
       resetEntryFilters();
-      selectedId.value = id;
+      if (selectedId.value === id) {
+        if (!detail.value || detailError.value) {
+          detailReloadTick.value += 1;
+        }
+      } else {
+        selectedId.value = id;
+      }
     }
 
     function selectEntry(index) {
       selectedEntryIndex.value = index;
+    }
+
+    function openCardLibraryTab() {
+      try {
+        openTab("kohaku-roleplay/studio");
+      } catch (err) {
+        actionError.value = err?.message || String(err);
+      }
     }
 
     function triggerChooseFile() {
@@ -215,9 +249,17 @@ export const WorldbookLibraryView = {
     async function handleFileChange(event) {
       const file = event.target?.files?.[0];
       if (event.target) event.target.value = "";
-      if (!file) return;
+      if (!file || busy.value) return;
 
+      // Clear any previous preview draft immediately when starting a new file selection
+      // so a failed B parse can never leave stale draft A available for confirmImport.
+      const seq = ++previewSeq;
+      previewDraft.value = null;
+      previewName.value = "";
       actionError.value = "";
+      pendingImportedBook.value = null;
+      resetEntryFilters();
+
       const check = validateWorldbookFile(file, maxWorldbookBytes.value);
       if (!check.ok) {
         actionError.value =
@@ -235,6 +277,7 @@ export const WorldbookLibraryView = {
           data: base64,
           name: defaultName,
         });
+        if (seq !== previewSeq) return;
         const resolvedName =
           typeof result?.name === "string" && result.name.trim()
             ? result.name.trim()
@@ -248,14 +291,21 @@ export const WorldbookLibraryView = {
           entries: normalizeWorldbookEntries(result?.entries),
         };
       } catch (err) {
-        actionError.value = err?.message || String(err);
+        if (seq === previewSeq) {
+          previewDraft.value = null;
+          previewName.value = "";
+          actionError.value = err?.message || String(err);
+        }
       } finally {
-        busy.value = false;
+        if (seq === previewSeq) {
+          busy.value = false;
+        }
       }
     }
 
     function discardPreview() {
       if (busy.value) return;
+      previewSeq += 1;
       previewDraft.value = null;
       previewName.value = "";
       actionError.value = "";
@@ -266,21 +316,101 @@ export const WorldbookLibraryView = {
       const draft = previewDraft.value;
       if (!draft || busy.value) return;
       const finalName = previewName.value.trim() || draft.name;
+      const seq = ++previewSeq;
       busy.value = true;
       actionError.value = "";
+      pendingImportedBook.value = null;
       try {
         const imported = await owner.call("import_worldbook", {
           data: draft.data,
           name: finalName,
         });
+        const importedId = typeof imported?.id === "string" ? imported.id : "";
+        const importedName =
+          typeof imported?.name === "string" && imported.name.trim()
+            ? imported.name.trim()
+            : finalName;
         previewDraft.value = null;
         previewName.value = "";
         resetEntryFilters();
-        await owner.refresh();
-        if (imported?.id) {
-          selectedId.value = imported.id;
+        const refreshed = await owner.refresh();
+        if (!refreshed || owner.status.value !== "ready") {
+          pendingImportedBook.value = { id: importedId, name: importedName };
+          return;
+        }
+        pendingImportedBook.value = null;
+        if (importedId) {
+          if (selectedId.value === importedId) {
+            detailReloadTick.value += 1;
+          } else {
+            selectedId.value = importedId;
+          }
         }
         notify(t("worldbookImportedToast"), "success");
+      } catch (err) {
+        actionError.value = err?.message || String(err);
+      } finally {
+        if (seq === previewSeq) {
+          busy.value = false;
+        }
+      }
+    }
+
+    async function exportSelectedWorldbook() {
+      const wb = selectedWorldbook.value;
+      if (!wb || isPreviewMode.value || busy.value || exporting.value) return;
+      exporting.value = true;
+      actionError.value = "";
+      try {
+        const result = await owner.call("export_worldbook", { id: wb.id });
+        const bytes = base64ToUint8Array(result?.data);
+        const blob = new Blob([bytes], { type: "application/json" });
+        const filename = sanitizeDownloadFilename(result?.name || wb.name, "json");
+        const url = URL.createObjectURL(blob);
+        try {
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = filename;
+          link.style.display = "none";
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        } finally {
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+        notify(t("exportCardSuccess", { filename }), "success");
+      } catch (err) {
+        actionError.value = err?.message || String(err);
+      } finally {
+        exporting.value = false;
+      }
+    }
+
+    async function removeSelectedWorldbook() {
+      const wb = selectedWorldbook.value;
+      if (!wb || isPreviewMode.value || busy.value || exporting.value) return;
+      const accepted = await confirm(
+        t("worldbookRemoveConfirm", { name: wb.name }),
+        t("worldbookRemoveTitle"),
+      );
+      if (!accepted) return;
+
+      busy.value = true;
+      actionError.value = "";
+      pendingImportedBook.value = null;
+      try {
+        const nextState = await owner.call("remove_worldbook", { id: wb.id });
+        if (nextState && typeof nextState === "object") {
+          owner.state.value = nextState;
+          owner.status.value = "ready";
+          owner.error.value = "";
+        } else {
+          const refreshed = await owner.refresh();
+          if (!refreshed || owner.status.value !== "ready") {
+            return;
+          }
+        }
+        notify(t("worldbookRemovedToast"), "success");
       } catch (err) {
         actionError.value = err?.message || String(err);
       } finally {
@@ -289,9 +419,29 @@ export const WorldbookLibraryView = {
     }
 
     async function refreshLibrary() {
+      if (busy.value) return;
       actionError.value = "";
+      const pending = pendingImportedBook.value;
       try {
-        await owner.refresh();
+        const refreshed = await owner.refresh();
+        if (!refreshed || owner.status.value !== "ready") {
+          return;
+        }
+        if (pending) {
+          pendingImportedBook.value = null;
+          if (pending.id) {
+            if (selectedId.value === pending.id) {
+              detailReloadTick.value += 1;
+            } else {
+              selectedId.value = pending.id;
+            }
+          }
+          notify(t("worldbookImportedToast"), "success");
+          return;
+        }
+        if (selectedId.value && (!detail.value || detailError.value)) {
+          detailReloadTick.value += 1;
+        }
       } catch (err) {
         actionError.value = err?.message || String(err);
       }
@@ -312,7 +462,9 @@ export const WorldbookLibraryView = {
       detailLoading,
       detailError,
       busy,
+      exporting,
       actionError,
+      pendingImportedBook,
       previewDraft,
       previewName,
       isPreviewMode,
@@ -331,10 +483,14 @@ export const WorldbookLibraryView = {
       filteredWorldbooks,
       selectWorldbook,
       selectEntry,
+      retryDetailLoad,
+      openCardLibraryTab,
       triggerChooseFile,
       handleFileChange,
       discardPreview,
       confirmImport,
+      exportSelectedWorldbook,
+      removeSelectedWorldbook,
       refreshLibrary,
       issueLabel,
     };
@@ -346,8 +502,57 @@ export const WorldbookLibraryView = {
       :aria-busy="busy"
       data-testid="kt-rp-worldbook-library"
     >
+      <div class="ktrp-library-banner" data-testid="kt-rp-wb-discovery">
+        <div class="ktrp-library-banner-copy">
+          <p class="ktrp-muted">{{ t('worldbookLibraryScope') }}</p>
+        </div>
+        <div class="ktrp-library-banner-actions">
+          <ActionButton
+            size="sm"
+            variant="ghost"
+            icon="i-carbon-book"
+            data-testid="kt-rp-open-cards-tab-btn"
+            @click="openCardLibraryTab"
+          >
+            {{ t('openCardLibraryBtn') }}
+          </ActionButton>
+        </div>
+      </div>
+
       <div
-        v-if="owner.status.value === 'error' || owner.status.value === 'absent'"
+        v-if="pendingImportedBook"
+        class="ktrp-banner ktrp-banner--info"
+        role="alert"
+        data-testid="kt-rp-wb-imported-refresh-error"
+      >
+        <span>
+          {{ t('worldbookImportedRefreshFailed', { name: pendingImportedBook.name }) }}
+          <small v-if="owner.error.value">{{ owner.error.value }}</small>
+        </span>
+        <div class="ktrp-inline-actions">
+          <ActionButton
+            size="sm"
+            variant="primary"
+            :disabled="busy"
+            data-testid="kt-rp-wb-imported-refresh-retry-btn"
+            @click="refreshLibrary"
+          >
+            {{ t('worldbookRetryRefreshBtn') }}
+          </ActionButton>
+          <ActionButton
+            size="sm"
+            variant="ghost"
+            :disabled="busy"
+            data-testid="kt-rp-wb-imported-refresh-dismiss-btn"
+            @click="pendingImportedBook = null"
+          >
+            {{ t('dismissBtn') }}
+          </ActionButton>
+        </div>
+      </div>
+
+      <div
+        v-if="!pendingImportedBook && (owner.status.value === 'error' || owner.status.value === 'absent')"
         class="ktrp-banner ktrp-banner--error"
         role="alert"
         data-testid="kt-rp-wb-load-error"
@@ -448,6 +653,7 @@ export const WorldbookLibraryView = {
                 type="button"
                 class="ktrp-card-tile"
                 role="option"
+                :disabled="busy"
                 :aria-selected="!isPreviewMode && wb.id === selectedId"
                 :data-testid="'kt-rp-wb-item-' + wb.id"
                 @click="selectWorldbook(wb.id)"
@@ -531,42 +737,71 @@ export const WorldbookLibraryView = {
               v-else-if="!isPreviewMode && detailError"
               class="ktrp-banner ktrp-banner--error"
               role="alert"
+              data-testid="kt-rp-wb-detail-error"
             >
               <span>{{ detailError }}</span>
+              <ActionButton
+                size="sm"
+                data-testid="kt-rp-wb-detail-retry-btn"
+                @click="retryDetailLoad"
+              >
+                {{ t('retry') }}
+              </ActionButton>
             </div>
             <template v-else-if="activeBook">
               <div class="ktrp-detail-header" data-testid="kt-rp-wb-detail-header">
-                <div class="ktrp-detail-title">
-                  <h3 data-testid="kt-rp-wb-detail-title">
-                    {{ isPreviewMode ? (previewName || activeBook.name) : activeBook.name }}
-                  </h3>
-                  <div v-if="activeDiagnostics" class="ktrp-stack" data-testid="kt-rp-wb-diagnostics">
-                    <span class="ktrp-muted" data-testid="kt-rp-wb-diag-summary">
-                      {{
-                        t('worldbookDiagSummary', {
-                          supported: activeDiagnostics.supportedEntries,
-                          total: activeDiagnostics.totalEntries,
-                          skipped: activeDiagnostics.skippedEntries,
-                        })
-                      }}
-                    </span>
-                    <div
-                      v-if="activeDiagnostics.issues.length"
-                      class="ktrp-chip-row"
-                      data-testid="kt-rp-wb-diag-issues"
-                    >
-                      <span
-                        v-for="issue in activeDiagnostics.issues"
-                        :key="issue.code"
-                        class="ktrp-chip"
-                        :data-testid="'kt-rp-wb-diag-issue-' + issue.code"
+                <div class="ktrp-row-between">
+                  <div class="ktrp-detail-title">
+                    <h3 data-testid="kt-rp-wb-detail-title">
+                      {{ isPreviewMode ? (previewName || activeBook.name) : activeBook.name }}
+                    </h3>
+                    <div v-if="activeDiagnostics" class="ktrp-stack" data-testid="kt-rp-wb-diagnostics">
+                      <span class="ktrp-muted" data-testid="kt-rp-wb-diag-summary">
+                        {{
+                          t('worldbookDiagSummary', {
+                            supported: activeDiagnostics.supportedEntries,
+                            total: activeDiagnostics.totalEntries,
+                            skipped: activeDiagnostics.skippedEntries,
+                          })
+                        }}
+                      </span>
+                      <div
+                        v-if="activeDiagnostics.issues.length"
+                        class="ktrp-chip-row"
+                        data-testid="kt-rp-wb-diag-issues"
                       >
-                        {{ issueLabel(issue.code, issue.count) }}
+                        <span
+                          v-for="issue in activeDiagnostics.issues"
+                          :key="issue.code"
+                          class="ktrp-chip"
+                          :data-testid="'kt-rp-wb-diag-issue-' + issue.code"
+                        >
+                          {{ issueLabel(issue.code, issue.count) }}
+                        </span>
+                      </div>
+                      <span v-else class="ktrp-muted">
+                        {{ t('worldbookDiagAllSupported') }}
                       </span>
                     </div>
-                    <span v-else class="ktrp-muted">
-                      {{ t('worldbookDiagAllSupported') }}
-                    </span>
+                  </div>
+                  <div v-if="!isPreviewMode && selectedWorldbook" class="ktrp-detail-actions">
+                    <ActionButton
+                      size="sm"
+                      :disabled="busy || exporting"
+                      data-testid="kt-rp-wb-export-btn"
+                      @click="exportSelectedWorldbook"
+                    >
+                      {{ exporting ? t('exportingCard') : t('worldbookExportBtn') }}
+                    </ActionButton>
+                    <ActionButton
+                      variant="danger"
+                      size="sm"
+                      :disabled="busy || exporting"
+                      data-testid="kt-rp-wb-remove-btn"
+                      @click="removeSelectedWorldbook"
+                    >
+                      {{ t('worldbookRemoveBtn') }}
+                    </ActionButton>
                   </div>
                 </div>
               </div>

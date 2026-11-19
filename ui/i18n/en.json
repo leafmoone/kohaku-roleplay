@@ -298,6 +298,8 @@
   "worldbookConfirmImportBtn": "Confirm import to library",
   "worldbookCancelPreviewBtn": "Discard preview",
   "worldbookImportedToast": "Worldbook imported to library.",
+  "worldbookImportedRefreshFailed": "Worldbook \"{name}\" was imported to the library, but refreshing the catalog list failed.",
+  "worldbookRetryRefreshBtn": "Retry refresh",
   "worldbookRemovedToast": "Worldbook removed from library.",
   "worldbookRemoveBtn": "Remove worldbook",
   "worldbookRemoveConfirm": "Remove \"{name}\" from the worldbook library? Active sessions keep their current snapshot.",
