@@ -5,6 +5,7 @@ import binascii
 import json
 from functools import cached_property
 from io import BytesIO
+from itertools import islice
 from typing import Literal
 
 from PIL import Image, UnidentifiedImageError
@@ -15,6 +16,7 @@ from .card_web import WebPanel, read_web_panel
 from .charx import CardMedia, inspect_charx_media, is_charx, open_charx, read_charx_card
 from .errors import CardError
 from .gameplay_pack import GameplayPack
+from .legacy_web import LegacyWebRule, opening_web_rules
 from .lore import LoreBook
 from .panels import NativePanel, read_panels
 from .portraits import PortraitAsset, PortraitRule, read_portraits
@@ -78,6 +80,7 @@ class ParsedCard(BaseModel):
     scripts: list[CardScript] = Field(default_factory=list)
     gameplay_pack: GameplayPack | None = None
     web_panel: WebPanel | None = None
+    legacy_web_rules: list[LegacyWebRule] = Field(default_factory=list)
 
     @cached_property
     def lore(self) -> LoreBook | None:
@@ -185,7 +188,8 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
     card = ParsedCard(version=version, fields=fields, book=book, warnings=warnings,
                       portrait=portrait, state_fields=definitions, portraits=portraits, source_format=fmt,
                       native_panels=panels, invalid_native_panels=bad_panels,
-                      scripts=inspect_card_scripts(extensions), gameplay_pack=pack)
+                      scripts=inspect_card_scripts(extensions), gameplay_pack=pack,
+                      legacy_web_rules=list(islice(opening_web_rules(extensions, [fields.first_mes, *fields.alternate_greetings]), 4)))
     if book is not None:
         _ = card.lore
     return card

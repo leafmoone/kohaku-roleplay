@@ -38,4 +38,6 @@ def read_web_panel(archive: ZipFile, members: dict[str, ZipInfo], declaration: o
         html = _member(archive, item).decode('utf-8-sig')
     except UnicodeDecodeError as exc:
         raise CardError('The card web panel must be UTF-8 HTML') from exc
+    if not html.strip():
+        raise CardError('The card web panel must not be empty')
     return WebPanel(title=source.title, html=html)

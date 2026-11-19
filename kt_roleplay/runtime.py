@@ -5,6 +5,7 @@ from collections.abc import Callable
 import json
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 from kohakuterrarium.builtins.plugins.ui_declarative.plugin import attached_renderers
 from kohakuterrarium.modules.output.event import OutputEvent
@@ -30,6 +31,7 @@ from .gameplay_pack import GameplayPack, GameplayPackUnavailable, pack_settings,
 from .gameplay import Action, Actions, PlayActions, apply_actions, apply_field_changes
 from .header_summary import MAX_HEADER_PINS, header_summary
 from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, configured_plugins, request_plugin
+from .legacy_web import LegacyOpeningState, selected_opening_values
 from .novel import Outcome, SceneError, Story
 from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields
 from .state_tool import SetCardState
@@ -120,6 +122,8 @@ class TavernSession(Arguments):
     gameplay_pack: GameplayPack | None = None
     legacy_plugins: list[str] = Field(default_factory=list)
     web_panel: WebPanel | None = None
+    web_panel_ready: bool = True
+    legacy_opening_web: LegacyOpeningState | None = None
     scripts: list[CardScript] = Field(default_factory=list)
     script_state: SessionScripts = Field(default_factory=lambda: SessionScripts(clock="turn"))
 
@@ -163,6 +167,7 @@ class RoleplayPlugin(BasePlugin):
         self.novel = NovelBinding(self.mode == "npc") if self.mode in ("novel", "npc") else None
         self.binding: PluginContext | None = None
         self._scripts = ScriptSession(self)
+        self._web_panel_scope = ''
         self.report_watch = None
         self.can_open_scene = False
         self._committed_prose: str | None = None
@@ -170,6 +175,7 @@ class RoleplayPlugin(BasePlugin):
 
     async def on_load(self, context: PluginContext) -> None:
         self.binding = context
+        self._web_panel_scope = uuid4().hex if self.mode == 'tavern' else ''
         agent = context.host_agent
         if self.mode != "novel" or agent is None:
             return
@@ -290,6 +296,7 @@ class RoleplayPlugin(BasePlugin):
         self._save(play.model_copy(update={"script_state": state}).model_dump())
 
     async def on_unload(self) -> None:
+        self._web_panel_scope = ''
         self._unwatch_reports()
         if self._restore_feedback is not None:
             self._restore_feedback()
@@ -490,8 +497,10 @@ class RoleplayPlugin(BasePlugin):
                 "lore": self.binding.get_state("loreView") if self.binding else None,
                 "media": media_summary(play.media), "mediaIssues": play.media_issues,
                 'legacyPlugins': play.legacy_plugins}
-        if play.web_panel:
+        if play.web_panel and play.web_panel_ready:
             view['webPanel'] = {'title': play.web_panel.title}
+            if play.legacy_opening_web is not None:
+                view['webPanel']['source'] = 'legacyOpening'
         if play.scripts:
             host_ok = self._script_turn_index() is not None
             issues = play.script_state.issues if host_ok else {**play.script_state.issues, "$host": _SCRIPT_CLOCK_UNAVAILABLE}
@@ -536,19 +545,30 @@ class RoleplayPlugin(BasePlugin):
             if action in ('card_web_panel', 'card_web_state', 'card_web_gameplay') and self.mode == 'tavern':
                 record = self._record()
                 play = TavernSession.model_validate(record) if record is not None else None
-                if play is None or play.web_panel is None:
-                    raise OwnerArgumentError('This tavern has no card web panel')
+                if play is None or play.web_panel is None or not play.web_panel_ready or not self._web_panel_scope:
+                    raise OwnerArgumentError('This tavern has no ready card web panel')
                 if action == 'card_web_panel':
                     if args:
                         raise OwnerArgumentError('The card web panel does not take arguments')
-                    return play.web_panel.model_dump()
+                    panel = {**play.web_panel.model_dump(), 'panelScope': self._web_panel_scope}
+                    if legacy := play.legacy_opening_web:
+                        panel['legacyOpening'] = {'message_id': 0, 'role': 'assistant', 'message': play.greeting,
+                                                  'is_hidden': False,
+                                                  'data': {'stat_data': selected_opening_values(legacy.values, play.mvu_public)}}
+                        panel['legacyMarker'] = legacy.marker
+                    return panel
+                if args.get('panelScope') != self._web_panel_scope:
+                    raise OwnerArgumentError('The card web panel session changed; open the panel again')
+                payload = {key: value for key, value in args.items() if key != 'panelScope'}
                 if action == 'card_web_gameplay':
+                    if play.legacy_opening_web is not None:
+                        raise OwnerArgumentError('The legacy opening page is read-only')
                     agent = self.binding.host_agent if self.binding else None
                     if agent and agent.is_processing:
                         raise OwnerArgumentError('Wait for this tavern before using a card web action')
-                    self.apply_gameplay_actions(Actions.model_validate(args).actions)
+                    self.apply_gameplay_actions(Actions.model_validate(payload).actions)
                     play = TavernSession.model_validate(self._record())
-                elif args:
+                elif payload:
                     raise OwnerArgumentError('The card web state does not take arguments')
                 return {'fields': public_fields(play.state_fields, play.values),
                         'panels': public_panels(play.native_panels, play.state_fields, play.values),
@@ -761,6 +781,12 @@ class RoleplayPlugin(BasePlugin):
                         mvu = mvu.model_copy(update={'issues': {**mvu.issues, 'invalid_opening_update': 1}})
                     if self._record() is not None or (agent is not None and agent.is_processing):
                         raise OwnerArgumentError('The session changed before its opening could be set')
+                web_panel, legacy_state = card.web_panel, None
+                if web_panel is None:
+                    rule = next((row for row in card.legacy_web_rules if row.marker in opening), None)
+                    if rule is not None:
+                        web_panel = rule.panel
+                        legacy_state = LegacyOpeningState(marker=rule.marker, values={})
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player,
                                      greeting=expand(opening, card.fields.name, choice.player.name, ""),
                                      lore=lore, worldbook=book, worldbookRef=book_ref, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
@@ -768,14 +794,23 @@ class RoleplayPlugin(BasePlugin):
                                      media=card.media, media_issues=card.media_issues,
                                      scene_media_rules=card.scene_media_rules, native_panels=card.native_panels,
                                      invalid_native_panels=card.invalid_native_panels, mvu=mvu, mvu_legacy=legacy_mvu,
-                                     gameplay_pack=card.gameplay_pack, web_panel=card.web_panel, scripts=scripts, script_state=script_state)
+                                     gameplay_pack=card.gameplay_pack, web_panel=web_panel, web_panel_ready=web_panel is None,
+                                     legacy_opening_web=legacy_state,
+                                     scripts=scripts, script_state=script_state)
                 self._save(play.model_dump())
                 if enable_scripts:
                     await self._scripts.fire("opening", sequence=0)
+                changes = {'web_panel_ready': True} if web_panel is not None else {}
                 if play.greeting:
+                    if legacy_state is not None:
+                        opening_play = TavernSession.model_validate(self._record())
+                        if opening_play.mvu is not None:
+                            changes['legacy_opening_web'] = legacy_state.model_copy(update={'values': opening_play.mvu.values})
                     await self.publish_opening(play.greeting)
+                    changes['openingSent'] = True
+                if changes:
                     latest = TavernSession.model_validate(self._record())
-                    self._save(latest.model_copy(update={"openingSent": True}).model_dump())
+                    self._save(latest.model_copy(update=changes).model_dump())
             elif action in ("set_worldbook", "bind_library_worldbook") and self.mode == "tavern" and (record := self._record()) is not None:
                 book_ref = None
                 if action == "set_worldbook":
