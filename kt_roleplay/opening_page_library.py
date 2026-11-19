@@ -284,10 +284,11 @@ def _opening_module_url(parent: str, ref: ModuleReference) -> str | None:
         if ref['kind'] == 'https':
             resolved = spec
         elif spec.startswith(('/', './', '../')) and not spec.startswith('//') and not relative.netloc:
-            # Resolve only explicit paths. Refuse paths whose encoded dot segments
-            # or repeated separators can be interpreted differently by a browser.
+            # Resolve only explicit paths. Python's urljoin also treats raw
+            # semicolons as path parameters, unlike the browser's URL parser.
             if (not _MODULE_PATH.fullmatch(relative.path) or not _MODULE_QUERY.fullmatch(relative.query)
-                    or '//' in relative.path or any(part.lower().replace('%2e', '.') in ('.', '..')
+                    or ';' in relative.path or '//' in relative.path
+                    or any(part.lower().replace('%2e', '.') in ('.', '..')
                                                     and part not in ('.', '..') for part in relative.path.split('/'))):
                 return None
             resolved = urljoin(parent, spec)
