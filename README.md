@@ -119,6 +119,16 @@ KT 不安装或启动原版酒馆服务器插件。先在独立宿主上运行�
 - **方法或路由未启用**：核对配置里的精确 `method` / `path`。**无法连接**：确认独立服务正在同一台机器上监听配置端口。**提供方没有返回 JSON**：检查是否打到了 HTML 登录页或代理错误页；非空响应需带 JSON 类型。不要把提供方本身返回的 JSON 错误当作连接失败。
 - **网页作用域变化**：从当前会话重新打开网页，不沿用旧 `panelScope`。旧开场页拒绝 POST，即使本局和配置都允许该路由。
 
+**原版服务的接入边界。** 未禁用 CSRF 时，[SillyTavern](https://github.com/SillyTavern/SillyTavern/blob/06bde939fb1e9c4c8d8641d810f0a916b5bce127/src/server-main.js#L166-L202) 会在挂载 `/api/plugins/<id>` 路由前注册 CSRF 中间件；插件路由也在[登录中间件](https://github.com/SillyTavern/SillyTavern/blob/06bde939fb1e9c4c8d8641d810f0a916b5bce127/src/server-main.js#L244-L249)之后挂载。KT 不转发 Cookie、Authorization 或 CSRF token，因此不能把要求这些凭据的原版路由直接当作 KT 提供方。不要为了接入关闭原版保护；应由操作者另行配置独立的本机 JSON 提供方，且只白名单所需路由。
+
+下表按上游源码核对接口形状，**不是已安装或联调通过的原版插件列表**：
+
+| 原版提供方 | 源码所示接口 | KT 当前边界 |
+| --- | --- | --- |
+| [EdgeTTS](https://github.com/SillyTavern/SillyTavern-EdgeTTS-Plugin/blob/7feb160b5026b58ea4c540ac810ac2b81baddb4e/src/index.ts#L40-L66)（`edge-tts`） | `GET list` 无参数，成功返回语音列表 JSON；`POST generate` 接受 `{text, voice}`，返回 `audio/webm`。 | 独立提供方的 `GET list` 成功响应符合 JSON 协议；音频生成不支持。 |
+| [Office Parser](https://github.com/SillyTavern/SillyTavern-Office-Parser/blob/44ce12e0f3cc9a290513aea5043a3eac6aebf6d6/src/index.ts#L25-L45)（`office`） | `POST parse` 接受 JSON `{data}`（文件 data URL），返回文本。 | 非 JSON 文本不支持；也没有文件解析或上传适配。 |
+| [Discord Rich Presence](https://github.com/SillyTavern/SillyTavern-DiscordRichPresence-Server/blob/61a6c9f83cd6123f412394d3b5071db8c4707610/src/index.ts#L42-L54)（`discord`） | `POST update?name=…` 更新 Discord 状态并返回文本 `OK`，无 `name` 时重置并返回空 `204`。 | 不提供 Discord 集成；不要把空 `204` 可转发误认为整个接口兼容。 |
+
 以上是会话后端接口，浏览器中的旧页面调用仍需接线。没有配置界面、原版插件加载器或任意外部服务转发。
 
 ### 会话内卡片网页（后端接口）
