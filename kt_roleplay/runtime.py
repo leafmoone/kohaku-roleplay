@@ -28,6 +28,7 @@ from .errors import SettlementRejected
 from .gameplay_pack import GameplayPack, GameplayPackUnavailable, pack_settings, pack_tools, tavern_creature
 from .gameplay import Action, PlayActions, apply_actions, apply_field_changes
 from .header_summary import MAX_HEADER_PINS, header_summary
+from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, configured_plugins, request_plugin
 from .novel import Outcome, SceneError, Story
 from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields
 from .state_tool import SetCardState
@@ -116,6 +117,7 @@ class TavernSession(Arguments):
     mvu_legacy: bool = False
     lore_activation: dict[Literal["lore", "worldbook"], dict[str, int]] = Field(default_factory=dict)
     gameplay_pack: GameplayPack | None = None
+    legacy_plugins: list[str] = Field(default_factory=list)
     scripts: list[CardScript] = Field(default_factory=list)
     script_state: SessionScripts = Field(default_factory=lambda: SessionScripts(clock="turn"))
 
@@ -484,7 +486,8 @@ class RoleplayPlugin(BasePlugin):
                 "worldbookDiagnostics": play.worldbook.diagnostics() if play.worldbook else None,
                 "cardLoreDiagnostics": play.lore.diagnostics() if play.lore else None,
                 "lore": self.binding.get_state("loreView") if self.binding else None,
-                "media": media_summary(play.media), "mediaIssues": play.media_issues}
+                "media": media_summary(play.media), "mediaIssues": play.media_issues,
+                'legacyPlugins': play.legacy_plugins}
         if play.scripts:
             host_ok = self._script_turn_index() is not None
             issues = play.script_state.issues if host_ok else {**play.script_state.issues, "$host": _SCRIPT_CLOCK_UNAVAILABLE}
@@ -535,6 +538,37 @@ class RoleplayPlugin(BasePlugin):
                     return snapshot_detail(play.card.name, play.lore) if play.lore is not None else None
                 name = play.worldbookRef["name"] if play.worldbookRef else ""
                 return snapshot_detail(name, play.worldbook) if play.worldbook is not None else None
+            if action in ('legacy_plugin_options', 'set_legacy_plugins', 'legacy_plugin_request') and self.mode == 'tavern':
+                if (record := self._record()) is None:
+                    raise OwnerArgumentError('Start a tavern before using legacy plugins')
+                play = TavernSession.model_validate(record)
+                if action == 'legacy_plugin_request':
+                    call = LegacyRequest.model_validate(args)
+                    if call.pluginId not in play.legacy_plugins:
+                        raise OwnerArgumentError(f'Legacy plugin {call.pluginId} is not enabled in this tavern')
+                    providers = await to_thread(configured_plugins, library_dir())
+                    current = self._record()
+                    if not current or call.pluginId not in current.get('legacy_plugins', []):
+                        raise OwnerArgumentError(f'Legacy plugin {call.pluginId} is no longer enabled in this tavern')
+                    return await to_thread(request_plugin, providers, call)
+                if action == 'legacy_plugin_options':
+                    if args:
+                        raise OwnerArgumentError('Plugin options do not take any arguments')
+                    providers = await to_thread(configured_plugins, library_dir())
+                    return {'available': sorted(providers), 'enabled': play.legacy_plugins}
+                requested = LegacySelection.model_validate(args).pluginIds
+                if len(requested) != len(set(requested)):
+                    raise OwnerArgumentError('Do not select the same plugin twice')
+                if requested:
+                    providers = await to_thread(configured_plugins, library_dir())
+                    if any(name not in providers for name in requested):
+                        raise OwnerArgumentError('Only plugins configured by the KT operator can be enabled')
+                    if self._record() != record:
+                        raise OwnerArgumentError('The tavern changed while setting plugins; try again')
+                self._save(play.model_copy(update={'legacy_plugins': requested}).model_dump())
+                view = self.ui_state()
+                self.ui_emit('state', view)
+                return {'enabled': requested}
             if action == "set_card_scripts" and self.mode == "tavern" and (record := self._record()) is not None:
                 if set(args) != {"enabled"} or type(args["enabled"]) is not bool:
                     raise OwnerArgumentError("Expected an explicit script enable or disable choice")
@@ -738,7 +772,7 @@ class RoleplayPlugin(BasePlugin):
                 self._save(existing.model_copy(update=Notes.model_validate(args).model_dump()).model_dump())
             else:
                 raise OwnerArgumentError(f"Action {action!r} is not available in the current {self.mode} session")
-        except (ValidationError, CardError, CardNotFound, WorldbookNotFound, CardScriptError, SceneError, GameplayPackUnavailable) as exc:
+        except (ValidationError, CardError, CardNotFound, WorldbookNotFound, CardScriptError, SceneError, GameplayPackUnavailable, LegacyPluginError) as exc:
             raise OwnerArgumentError(f"Invalid roleplay request: {exc}") from exc
         view = self.ui_state()
         self.ui_emit("state", view)

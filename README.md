@@ -79,6 +79,23 @@
 
 仅有模块依赖的卡片需要链接器：确保运行 Studio 的系统可找到 Node.js 22.12+（或 20.19+ 的 20.x），在**已安装的插件目录**执行一次 `npm ci --ignore-scripts --omit=dev`。没有链接器时，普通卡和无模块的脚本不受影响；不会在开局时自行安装工具。
 
+### 转发已运行的酒馆插件接口（后端）
+
+KT 不安装或启动原版酒馆服务器插件。先在独立宿主上运行插件，再由 KT 操作者在 `<KT_CONFIG_DIR>/kohaku-roleplay/legacy-tavern-plugins.json` 配置插件 ID、其本机监听端口和允许使用的路由。例如：
+
+```json
+{
+  "example": {
+    "port": 8765,
+    "endpoints": [{"method": "GET", "path": "status"}]
+  }
+}
+```
+
+本局的 `roleplay` owner 提供 `legacy_plugin_options`（查看可用及已启用的插件）、`set_legacy_plugins`（用 `pluginIds` 设置本局可调用的插件）和 `legacy_plugin_request`（传入 `pluginId`、`method`、`path`，可选字符串 `query` 和 POST JSON `body`）。后端只转发到已配置的本机 `/api/plugins/<id>/<path>`，以 `{status, body}` 返回结果；不带宿主凭据，不跟重定向，不支持二进制响应。调用许可随会话存档保存，不改变兼容脚本默认开启的规则。
+
+本段只交付了会话后端接口；未接入卡片网页或脚本发出的旧调用，也没有设置界面、原版插件加载器或任意外部服务转发。
+
 ### 酒馆原生面板
 
 在 `data.extensions["kohaku-roleplay"].panels` 声明一组面板；每项有唯一 `id`、显示用 `label` 和 `type`。状态由 KT 的本局字段更新，面板只负责呈现，不自行推进剧情。
