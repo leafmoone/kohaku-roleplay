@@ -144,6 +144,8 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 目录 owner 的 `preview_card_dependencies` 可列出一个符合条件的 `remoteOpeningPage`（`title`、`marker`、`url`），不会下载。只有单独明确确认，才可通过 `confirm_card_opening_page` 传入已入库的 `id` 和完全一致的 `url`，取得 `{openingPage: {url, size}}`。来源限公网 HTTPS 443，路径不得含 `.`／`..` 路径段，不跟重定向；响应限无压缩的 UTF-8 `text/html`，最多 256 KiB。副本按卡保存，详情的 `remoteOpeningPage.snapshot` 可检查是否保存；再次确认已保存的入口直接返回同一份副本。确认不改原卡，不下载页面引用的其他资源，也不会运行网页。此前已入库但缺这份元数据的原件需重新导入。
 
+缓存入口后，目录 owner 的 `preview_card_opening_dependencies` 接受 `{"id":"入库卡片 ID"}`，只从已保存副本读取内联脚本的 `import`／`export from` 和 `import()` 引用（最多 32 项）；分别报告其他资源、不可解析入口及列表截断。这是诊断，不确认或下载任何依赖，也不把外部 `<script src>`、图片或样式当成可自动加载的模块。
+
 仅新开局选到含该标记的开场、且没有适用的 CHARX 或卡内页面时，才从本地缓存快照自包含的外链入口。页面和开场照旧只读，随本局存档；后来缓存或删除库卡不改旧局。未确认、需要外部资源、或入口形式暂不支持时，酒馆正常开局，owner 分别报告 `entry_unconfirmed`、`entry_needs_resources` 或 `entry_unsupported`，不提供面板。这里检查的是页面声明的资源和脚本依赖，不替代浏览器隔离，也不保证任意旧网页可运行。此处还没有卡库确认控件或隔离网页实玩支持。
 
 ### 酒馆原生面板
