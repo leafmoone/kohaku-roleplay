@@ -11,17 +11,26 @@ from typing import Protocol
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from .card_scripts import CardScript
+from .card_scripts import CardScript, ScriptButton
 from .mvu import validate_updated_values
 from .script_values import CardScriptError, assert_js_numbers, validated_script_values
 
 
-def _run_worker(script: CardScript, values: dict[str, JsonValue], event: str, args: JsonValue) -> dict:
+def effective_buttons(script: CardScript, appended: list[ScriptButton]) -> list[ScriptButton]:
+    return [*(ScriptButton(name=name, visible=True) for name in script.buttons), *appended]
+
+
+def _button_rows(buttons: list[ScriptButton]) -> list[dict[str, str | bool]]:
+    return [button.model_dump() for button in buttons]
+
+
+def _run_worker(script: CardScript, values: dict[str, JsonValue], event: str, args: JsonValue,
+                buttons: list[ScriptButton]) -> dict:
     if not script.enabled or script.issue:
         raise CardScriptError("This card script is not runnable")
     assert_js_numbers(values)
     assert_js_numbers(args)
-    data = {"values": values, "event": event, "args": args, "buttons": script.buttons,
+    data = {"values": values, "event": event, "args": args, "buttons": _button_rows(buttons),
             "code": script.content, "module": script.module}
     # User/reply text is already bounded in characters by the host, before JSON escaping.
     if event == "tool" and len(json.dumps(args, ensure_ascii=True, allow_nan=False).encode("ascii")) > 4096:
@@ -63,8 +72,10 @@ def _inactive(names: object) -> list[str]:
     return names
 
 
-def run_mvu_update(scripts, values: dict[str, JsonValue], update) -> tuple[dict[str, JsonValue], dict[str, list[str]]]:
-    bundle = [{'id': s.id, 'code': s.content, 'buttons': s.buttons, 'module': s.module} for s in scripts]
+def run_mvu_update(scripts: list[CardScript], values: dict[str, JsonValue], update,
+                   appended: dict[str, list[ScriptButton]] | None = None) -> tuple[dict[str, JsonValue], dict[str, list[str]]]:
+    bundle = [{'id': s.id, 'code': s.content, 'buttons': _button_rows(effective_buttons(s, (appended or {}).get(s.id, []))),
+               'module': s.module} for s in scripts]
     result = _worker_result({'scripts': bundle, 'values': values, 'update': update}, mvu=True)
     if not isinstance(result.get('values'), dict):
         raise CardScriptError('Invalid response from MVU worker')
@@ -74,14 +85,27 @@ def run_mvu_update(scripts, values: dict[str, JsonValue], update) -> tuple[dict[
     return validate_updated_values(result['values']), {k: _inactive(names) for k, names in inactive.items()}
 
 
-async def run_card_script(script: CardScript, values: dict[str, JsonValue], event: str,
-                          args: JsonValue = None) -> tuple[bool, dict[str, JsonValue], bool, list[str]]:
+async def run_card_script(script: CardScript, values: dict[str, JsonValue], event: str, args: JsonValue,
+                          buttons: list[ScriptButton]) -> tuple[bool, dict[str, JsonValue], bool, list[str], list[ScriptButton]]:
     try:
-        result = await asyncio.to_thread(_run_worker, script, values, event, args)
+        result = await asyncio.to_thread(_run_worker, script, values, event, args, buttons)
         if type(result.get("handled")) is not bool or type(result.get('listensMvu')) is not bool or "values" not in result:
             raise CardScriptError("Invalid response from card script worker")
         inactive = _inactive(result.get('inactive'))
-        return result['handled'], validated_script_values(values, result['values']), result['listensMvu'], inactive
+        added = []
+        if 'buttons' in result:
+            proposals = result['buttons']
+            if not isinstance(proposals, list) or len(proposals) > 8:
+                raise CardScriptError('Invalid button list from card script worker')
+            next_buttons = [ScriptButton.model_validate(row) for row in proposals]
+            if next_buttons[:len(buttons)] != buttons or len({row.name for row in next_buttons}) != len(next_buttons):
+                raise CardScriptError('Card scripts may only append new button names')
+            added = next_buttons[len(buttons):]
+            for row in added:
+                row.name.encode('utf-8')
+                if row.name.strip() != row.name:
+                    raise CardScriptError('Invalid appended card script button name')
+        return (result['handled'], validated_script_values(values, result['values']), result['listensMvu'], inactive, added)
     except (RecursionError, UnicodeError) as exc:
         raise CardScriptError("Card script returned invalid variable data") from exc
 

@@ -5,8 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from .card_scripts import CardScript, script_fingerprint
-from .script_tool import CardScriptError, run_card_script
+from .card_scripts import CardScript, ScriptButton, script_fingerprint
+from .script_tool import CardScriptError, effective_buttons, run_card_script
 
 
 class SessionScripts(BaseModel):
@@ -17,6 +17,7 @@ class SessionScripts(BaseModel):
     issues: dict[str, str] = Field(default_factory=dict)
     mvu_listeners: dict[str, bool] = Field(default_factory=dict)
     inactive_events: dict[str, list[str]] = Field(default_factory=dict)
+    appended_buttons: dict[str, list[ScriptButton]] = Field(default_factory=dict)
 
 
 def upgrade_script_clock(state: SessionScripts, last_turn: int) -> SessionScripts:
@@ -59,8 +60,11 @@ class ScriptSession:
                 record = self.host._record()
             if sequence is not None and old.seen.get(event, -1) >= sequence:
                 return
+            published = dict(old.appended_buttons)
             if script_id is not None:
-                scripts = [s for s in scripts if s.id == script_id and (not event.startswith("button:") or event[7:] in s.buttons)]
+                scripts = [s for s in scripts if s.id == script_id and (
+                    not event.startswith('button:') or any(row.visible and row.name == event[7:]
+                        for row in effective_buttons(s, published.get(s.id, []))))]
                 if not scripts:
                     raise CardScriptError("Unknown script or button in the current tavern")
             values = play.mvu.values
@@ -70,7 +74,10 @@ class ScriptSession:
             handled = False
             for script in scripts:
                 try:
-                    used, values, listeners[script.id], skipped = await run_card_script(script, values, event, args)
+                    buttons = effective_buttons(script, published.get(script.id, []))
+                    used, values, listeners[script.id], skipped, added = await run_card_script(script, values, event, args, buttons)
+                    if added:
+                        published[script.id] = [*published.get(script.id, []), *added]
                     if skipped:
                         inactive[script.id] = skipped
                     else:
@@ -90,6 +97,7 @@ class ScriptSession:
             seen = {**old.seen, event: sequence} if sequence is not None else old.seen
             self.host._save(play.model_copy(update={
                 "mvu": play.mvu.model_copy(update={"values": values}),
-                "script_state": old.model_copy(update={"seen": seen, "issues": errors, "mvu_listeners": listeners, 'inactive_events': inactive}),
+                "script_state": old.model_copy(update={"seen": seen, "issues": errors, "mvu_listeners": listeners,
+                                                       'inactive_events': inactive, 'appended_buttons': published}),
             }).model_dump())
             self.host.ui_emit("state", self.host.ui_state())

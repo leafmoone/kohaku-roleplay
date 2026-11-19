@@ -17,9 +17,38 @@ _BRIDGE = r"""
     SINGLE_VARIABLE_UPDATED:'mag_variable_updated', VARIABLE_UPDATE_ENDED:'mag_variable_update_ended'});
   const deferred = new Set(['mag_variable_initialized','mag_before_message_update']);
   const inactive = new Set();
-  const allowed = new Set([...Object.values(phases), ...Object.values(mvuEvents), ...buttons.map(n => 'button:' + n)]);
+  const allowed = new Set([...Object.values(phases), ...Object.values(mvuEvents)]);
   const handlers = [];
+  const buttonRows = clone(buttons);
+  let published = false;
   let state = values, firing = false, result;
+  const validButton = n => typeof n === 'string' && n.trim() === n && n.length > 0 && Array.from(n).length <= 80;
+  const buttonEvent = name => {
+    if (!validButton(name)) throw new Error('Invalid card script button name');
+    return 'button:' + name;
+  };
+  const on = (name, fn) => {
+    if (firing || typeof fn !== 'function' || handlers.length >= 32)
+      throw new Error('Unsupported card script event registration');
+    if (deferred.has(name)) { inactive.add(name); return; }
+    if (!allowed.has(name) && !(typeof name === 'string' && name.startsWith('button:') && validButton(name.slice(7))))
+      throw new Error('Unsupported card script event registration');
+    handlers.push([name, fn]);
+  };
+  const appendButtons = rows => {
+    if (!Array.isArray(rows) || rows.length > 8) throw new Error('Expected up to eight card script buttons');
+    const next = buttonRows.slice();
+    for (const row of rows) {
+      if (!row || !validButton(row.name) || typeof row.visible !== 'boolean')
+        throw new Error('Expected button name and visibility');
+      if (!next.some(button => button.name === row.name)) next.push({name:row.name, visible:row.visible});
+    }
+    if (next.length > 8) throw new Error('Only eight buttons per card script can be published');
+    if (next.length === buttonRows.length) return;
+    if (event === 'mvu') throw new Error('Cannot publish buttons during an MVU settlement');
+    buttonRows.splice(0, buttonRows.length, ...next);
+    published = true;
+  };
   const scope = opts => {
     if (opts !== undefined && (!opts || typeof opts !== 'object' || (opts.type !== undefined && opts.type !== 'chat')))
       throw new Error('Only current-session variables are available');
@@ -34,13 +63,10 @@ _BRIDGE = r"""
     tavern_events: {value: phases},
     Mvu: {value: Object.freeze({events:Object.freeze({...mvuEvents, VARIABLE_INITIALIZED:'mag_variable_initialized',
       BEFORE_MESSAGE_UPDATE:'mag_before_message_update'})})},
-    eventOn: {value: (name, fn) => {
-      if (firing || typeof fn !== 'function' || handlers.length >= 32)
-        throw new Error('Unsupported card script event registration');
-      if (deferred.has(name)) { inactive.add(name); return; }
-      if (!allowed.has(name)) throw new Error('Unsupported card script event registration');
-      handlers.push([name, fn]);
-    }},
+    eventOn: {value: on},
+    eventOnButton: {value: (name, fn) => on(buttonEvent(name), fn)},
+    getScriptButtons: {value: () => clone(buttonRows)},
+    appendInexistentScriptButtons: {value: appendButtons},
     _: {configurable:true, writable:true, value: Object.freeze({remove(list, predicate) {
       if (!Array.isArray(list) || typeof predicate !== 'function') throw new Error('Expected an array and a predicate');
       const indexes = [], removed = [];
@@ -50,10 +76,7 @@ _BRIDGE = r"""
       for (let i = indexes.length - 1; i >= 0; i--) list.splice(indexes[i], 1);
       return removed;
     }})},
-    getButtonEvent: {value: n => {
-      if (typeof n !== 'string' || !buttons.includes(n)) throw new Error('Unknown card script button');
-      return 'button:' + n;
-    }},
+    getButtonEvent: {value: buttonEvent},
     getChatMessages: {value: (range, options) => {
       if (range !== -1 && range !== '-1') throw new Error('Only the current chat message (-1) is available');
       if (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options) ||
@@ -84,7 +107,8 @@ _BRIDGE = r"""
           handled = true;
           await fn(clone(args));
         }
-        result = stringify({status:'ok', handled, values:state, inactive:[...inactive], listensMvu:handlers.some(([n]) => Object.values(mvuEvents).includes(n))});
+        result = stringify({status:'ok', handled, values:state, inactive:[...inactive],
+          listensMvu:handlers.some(([n]) => Object.values(mvuEvents).includes(n)), buttons:published ? buttonRows : undefined});
       } catch (error) {
         result = stringify({status: error instanceof MissingGlobal ? 'unsupported_api' : 'script_error'});
       }

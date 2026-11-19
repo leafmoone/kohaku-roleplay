@@ -10,6 +10,12 @@ _MAX_CODE_BYTES = 64 * 1024
 _MAX_SCRIPTS = 12
 
 
+class ScriptButton(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    name: str = Field(min_length=1, max_length=80)
+    visible: bool
+
+
 class CardScript(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
     id: str = Field(min_length=1, max_length=120)

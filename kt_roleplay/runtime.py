@@ -51,7 +51,7 @@ from .worldbook import read_worldbook
 from .worldbook_library import WorldbookNotFound, WorldbookReference, default_worldbook_for_play, snapshot_detail, worldbook_for_play
 from .scene_tools import ingest_report
 from .script_session import ScriptSession, SessionScripts, approved, upgrade_script_clock
-from .script_tool import CardScriptError, RunCardScript, run_mvu_update
+from .script_tool import CardScriptError, RunCardScript, effective_buttons, run_mvu_update
 from .recovery import resume_scene
 
 
@@ -439,7 +439,7 @@ class RoleplayPlugin(BasePlugin):
             scripts = [s for s in scripts if play.script_state.mvu_listeners.get(s.id, True)]
             if scripts:
                 wire = update if isinstance(update, str) else [change.model_dump() for change in update]
-                values, notices = await to_thread(run_mvu_update, scripts, play.mvu.values, wire)
+                values, notices = await to_thread(run_mvu_update, scripts, play.mvu.values, wire, play.script_state.appended_buttons)
                 if self._record() != record:
                     raise ValueError('The tavern changed during the MVU update; try again')
                 inactive = {**play.script_state.inactive_events, **notices}
@@ -531,10 +531,14 @@ class RoleplayPlugin(BasePlugin):
         if play.scripts:
             host_ok = self._script_turn_index() is not None
             issues = play.script_state.issues if host_ok else {**play.script_state.issues, "$host": _SCRIPT_CLOCK_UNAVAILABLE}
-            view["cardScripts"] = {"entries": [s.view() for s in play.scripts],
+            runnable = {s.id for s in approved(play.scripts, play.script_state)} if host_ok else set()
+            views = [s.view() if s.id not in runnable else {
+                **s.view(), 'buttons': [row.name for row in effective_buttons(s, play.script_state.appended_buttons.get(s.id, [])) if row.visible],
+            } for s in play.scripts]
+            view["cardScripts"] = {"entries": views,
                                    "canEnable": host_ok and bool(play.mvu and play.mvu.values and any(
                                        s.enabled and (s.issue is None or s.issue in RETRYABLE_MODULE_ISSUES) for s in play.scripts)),
-                                   "enabled": host_ok and bool(approved(play.scripts, play.script_state)),
+                                   "enabled": bool(runnable),
                                    "issues": issues, 'inactiveEvents': play.script_state.inactive_events}
         selected = chosen_key(play.portrait_rules, play.state_fields, play.values)
         if selected is not None:
@@ -665,7 +669,11 @@ class RoleplayPlugin(BasePlugin):
                         scripts = await to_thread(link_card_scripts, library_dir(), play.cardId, play.scripts)
                         if self._record() != record:
                             raise OwnerArgumentError("The tavern changed while linking modules; try again")
-                        play = play.model_copy(update={"scripts": scripts})
+                        if scripts != play.scripts:
+                            unchanged = {old.id for old, new in zip(play.scripts, scripts) if old == new}
+                            saved = {key: rows for key, rows in play.script_state.appended_buttons.items() if key in unchanged}
+                            play = play.model_copy(update={"scripts": scripts, "script_state": play.script_state.model_copy(
+                                update={'appended_buttons': saved})})
                     if not any(s.enabled and not s.issue for s in play.scripts):
                         self._save(play.model_dump())
                         self.ui_emit("state", self.ui_state())
@@ -681,7 +689,7 @@ class RoleplayPlugin(BasePlugin):
             if action == "invoke_script_button" and self.mode == "tavern" and self._record() is not None:
                 script_id, button = args.get("scriptId"), args.get("button")
                 if set(args) != {"scriptId", "button"} or not isinstance(script_id, str) or not isinstance(button, str):
-                    raise OwnerArgumentError("Expected a script id and a declared button")
+                    raise OwnerArgumentError("Expected a script id and a published button")
                 agent = self.binding.host_agent if self.binding else None
                 if agent and agent.is_processing:
                     raise OwnerArgumentError("Wait for the tavern to finish responding before using a script button")

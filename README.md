@@ -63,7 +63,9 @@
 
 ### 酒馆卡片脚本（实验性）
 
-可识别 `TavernHelper_scripts` 与 `tavern_helper.scripts` 的本地脚本声明；导入不会执行脚本。新酒馆默认运行卡片已启用、具备可用 `[InitVar]` 的兼容脚本。关闭默认选项只影响之后新开的酒馆，既有局保留自己的开关状态。宿主若没有可用的持久会话回合号，脚本不能启用，已有许可也不会开放按钮或 Tool。新局启用后可运行一次开场事件；在已经开局的会话中开启不重放开场。玩家输入及最终回复按 KT 对话回合去重；工具续轮不重跑同一阶段，历史改写或分叉不会回滚脚本已写入的变量。支持 `eventOn`、`getVariables`、`replaceVariables`、`updateVariablesWith` 和已声明按钮的 `getButtonEvent`；`rp_run_card_script` 只接收本局登记的 ID 和 JSON 参数。只把当前会话的 MVU 副本交给有时间和内存上限的独立 JS 进程，变量更新整批校验。不会给脚本提供文件、网络、浏览器 DOM、其他会话或宿主 Tool；完整 Tavern Helper、EJS 和斜杠命令链仍不支持。此模式适合确认来源的卡，不等同于操作系统级沙箱或原样运行所有卡。
+可识别 `TavernHelper_scripts` 与 `tavern_helper.scripts` 的本地脚本声明；导入不会执行脚本。新酒馆默认运行卡片已启用、具备可用 `[InitVar]` 的兼容脚本。关闭默认选项只影响之后新开的酒馆，既有局保留自己的开关状态。宿主若没有可用的持久会话回合号，脚本不能启用，已有许可也不会开放按钮或 Tool。新局启用后可运行一次开场事件；在已经开局的会话中开启不重放开场。玩家输入及最终回复按 KT 对话回合去重；工具续轮不重跑同一阶段，历史改写或分叉不会回滚脚本已写入的变量。支持 `eventOn`、`getVariables`、`replaceVariables`、`updateVariablesWith` 及 `getButtonEvent` / `eventOnButton`；`rp_run_card_script` 只接收本局登记的 ID 和 JSON 参数。只把当前会话的 MVU 副本交给有时间和内存上限的独立 JS 进程，变量更新整批校验。不会给脚本提供文件、网络、浏览器 DOM、其他会话或宿主 Tool；完整 Tavern Helper、EJS 和斜杠命令链仍不支持。此模式适合确认来源的卡，不等同于操作系统级沙箱或原样运行所有卡。
+
+普通卡片脚本事件中，`appendInexistentScriptButtons([{name, visible}])` 可把新按钮添加到自己的本局列表；同名不重复，`getScriptButtons()` 只读返回副本（原卡静态隐藏按钮仍不导入）。同一个脚本最多八个，隐藏或只注册但未发布的名称不能被玩家调用。按钮和有效变量改动一起保存，关脚本不可调用，读档可恢复；不会改原卡、不需要模型、不操作宿主 DOM。MVU 结算回调不能新增按钮，也不提供任意脚本树修改。
 
 旧卡常把值保存为 `[标量, 说明文字]`。字面量 `_.set('路径', 新标量)` 在同类型时只改第 0 项，说明不变；带旧值的写法也只比较该标量。监听器收到原路径和新旧标量，而不是 `路径.0`。根 `$meta.strictSet: true` 时不作这个解释。原生 typed 更新、JSON Pointer 和显式整数组替换仍按实际存储类型处理。
 
