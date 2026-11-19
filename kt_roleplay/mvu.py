@@ -163,12 +163,9 @@ def apply_changes(values: dict[str, JsonValue], changes: list[MvuChange]) -> dic
         seen.add(path)
         parent = updated
         for part in path[:-1]:
-            child = parent.get(part)
-            if not isinstance(child, dict):
-                raise ValueError("Unknown MVU variable path")
-            parent = child
-        key = path[-1]
-        if key not in parent or _kind(change.value) != _kind(parent[key]):
+            parent = parent[existing_key(parent, part)]
+        key = existing_key(parent, path[-1])
+        if _kind(change.value) != _kind(parent[key]):
             raise ValueError("Unknown or incompatible MVU variable")
         original = parent[key]
         if change.op == "add" and type(original) in (int, float) and type(change.value) in (int, float):
@@ -179,6 +176,30 @@ def apply_changes(values: dict[str, JsonValue], changes: list[MvuChange]) -> dic
             raise ValueError("Unsupported MVU update")
         _budget(value)
         parent[key] = value
-    if _budget(updated) > _MAX_NODES or len(json.dumps(updated, ensure_ascii=False).encode("utf-8")) > _MAX_INIT_BYTES:
+    return validate_updated_values(updated)
+
+
+def array_index(token: str, length: int, *, inserting: bool = False) -> int:
+    if inserting and token == "-":
+        return length
+    if (not token or len(token) > len(str(length)) or (len(token) > 1 and token[0] == "0")
+            or not token.isascii() or not token.isdecimal()):
+        raise ValueError("Invalid MVU array index")
+    index = int(token)
+    if index >= length + int(inserting):
+        raise ValueError("MVU array index out of bounds")
+    return index
+
+
+def existing_key(parent: JsonValue, token: str) -> str | int:
+    if isinstance(parent, list):
+        return array_index(token, len(parent))
+    if isinstance(parent, dict) and token in parent:
+        return token
+    raise ValueError("Unknown MVU variable path")
+
+
+def validate_updated_values(values: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    if _budget(values) > _MAX_NODES or len(json.dumps(values, ensure_ascii=False).encode("utf-8")) > _MAX_INIT_BYTES:
         raise ValueError("MVU session exceeds its value limit")
-    return updated
+    return values

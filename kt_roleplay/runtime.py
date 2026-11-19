@@ -493,7 +493,9 @@ class RoleplayPlugin(BasePlugin):
                     directions = [card.fields.mes_example, card.fields.system_prompt, card.fields.post_history_instructions]
                     if lore is not None:
                         directions.extend(entry.content for entry in lore.entries if entry.enabled)
-                    legacy_mvu = block is not None or any("<UpdateVariable>" in text and "_." in text for text in directions)
+                    legacy_mvu = block is not None or any(
+                        "<UpdateVariable>" in text and ("_." in text or "<JSONPatch>" in text) for text in directions
+                    )
                     if block is not None:
                         opening = prose
                         try:
@@ -608,7 +610,7 @@ class RoleplayPlugin(BasePlugin):
                                                                        "mvu_displayed_paths": [json.loads(key) for key in play.mvu_public]},
                                                                       ensure_ascii=False))
             if play.mvu_legacy:
-                content += "\nIf the card requests literal <UpdateVariable> commands, call rp_apply_mvu_update instead of printing the block. Do not apply the same change through both update tools."
+                content += "\nIf the card requests a literal <UpdateVariable> block, call rp_apply_mvu_update instead of printing the block. Do not apply the same change through both update tools."
             if books and self.binding:
                 lore_view = {"totalEntries": sum(len(book.entries) for book in books), "activeTitles": [e.name or e.comment or ", ".join(e.keys) for e in entries], "usedTokens": 2048 - remaining, "budgetTokens": min(2048, sum(book.token_budget for book in books))}
                 if self.binding.get_state("loreView") != lore_view:

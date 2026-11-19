@@ -48,7 +48,7 @@ class ApplyMvuUpdate(UpdateMvu):
     tool_name = "rp_apply_mvu_update"
     description = (
         "Apply one literal <UpdateVariable> block for a card that expects MagVarUpdate format. "
-        "Use _.set('path', new) or _.set('path', old, new) and _.add('path', delta), one command per line. "
+        "Use literal _.set/_.add commands (one per line) or a <JSONPatch> array with test/replace and array add/remove. "
         "Do not duplicate the same updates with rp_update_mvu or print the block in the story."
     )
 
