@@ -3,6 +3,11 @@
   "version": "0.5.0",
   "private": true,
   "description": "Optional offline linker for reviewed roleplay card modules",
-  "engines": { "node": "^20.19.0 || >=22.12.0" },
-  "dependencies": { "rolldown": "1.3.3" }
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "dependencies": {
+    "lodash": "4.18.1",
+    "rolldown": "1.3.3"
+  }
 }

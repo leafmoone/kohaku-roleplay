@@ -16,7 +16,9 @@ from .module_linker import ModuleLinkError, _bundle
 from .script_dependencies import ModuleReference, scan_modules
 
 OpeningPageIssue = Literal['entry_unconfirmed', 'entry_needs_resources', 'entry_unsupported']
-OpeningPageRuntime = Literal['vue-3.5.22']
+OpeningPageRuntime = Literal['vue-3.5.22', 'vue-3.5.22-lodash-4.18.1']
+_LODASH_RUNTIME = 'vue-3.5.22-lodash-4.18.1'
+_LODASH_BYTES = 96 * 1024
 _VUE_RUNTIME_URLS = (
     'https://testingcf.jsdelivr.net/npm/vue@3.5.22/+esm',
     'https://cdn.jsdelivr.net/npm/vue@3.5.22/+esm',
@@ -334,6 +336,28 @@ def _opening_module_url(parent: str, ref: ModuleReference) -> str | None:
         return None
 
 
+def _installed_lodash_module() -> str:
+    package = Path(__file__).parent.parent / 'node_modules' / 'lodash'
+    try:
+        with (package / 'lodash.min.js').open('rb') as file:
+            source = file.read(_LODASH_BYTES + 1)
+        with (package / 'LICENSE').open('rb') as file:
+            notice = file.read(4 * 1024 + 1)
+    except OSError as exc:
+        raise ModuleLinkError('dependency_missing') from exc
+    if not 0 < len(source) <= _LODASH_BYTES or not 0 < len(notice) <= 4 * 1024 or b'*/' in notice:
+        raise ModuleLinkError('dependency_unsupported')
+    try:
+        # Keep Lodash's UMD export local. Rolldown retains the full npm MIT
+        # notice alongside the browser code rather than only its license link.
+        return (f'/*! @license Lodash 4.18.1\n{notice.decode("ascii")}\n*/\n'
+                'const module={exports:{}}; (function(module,exports){\n'
+                f'{source.decode("utf-8")}\n'
+                '}).call(globalThis,module,module.exports); export default module.exports;')
+    except UnicodeError as exc:
+        raise ModuleLinkError('dependency_unsupported') from exc
+
+
 def _opening_module_graph(entry: str, saved: dict[str, bytes], *,
                           pending: dict[str, str | None] | None = None,
                           runtime: OpeningPageRuntime | None = None) -> tuple[list[str], list[dict[str, int]]]:
@@ -385,7 +409,16 @@ Object.defineProperty(globalThis, "Vue", { value: vue });'''
         # can contain a leading hashbang valid only at offset zero.
         routes = {'kt:opening-prelude': len(sources) + 1, 'kt:author-entry': 1}
         shifted = [{name: index + 1 for name, index in scope.items()} for scope in edges]
-        return [wrapper, *sources, prelude], [routes, *shifted, {'kt:approved-vue': vue[0] + 1}]
+        prelude_routes = {'kt:approved-vue': vue[0] + 1}
+        if runtime == _LODASH_RUNTIME:
+            prelude = 'import lodash from "kt:installed-lodash";\n' + prelude + '''
+if (typeof lodash !== "function" || lodash.VERSION !== "4.18.1") {
+    throw new Error("The installed Lodash runtime is not version 4.18.1");
+}
+Object.defineProperty(globalThis, "_", { value: lodash });'''
+            prelude_routes['kt:installed-lodash'] = len(sources) + 2
+            return [wrapper, *sources, prelude, _installed_lodash_module()], [routes, *shifted, prelude_routes, {}]
+        return [wrapper, *sources, prelude], [routes, *shifted, prelude_routes]
     return sources, edges
 
 
@@ -435,7 +468,10 @@ def _cached_linked_opening_panel(directory: Path, card_id: str, title: str, html
         if body is None:
             return None, 'entry_unsupported'
         start, end, code = body
-        html_room = _MAX_HTML - len((html[:start] + html[end:]).encode('utf-8'))
+        # The generated opt-in artifact includes the installed Lodash body
+        # and its notice. Raw HTML, cache budgets and other profiles stay capped as before.
+        output_limit = _MAX_HTML + (_LODASH_BYTES if runtime == _LODASH_RUNTIME else 0)
+        html_room = output_limit - len((html[:start] + html[end:]).encode('utf-8'))
         linked = _bundle(*_opening_module_graph(code, saved, runtime=runtime), max_output_bytes=html_room)
     except ModuleLinkError as exc:
         needs = str(exc) in ('dependency_missing', 'other_resources')
