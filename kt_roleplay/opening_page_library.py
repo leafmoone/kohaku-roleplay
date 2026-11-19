@@ -16,9 +16,11 @@ from .module_linker import ModuleLinkError, _bundle
 from .script_dependencies import ModuleReference, scan_modules
 
 OpeningPageIssue = Literal['entry_unconfirmed', 'entry_needs_resources', 'entry_unsupported']
-OpeningPageRuntime = Literal['vue-3.5.22', 'vue-3.5.22-lodash-4.18.1']
+OpeningPageRuntime = Literal['vue-3.5.22', 'vue-3.5.22-lodash-4.18.1', 'vue-3.5.22-lodash-4.18.1-zod-4.6.7']
 _LODASH_RUNTIME = 'vue-3.5.22-lodash-4.18.1'
+_ZOD_RUNTIME = 'vue-3.5.22-lodash-4.18.1-zod-4.6.7'
 _LODASH_BYTES = 96 * 1024
+_ZOD_BYTES = 128 * 1024
 _VUE_RUNTIME_URLS = (
     'https://testingcf.jsdelivr.net/npm/vue@3.5.22/+esm',
     'https://cdn.jsdelivr.net/npm/vue@3.5.22/+esm',
@@ -410,13 +412,16 @@ Object.defineProperty(globalThis, "Vue", { value: vue });'''
         routes = {'kt:opening-prelude': len(sources) + 1, 'kt:author-entry': 1}
         shifted = [{name: index + 1 for name, index in scope.items()} for scope in edges]
         prelude_routes = {'kt:approved-vue': vue[0] + 1}
-        if runtime == _LODASH_RUNTIME:
+        if runtime in (_LODASH_RUNTIME, _ZOD_RUNTIME):
             prelude = 'import lodash from "kt:installed-lodash";\n' + prelude + '''
 if (typeof lodash !== "function" || lodash.VERSION !== "4.18.1") {
     throw new Error("The installed Lodash runtime is not version 4.18.1");
 }
 Object.defineProperty(globalThis, "_", { value: lodash });'''
             prelude_routes['kt:installed-lodash'] = len(sources) + 2
+            if runtime == _ZOD_RUNTIME:
+                prelude_routes['kt:installed-zod-classic'] = -1  # The runner's fixed installed-library edge.
+                prelude = 'import zod from "kt:installed-zod-classic";\n' + prelude + '\nObject.defineProperty(globalThis, "z", { value: zod });'
             return [wrapper, *sources, prelude, _installed_lodash_module()], [routes, *shifted, prelude_routes, {}]
         return [wrapper, *sources, prelude], [routes, *shifted, prelude_routes]
     return sources, edges
@@ -468,10 +473,12 @@ def _cached_linked_opening_panel(directory: Path, card_id: str, title: str, html
         if body is None:
             return None, 'entry_unsupported'
         start, end, code = body
-        # The generated opt-in artifact includes the installed Lodash body
-        # and its notice. Raw HTML, cache budgets and other profiles stay capped as before.
-        output_limit = _MAX_HTML + (_LODASH_BYTES if runtime == _LODASH_RUNTIME else 0)
-        html_room = output_limit - len((html[:start] + html[end:]).encode('utf-8'))
+        # Only the generated artifact grows for installed runtime assets;
+        # raw HTML and cache budgets do not change.
+        extra = _LODASH_BYTES if runtime in (_LODASH_RUNTIME, _ZOD_RUNTIME) else 0
+        if runtime == _ZOD_RUNTIME:
+            extra += _ZOD_BYTES
+        html_room = _MAX_HTML + extra - len((html[:start] + html[end:]).encode('utf-8'))
         linked = _bundle(*_opening_module_graph(code, saved, runtime=runtime), max_output_bytes=html_room)
     except ModuleLinkError as exc:
         needs = str(exc) in ('dependency_missing', 'other_resources')

@@ -79,6 +79,8 @@ def _bundle(source: list[str], edges: list[dict[str, int]], *, max_output_bytes:
         raise ModuleLinkError("module_link_failed") from exc
     if process.returncode == 20:
         raise ModuleLinkError("module_linker_unavailable")
+    if process.returncode == 21:
+        raise ModuleLinkError("dependency_missing")
     if process.returncode or not process.stdout:
         raise ModuleLinkError("module_link_failed")
     if len(process.stdout) > max_output_bytes:
