@@ -182,6 +182,8 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 实验性 `openingMvuSchema: {profile: "mvu-zod-derived-v1", scriptId: "<原声明的脚本 ID>", outputPath: ["角色", "$阶段"]}` 只用于上述开场计数，需要显式 `enableCardScripts: false`。先在卡库确认该启用脚本唯一声明的编译模块，开局再选定脚本和**一个**授权派生的字符串路径。离线链接只兼容该编译模块对 `mvu_zod.js` 的精确已识别注册入口；不运行上游 helper 或其事件。使用本包锁定的 Zod/Lodash，隔离运行原模块的 schema；若未注册、资源缺失、不能生成该字符串，或 schema 还要改别的规范变量，拒绝本次操作，不部分保存。派生字符串和操作结果都可能依赖任一输入，所以只有同一开场快照的所有 schema 输入都已显式公开（包括计数器）时，才下发派生并允许网页计数写入。它不是通用变量写入目标。已接受的计数、派生和版本同档保存，读档不重下载。不自动启用其他作者脚本、端点提示或卡片更新器。
 
+[StageDog《呕吐内心的少女》实测开场](compat/stagedog-opening.md) 列出原卡玩法、角色库审批前提、可信开局参数，以及未验证浮动链接和其它作者脚本的边界。
+
 ### 酒馆原生面板
 
 在 `data.extensions["kohaku-roleplay"].panels` 声明一组面板；每项有唯一 `id`、显示用 `label` 和 `type`。状态由 KT 的本局字段更新，面板只负责呈现，不自行推进剧情。
@@ -208,7 +210,7 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 - `kohaku.yaml`：KT 包清单；`creatures/rp_agent/`：单 agent 酒馆配置与角色行为。
 - `kt_roleplay/`：后端，含卡片解析、素材库、人物形象/游玩投影和世界书筛选；`card_state.py` 定义卡片状态协议，`state_tool.py` 提供酒馆更新工具，`mvu.py` / `mvu_tool.py` 负责静态初值与本局原生更新工具，`panels.py` 投影酒馆原生面板，`novel.py` / `scene_tools.py` / `recovery.py` 处理小说裁定、分发回报与中断恢复。
 - `kt_roleplay/card_editor.py`：在原格式上另存卡片；`charx.py`：读取归档及本地媒体；`portraits.py` / `portrait_library.py`：处理嵌入的本地图片、公开状态映射与立绘副本。
-- [`compat/kohakuterrarium-v2.2.2/`](compat/kohakuterrarium-v2.2.2/README.md)：可选的 KohakuTerrarium 标题栏宿主源码补丁与上游许可证。
+- [`compat/kohakuterrarium-v2.2.2/`](compat/kohakuterrarium-v2.2.2/README.md)：可选的 KohakuTerrarium 标题栏宿主源码补丁与上游许可证；[`compat/stagedog-opening.md`](compat/stagedog-opening.md)：实测旧作的开场兼容说明。
 - `package.json` / `package-lock.json`：卡片模块离线链接器的一次性 Node.js 安装声明；`kt_roleplay/module_*.py`、`script_dependencies.py` 和 `link_card_module.mjs` 负责检查、保存与链接。
 - [原生玩法最小示例：物资登记员](examples/native-ledger.json)：可直接在角色库导入并开酒馆。无需卡片 JS、MVU 或 Node。查看 `state` 如何声明库存、核对结果和任务状态，再看 `panels` 如何引用它们。点击「核对清单」只发送所示玩家输入；由玩法工具记录动作，面板读取结果，不靠按钮直接改存档。
 - `kt_roleplay/opening_page_library.py`：已确认外部开场入口和模块缓存、依赖诊断；`ui/src/CardWebPanel.js`：在酒馆 Dock 挂载隔离的本局作者页。
