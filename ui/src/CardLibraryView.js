@@ -159,12 +159,22 @@ export const CardLibraryView = {
     let importPreviewSeq = 0;
     let detailModulesSeq = 0;
 
+    // External opening page & opening module plan approval state (per-card)
+    const openingPlan = ref(null);
+    const openingPlanLoading = ref(false);
+    const openingPlanError = ref("");
+    const openingConfirmBusyKey = ref("");
+    const openingConfirmError = ref("");
+    let openingPlanSeq = 0;
+    let openingConfirmSeq = 0;
+
     // Studio quick-launch state (used in tab mode)
     const tavernLaunchPlayer = ref("Player");
     const tavernLaunchDesc = ref("");
     const tavernLaunchGreetingIndex = ref(0);
     const tavernLaunchWorldbookMode = ref("__default__");
     const tavernLaunchScriptsMode = ref("__default__");
+    const tavernLaunchEnableOpeningModules = ref(false);
     const novelCastIds = ref([]);
     const novelTitle = ref("");
     const launchedSession = ref(null);
@@ -255,6 +265,32 @@ export const CardLibraryView = {
     const pendingEligibleHttpsUrls = computed(() =>
       collectEligibleHttpsUrls(pendingImportDeps.value?.scripts || []),
     );
+    const detailRemoteOpeningPage = computed(() => {
+      const currentId = selectedId.value;
+      if (!currentId || !detail.value || detail.value.id !== currentId) {
+        return null;
+      }
+      const raw = detail.value.remoteOpeningPage;
+      if (!raw || typeof raw !== "object" || typeof raw.url !== "string" || !raw.url) {
+        return null;
+      }
+      const snap =
+        raw.snapshot &&
+        typeof raw.snapshot === "object" &&
+        typeof raw.snapshot.url === "string"
+          ? {
+              url: raw.snapshot.url,
+              size: Number(raw.snapshot.size) || 0,
+            }
+          : null;
+      return {
+        cardId: currentId,
+        title: typeof raw.title === "string" && raw.title.trim() ? raw.title.trim() : "",
+        marker: typeof raw.marker === "string" ? raw.marker : "",
+        url: raw.url,
+        snapshot: snap,
+      };
+    });
     const filteredCards = computed(() => {
       const q = query.value.trim().toLowerCase();
       if (!q) return cards.value;
@@ -315,9 +351,12 @@ export const CardLibraryView = {
     watch(selectedId, () => {
       embeddedSeq += 1;
       detailModulesSeq += 1;
+      openingPlanSeq += 1;
+      openingConfirmSeq += 1;
       tavernLaunchGreetingIndex.value = 0;
       tavernLaunchWorldbookMode.value = "__default__";
       tavernLaunchScriptsMode.value = "__default__";
+      tavernLaunchEnableOpeningModules.value = false;
       editingCopy.value = false;
       editingPortraits.value = false;
       expandedDetails.value = {};
@@ -332,6 +371,11 @@ export const CardLibraryView = {
       confirmingDetailModules.value = false;
       detailSelectedModuleUrls.value = [];
       detailModulesError.value = "";
+      openingPlan.value = null;
+      openingPlanLoading.value = false;
+      openingPlanError.value = "";
+      openingConfirmBusyKey.value = "";
+      openingConfirmError.value = "";
     });
 
     watch(
@@ -516,6 +560,196 @@ export const CardLibraryView = {
       selectedEmbeddedEntryIndex.value = index;
     }
 
+    function normalizeOpeningPlan(rawPlan, fallbackUrl) {
+      if (!rawPlan || typeof rawPlan !== "object") return null;
+      const url =
+        typeof rawPlan.url === "string" && rawPlan.url ? rawPlan.url : fallbackUrl || "";
+      const status =
+        typeof rawPlan.status === "string" && rawPlan.status
+          ? rawPlan.status
+          : "entry_unconfirmed";
+      const saved = Array.isArray(rawPlan.saved)
+        ? rawPlan.saved
+            .filter((item) => item && typeof item === "object" && typeof item.url === "string" && item.url)
+            .map((item) => ({
+              url: item.url,
+              size: Number(item.size) || 0,
+            }))
+        : [];
+      const pending = Array.isArray(rawPlan.pending)
+        ? rawPlan.pending
+            .filter((item) => item && typeof item === "object" && typeof item.url === "string" && item.url)
+            .map((item) => ({
+              url: item.url,
+              parentUrl:
+                typeof item.parentUrl === "string" && item.parentUrl
+                  ? item.parentUrl
+                  : null,
+            }))
+        : [];
+      return {
+        url,
+        status,
+        saved,
+        pending,
+      };
+    }
+
+    function openingPlanStatusLabel(status) {
+      switch (status) {
+        case "entry_unconfirmed":
+          return t("openingPlanStatusEntryUnconfirmed");
+        case "self_contained":
+          return t("openingPlanStatusSelfContained");
+        case "modules_missing":
+          return t("openingPlanStatusModulesMissing");
+        case "static_graph_complete":
+          return t("openingPlanStatusStaticGraphComplete");
+        case "other_resources":
+          return t("openingPlanStatusOtherResources");
+        case "module_limit":
+          return t("openingPlanStatusModuleLimit");
+        case "unsupported":
+        default:
+          return t("openingPlanStatusUnsupported");
+      }
+    }
+
+    async function loadOpeningModulePlan(targetCardId = selectedId.value) {
+      const cardId = typeof targetCardId === "string" ? targetCardId : "";
+      const remotePage = detail.value?.id === cardId ? detailRemoteOpeningPage.value : null;
+      if (!cardId || !remotePage) {
+        openingPlan.value = null;
+        openingPlanLoading.value = false;
+        openingPlanError.value = "";
+        return;
+      }
+      const seq = ++openingPlanSeq;
+      openingPlanLoading.value = true;
+      openingPlanError.value = "";
+      try {
+        const res = await owner.call("preview_card_opening_module_plan", { id: cardId });
+        if (seq !== openingPlanSeq || selectedId.value !== cardId || detail.value?.id !== cardId) {
+          return;
+        }
+        openingPlan.value = normalizeOpeningPlan(res, remotePage.url);
+      } catch (err) {
+        if (seq === openingPlanSeq && selectedId.value === cardId && detail.value?.id === cardId) {
+          openingPlanError.value = err?.message || String(err);
+        }
+      } finally {
+        if (seq === openingPlanSeq) {
+          openingPlanLoading.value = false;
+        }
+      }
+    }
+
+    async function confirmRemoteOpeningEntryPage() {
+      const cardId = selectedId.value;
+      const remotePage = detail.value?.id === cardId ? detailRemoteOpeningPage.value : null;
+      if (!cardId || !remotePage || busy.value || openingConfirmBusyKey.value) return;
+      const url = remotePage.url;
+      const seq = ++openingConfirmSeq;
+      openingConfirmBusyKey.value = `entry:${url}`;
+      openingConfirmError.value = "";
+      actionError.value = "";
+      try {
+        const res = await owner.call("confirm_card_opening_page", {
+          id: cardId,
+          url,
+        });
+        if (seq !== openingConfirmSeq || selectedId.value !== cardId || detail.value?.id !== cardId) {
+          return;
+        }
+        const snap = res?.openingPage;
+        const resolvedSnap = {
+          url: snap && typeof snap.url === "string" && snap.url ? snap.url : url,
+          size: Number(snap?.size) || 0,
+        };
+        detail.value = {
+          ...detail.value,
+          remoteOpeningPage: {
+            ...detail.value.remoteOpeningPage,
+            snapshot: resolvedSnap,
+          },
+        };
+        await loadOpeningModulePlan(cardId);
+      } catch (err) {
+        if (seq === openingConfirmSeq && selectedId.value === cardId && detail.value?.id === cardId) {
+          openingConfirmError.value = err?.message || String(err);
+        }
+      } finally {
+        if (seq === openingConfirmSeq) {
+          openingConfirmBusyKey.value = "";
+        }
+      }
+    }
+
+    async function confirmPendingOpeningModule(pendingItem) {
+      const cardId = selectedId.value;
+      const remotePage = detail.value?.id === cardId ? detailRemoteOpeningPage.value : null;
+      if (
+        !cardId ||
+        !remotePage ||
+        !pendingItem ||
+        typeof pendingItem.url !== "string" ||
+        !pendingItem.url ||
+        busy.value ||
+        openingConfirmBusyKey.value
+      ) {
+        return;
+      }
+      const url = pendingItem.url;
+      const parentUrl =
+        typeof pendingItem.parentUrl === "string" && pendingItem.parentUrl
+          ? pendingItem.parentUrl
+          : null;
+      const seq = ++openingConfirmSeq;
+      openingConfirmBusyKey.value = `module:${url}`;
+      openingConfirmError.value = "";
+      actionError.value = "";
+      try {
+        // Strictly omit parentUrl when parentUrl is null
+        const args = parentUrl !== null ? { id: cardId, url, parentUrl } : { id: cardId, url };
+        const res = await owner.call("confirm_card_opening_module", args);
+        if (seq !== openingConfirmSeq || selectedId.value !== cardId || detail.value?.id !== cardId) {
+          return;
+        }
+        // Optimistically update the local plan so if preview_card_opening_module_plan fails,
+        // the confirmed module is already moved to `saved` and Retry only refreshes the plan.
+        if (openingPlan.value) {
+          const snap = res?.openingModule;
+          const savedEntry = {
+            url: snap && typeof snap.url === "string" && snap.url ? snap.url : url,
+            size: Number(snap?.size) || 0,
+          };
+          const prevSaved = Array.isArray(openingPlan.value.saved)
+            ? openingPlan.value.saved
+            : [];
+          const nextSaved = prevSaved.some((m) => m.url === savedEntry.url)
+            ? prevSaved.map((m) => (m.url === savedEntry.url ? savedEntry : m))
+            : [...prevSaved, savedEntry];
+          const nextPending = Array.isArray(openingPlan.value.pending)
+            ? openingPlan.value.pending.filter((p) => p.url !== url)
+            : [];
+          openingPlan.value = {
+            ...openingPlan.value,
+            saved: nextSaved,
+            pending: nextPending,
+          };
+        }
+        await loadOpeningModulePlan(cardId);
+      } catch (err) {
+        if (seq === openingConfirmSeq && selectedId.value === cardId && detail.value?.id === cardId) {
+          openingConfirmError.value = err?.message || String(err);
+        }
+      } finally {
+        if (seq === openingConfirmSeq) {
+          openingConfirmBusyKey.value = "";
+        }
+      }
+    }
+
     let detailSeq = 0;
     watch(
       () => [selectedId.value, owner.status.value],
@@ -546,6 +780,13 @@ export const CardLibraryView = {
             detailSelectedModuleUrls.value = (
               unsavedEligible.length ? unsavedEligible : eligible
             ).slice(0, MAX_CARD_MODULES);
+            if (result?.remoteOpeningPage && typeof result.remoteOpeningPage.url === "string") {
+              void loadOpeningModulePlan(id);
+            } else {
+              openingPlan.value = null;
+              openingPlanLoading.value = false;
+              openingPlanError.value = "";
+            }
           }
         } catch (err) {
           if (!stale && seq === detailSeq) {
@@ -936,8 +1177,22 @@ export const CardLibraryView = {
         } else if (tavernLaunchScriptsMode.value === "off") {
           payload.enableCardScripts = false;
         }
+        const remoteOpening = detailRemoteOpeningPage.value;
+        if (
+          tavernLaunchEnableOpeningModules.value &&
+          !detailLoading.value &&
+          detail.value?.id === card.id &&
+          remoteOpening &&
+          remoteOpening.cardId === card.id &&
+          detail.value?.remoteOpeningPage?.url === remoteOpening.url
+        ) {
+          payload.enableOpeningModules = true;
+        }
         const resp = await kt.api.post("taverns", payload);
         const data = resp?.data || resp || {};
+        // Reset explicit per-tavern opt-in back to false after a successful launch
+        // (left untouched on failure so the user can retry the same launch).
+        tavernLaunchEnableOpeningModules.value = false;
         launchedSession.value = {
           kind: "tavern",
           sessionId: data.sessionId || "",
@@ -1084,6 +1339,16 @@ export const CardLibraryView = {
       detailModulesError,
       toggleDetailModuleUrl,
       confirmDetailCardModules,
+      detailRemoteOpeningPage,
+      openingPlan,
+      openingPlanLoading,
+      openingPlanError,
+      openingConfirmBusyKey,
+      openingConfirmError,
+      openingPlanStatusLabel,
+      loadOpeningModulePlan,
+      confirmRemoteOpeningEntryPage,
+      confirmPendingOpeningModule,
       detail,
       detailLoading,
       detailError,
@@ -1119,6 +1384,7 @@ export const CardLibraryView = {
       tavernLaunchGreetingIndex,
       tavernLaunchWorldbookMode,
       tavernLaunchScriptsMode,
+      tavernLaunchEnableOpeningModules,
       launchGreetingPreview,
       novelCastIds,
       novelCastLimit: NOVEL_CAST_LIMIT,
@@ -2168,6 +2434,256 @@ export const CardLibraryView = {
                 </div>
               </div>
 
+              <!-- Declared External Opening Page & Module Approval Plan (only shown when detail.remoteOpeningPage exists) -->
+              <div
+                v-if="detailRemoteOpeningPage"
+                class="ktrp-card-box"
+                data-testid="kt-rp-card-opening-plan"
+              >
+                <div class="ktrp-row-between">
+                  <div>
+                    <div class="ktrp-inline-actions">
+                      <h4 data-testid="kt-rp-card-opening-plan-title">
+                        {{ t('openingPlanSectionTitle') }}
+                      </h4>
+                      <span
+                        v-if="openingPlan"
+                        class="ktrp-chip"
+                        :class="{
+                          'ktrp-chip--accent':
+                            openingPlan.status === 'self_contained' ||
+                            openingPlan.status === 'static_graph_complete',
+                        }"
+                        :data-status="openingPlan.status"
+                        data-testid="kt-rp-card-opening-plan-status"
+                      >
+                        {{ openingPlanStatusLabel(openingPlan.status) }}
+                      </span>
+                    </div>
+                    <p class="ktrp-muted">{{ t('openingPlanSectionHint') }}</p>
+                  </div>
+                  <ActionButton
+                    size="sm"
+                    variant="ghost"
+                    :disabled="busy || openingPlanLoading || Boolean(openingConfirmBusyKey)"
+                    data-testid="kt-rp-card-opening-plan-refresh-btn"
+                    @click="loadOpeningModulePlan(selectedId)"
+                  >
+                    {{ openingPlanLoading ? t('loading') : t('openingPlanRefreshBtn') }}
+                  </ActionButton>
+                </div>
+
+                <div
+                  v-if="openingPlanError"
+                  class="ktrp-banner ktrp-banner--error"
+                  role="alert"
+                  data-testid="kt-rp-card-opening-plan-error"
+                >
+                  <span>{{ openingPlanError }}</span>
+                  <ActionButton
+                    size="sm"
+                    :disabled="busy || openingPlanLoading"
+                    data-testid="kt-rp-card-opening-plan-retry-btn"
+                    @click="loadOpeningModulePlan(selectedId)"
+                  >
+                    {{ t('retry') }}
+                  </ActionButton>
+                </div>
+
+                <div
+                  v-if="openingConfirmError"
+                  class="ktrp-banner ktrp-banner--error"
+                  role="alert"
+                  data-testid="kt-rp-card-opening-confirm-error"
+                >
+                  <span>{{ openingConfirmError }}</span>
+                </div>
+
+                <!-- Step 1: Declared external opening page HTML entry -->
+                <div class="ktrp-sub-card" data-testid="kt-rp-card-opening-entry">
+                  <div class="ktrp-row-between">
+                    <div>
+                      <strong>
+                        {{ detailRemoteOpeningPage.title || t('openingPlanEntryDefaultTitle') }}
+                      </strong>
+                      <span v-if="detailRemoteOpeningPage.marker" class="ktrp-chip">
+                        {{ detailRemoteOpeningPage.marker }}
+                      </span>
+                    </div>
+                    <span
+                      v-if="
+                        detailRemoteOpeningPage.snapshot ||
+                        (openingPlan && openingPlan.status !== 'entry_unconfirmed')
+                      "
+                      class="ktrp-chip ktrp-chip--accent"
+                      data-testid="kt-rp-card-opening-entry-saved-badge"
+                    >
+                      {{
+                        detailRemoteOpeningPage.snapshot
+                          ? t('cardDepsRefKindHttpsSaved', {
+                              size: detailRemoteOpeningPage.snapshot.size,
+                            })
+                          : t('openingPlanEntrySavedBadge')
+                      }}
+                    </span>
+                  </div>
+                  <code
+                    class="ktrp-pre"
+                    style="word-break: break-all;"
+                    data-testid="kt-rp-card-opening-entry-url"
+                  >{{ detailRemoteOpeningPage.url }}</code>
+                  <div
+                    v-if="
+                      !detailRemoteOpeningPage.snapshot &&
+                      openingPlan &&
+                      openingPlan.status === 'entry_unconfirmed'
+                    "
+                    class="ktrp-row-end"
+                  >
+                    <ActionButton
+                      size="sm"
+                      variant="primary"
+                      :disabled="busy || openingPlanLoading || Boolean(openingConfirmBusyKey)"
+                      data-testid="kt-rp-card-opening-entry-confirm-btn"
+                      @click="confirmRemoteOpeningEntryPage"
+                    >
+                      {{
+                        openingConfirmBusyKey === 'entry:' + detailRemoteOpeningPage.url
+                          ? t('openingPlanConfirmingBtn')
+                          : t('openingPlanEntryConfirmBtn')
+                      }}
+                    </ActionButton>
+                  </div>
+                </div>
+
+                <p
+                  v-if="openingPlanLoading && !openingPlan"
+                  class="ktrp-muted"
+                  role="status"
+                  data-testid="kt-rp-card-opening-plan-loading"
+                >
+                  {{ t('loading') }}
+                </p>
+
+                <template v-if="openingPlan">
+                  <p
+                    v-if="openingPlan.status === 'static_graph_complete'"
+                    class="ktrp-muted"
+                    data-testid="kt-rp-card-opening-plan-complete-note"
+                  >
+                    {{ t('openingPlanStaticGraphCompleteNote') }}
+                  </p>
+                  <p
+                    v-else-if="openingPlan.status === 'other_resources'"
+                    class="ktrp-muted"
+                    data-testid="kt-rp-card-opening-plan-other-resources-note"
+                  >
+                    {{ t('openingPlanOtherResourcesNote') }}
+                  </p>
+                  <p
+                    v-else-if="openingPlan.status === 'module_limit'"
+                    class="ktrp-muted"
+                    data-testid="kt-rp-card-opening-plan-limit-note"
+                  >
+                    {{ t('openingPlanModuleLimitNote') }}
+                  </p>
+                  <p
+                    v-else-if="openingPlan.status === 'unsupported'"
+                    class="ktrp-muted"
+                    data-testid="kt-rp-card-opening-plan-unsupported-note"
+                  >
+                    {{ t('openingPlanUnsupportedNote') }}
+                  </p>
+
+                  <!-- Saved opening page modules -->
+                  <div
+                    class="ktrp-field-block"
+                    data-testid="kt-rp-card-opening-saved-modules"
+                  >
+                    <span class="ktrp-label">
+                      {{ t('openingPlanSavedModulesTitle', { count: openingPlan.saved.length }) }}
+                    </span>
+                    <div v-if="openingPlan.saved.length" class="ktrp-stack">
+                      <div
+                        v-for="(mod, sIdx) in openingPlan.saved"
+                        :key="mod.url"
+                        class="ktrp-row-between"
+                        :data-testid="'kt-rp-card-opening-saved-module-' + sIdx"
+                        :data-url="mod.url"
+                      >
+                        <code class="ktrp-pre" style="word-break: break-all;">{{ mod.url }}</code>
+                        <span class="ktrp-chip ktrp-chip--accent">
+                          {{ t('cardDepsRefKindHttpsSaved', { size: mod.size }) }}
+                        </span>
+                      </div>
+                    </div>
+                    <p
+                      v-else
+                      class="ktrp-muted"
+                      data-testid="kt-rp-card-opening-no-saved-modules"
+                    >
+                      {{ t('openingPlanNoSavedModules') }}
+                    </p>
+                  </div>
+
+                  <!-- Pending opening page modules (each confirmed individually) -->
+                  <div
+                    v-if="openingPlan.pending.length"
+                    class="ktrp-field-block"
+                    data-testid="kt-rp-card-opening-pending-modules"
+                  >
+                    <span class="ktrp-label">
+                      {{ t('openingPlanPendingModulesTitle', { count: openingPlan.pending.length }) }}
+                    </span>
+                    <div class="ktrp-stack">
+                      <div
+                        v-for="(item, pIdx) in openingPlan.pending"
+                        :key="item.url"
+                        class="ktrp-sub-card"
+                        :data-testid="'kt-rp-card-opening-pending-module-' + pIdx"
+                        :data-url="item.url"
+                        :data-parent-url="item.parentUrl || ''"
+                      >
+                        <code
+                          class="ktrp-pre"
+                          style="word-break: break-all;"
+                          :data-testid="'kt-rp-card-opening-pending-url-' + pIdx"
+                        >{{ item.url }}</code>
+                        <p
+                          v-if="item.parentUrl"
+                          class="ktrp-muted"
+                          :data-testid="'kt-rp-card-opening-pending-parent-' + pIdx"
+                        >
+                          {{ t('openingPlanPendingFromParent', { parentUrl: item.parentUrl }) }}
+                        </p>
+                        <p
+                          v-else
+                          class="ktrp-muted"
+                          :data-testid="'kt-rp-card-opening-pending-parent-' + pIdx"
+                        >
+                          {{ t('openingPlanPendingFromEntry') }}
+                        </p>
+                        <div class="ktrp-row-end">
+                          <ActionButton
+                            size="sm"
+                            variant="primary"
+                            :disabled="busy || openingPlanLoading || Boolean(openingConfirmBusyKey)"
+                            :data-testid="'kt-rp-card-opening-pending-confirm-btn-' + pIdx"
+                            @click="confirmPendingOpeningModule(item)"
+                          >
+                            {{
+                              openingConfirmBusyKey === 'module:' + item.url
+                                ? t('openingPlanConfirmingBtn')
+                                : t('openingPlanConfirmModuleBtn')
+                            }}
+                          </ActionButton>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+              </div>
+
             <div class="ktrp-detail-sections">
                 <div
                   v-if="detail.fields?.description"
@@ -2396,6 +2912,22 @@ export const CardLibraryView = {
                       <option value="on">{{ t('sessionScriptsExplicitOn') }}</option>
                       <option value="off">{{ t('sessionScriptsExplicitOff') }}</option>
                     </select>
+                  </div>
+                  <div
+                    v-if="detailRemoteOpeningPage"
+                    class="ktrp-field-block"
+                    data-testid="kt-rp-studio-opening-modules-field"
+                  >
+                    <label class="ktrp-inline-actions">
+                      <input
+                        v-model="tavernLaunchEnableOpeningModules"
+                        type="checkbox"
+                        :disabled="busy"
+                        data-testid="kt-rp-studio-opening-modules-toggle"
+                      />
+                      <span>{{ t('studioLaunchOpeningModulesLabel') }}</span>
+                    </label>
+                    <p class="ktrp-muted">{{ t('studioLaunchOpeningModulesHint') }}</p>
                   </div>
                   <div class="ktrp-row-end">
                     <ActionButton
