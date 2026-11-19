@@ -32,6 +32,7 @@ def _open(directory: Path) -> Iterator[sqlite3.Connection]:
         database.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)))")
         database.execute("CREATE TABLE IF NOT EXISTS card_modules (card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE, url TEXT NOT NULL, source BLOB NOT NULL, PRIMARY KEY (card_id, url))")
         database.execute("CREATE TABLE IF NOT EXISTS card_opening_pages (card_id TEXT PRIMARY KEY REFERENCES cards(id) ON DELETE CASCADE, url TEXT NOT NULL, source BLOB NOT NULL)")
+        database.execute("CREATE TABLE IF NOT EXISTS card_opening_modules (card_id TEXT NOT NULL REFERENCES card_opening_pages(card_id) ON DELETE CASCADE, url TEXT NOT NULL, source BLOB NOT NULL, PRIMARY KEY (card_id, url))")
         yield database
 
 

@@ -148,6 +148,8 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 缓存入口后，目录 owner 的 `preview_card_opening_dependencies` 接受 `{"id":"入库卡片 ID"}`，只从已保存副本读取内联脚本的 `import`／`export from` 和 `import()` 引用（最多 32 项）；分别报告其他资源、不可解析入口及列表截断。这是诊断，不确认或下载任何依赖，也不把外部 `<script src>`、图片或样式当成可自动加载的模块。
 
+要保存已缓存入口直接声明的某个静态 HTTPS 模块，分别调用 `confirm_card_opening_module`，传入该卡的 `id` 和准确的一个 `url`，成功返回 `{openingModule: {url, size}}`。只接受可明确识别的根、`head` 或 `body` 直接内联 `<script type="module">` 的顶层静态声明。诊断列出的普通脚本、惰性模板、动态或相对导入不能据此下载；不接受 import map 或无法确认结构的入口。模块按该卡入口独立保存，和卡片兼容脚本模块缓存不共用；再次确认已保存地址不重新下载。每个模块最多 1 MiB，每张卡的入口最多 16 个模块且总计不超过 4 MiB。不会自动跟进模块的依赖、执行模块或让需要这些资源的开场页变为可挂载。
+
 仅新开局选到含该标记的开场、且没有适用的 CHARX 或卡内页面时，才从本地缓存快照自包含的外链入口。页面和开场照旧只读，随本局存档；后来缓存或删除库卡不改旧局。未确认、需要外部资源、或入口形式暂不支持时，酒馆正常开局，owner 分别报告 `entry_unconfirmed`、`entry_needs_resources` 或 `entry_unsupported`，不提供面板。这里检查的是页面声明的资源和脚本依赖，不替代浏览器隔离，也不保证任意旧网页可运行。外链入口确认目前使用目录 owner 接口，卡库没有确认控件；仍不支持挂载需要额外资源的入口。
 
 ### 酒馆原生面板
@@ -178,6 +180,7 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 - `kt_roleplay/card_editor.py`：在原格式上另存卡片；`charx.py`：读取归档及本地媒体；`portraits.py` / `portrait_library.py`：处理嵌入的本地图片、公开状态映射与立绘副本。
 - `package.json` / `package-lock.json`：卡片模块离线链接器的一次性 Node.js 安装声明；`kt_roleplay/module_*.py`、`script_dependencies.py` 和 `link_card_module.mjs` 负责检查、保存与链接。
 - [原生玩法最小示例：物资登记员](examples/native-ledger.json)：可直接在角色库导入并开酒馆。无需卡片 JS、MVU 或 Node。查看 `state` 如何声明库存、核对结果和任务状态，再看 `panels` 如何引用它们。点击「核对清单」只发送所示玩家输入；由玩法工具记录动作，面板读取结果，不靠按钮直接改存档。
+- `kt_roleplay/opening_page_library.py`：已确认外部开场入口和模块缓存、依赖诊断；`ui/src/CardWebPanel.js`：在酒馆 Dock 挂载隔离的本局作者页。
 - `ui/`：KT UI SDK 扩展，包含角色库、卡片编辑、会话侧栏、行动选项与语言资源。
 
 ## 兼容范围

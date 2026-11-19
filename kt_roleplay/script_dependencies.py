@@ -54,13 +54,15 @@ def _kind(specifier: str | None, dynamic: bool) -> _ReferenceKind:
     return "unsupported"
 
 
-def _references(root: Node, source: bytes) -> tuple[list[ModuleReference], bool]:
+def _references(root: Node, source: bytes, *, top_level_only: bool = False) -> tuple[list[ModuleReference], bool]:
     pending = [root]
     seen = set()
     references: list[ModuleReference] = []
     while pending:
         node = pending.pop()
         if node.type in ("import_statement", "export_statement") and (arg := node.child_by_field_name("source")):
+            if top_level_only and node.parent != root:
+                return [], True
             dynamic = False
         elif (node.type == "call_expression" and (callee := node.child_by_field_name("function"))
               and callee.type == "import"):
@@ -103,15 +105,15 @@ def _schema_helper(root: Node, source: bytes) -> bool:
     return False
 
 
-def _scan(code: str) -> tuple[Node, bytes, list[ModuleReference], bool]:
+def _scan(code: str, *, top_level_only: bool = False) -> tuple[Node, bytes, list[ModuleReference], bool]:
     source = code.encode('utf-8')
     root = Parser(_JS).parse(source).root_node
-    refs, truncated = _references(root, source)
+    refs, truncated = _references(root, source, top_level_only=top_level_only)
     return root, source, refs, truncated
 
 
-def scan_modules(code: str) -> tuple[list[ModuleReference], bool, bool]:
-    root, _, references, truncated = _scan(code)
+def scan_modules(code: str, *, top_level_only: bool = False) -> tuple[list[ModuleReference], bool, bool]:
+    root, _, references, truncated = _scan(code, top_level_only=top_level_only)
     return references, root.has_error, truncated
 
 
