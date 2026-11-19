@@ -89,14 +89,35 @@ KT 不安装或启动原版酒馆服务器插件。先在独立宿主上运行�
 {
   "example": {
     "port": 8765,
-    "endpoints": [{"method": "GET", "path": "status"}]
+    "endpoints": [
+      {"method": "GET", "path": "status"},
+      {"method": "POST", "path": "roll"}
+    ]
   }
 }
 ```
 
-本局的 `roleplay` owner 提供 `legacy_plugin_options`（查看可用及已启用的插件）、`set_legacy_plugins`（用 `pluginIds` 设置本局可调用的插件）和 `legacy_plugin_request`（传入 `pluginId`、`method`、`path`，可选字符串 `query` 和 POST JSON `body`）。后端只转发到已配置的本机 `/api/plugins/<id>/<path>`，以 `{status, body}` 返回结果；不带宿主凭据，不跟重定向，不支持二进制响应。调用许可随会话存档保存，不改变兼容脚本默认开启的规则。
+`example`、`status` 和 `roll` 都是示例名；配置要与提供方真实暴露的 ID、方法和路由完全相同。提供方须能从 Studio 进程访问 `127.0.0.1:8765`；配置中的 `path` 只写后缀，如 `status`，不写 `/api/plugins/example/status` 或查询参数。添加配置不会启动提供方，也不会授权已有或新会话。
 
-受信任的网页宿主还可以通过 `card_web_plugin_request` 提交 `panelScope`、`method`、原相对地址 `url`（例如 `/api/plugins/example/status?mode=short`）及可选 POST JSON `body`。只处理已打开且作用域匹配的本局网页，再按原有白名单和本局启用状态转发；旧开场页只允许 GET。只返回 `{status, body}`，不把插件配置或宿主凭据交给页面。绝对地址、任意宿主路径及重复查询键不支持。
+在本局的 `roleplay` owner 调 `legacy_plugin_options` 查看 `available` 和 `enabled`，再通过 `set_legacy_plugins` 传 `{"pluginIds":["example"]}` 显式授权；传空数组撤销。许可随本局存档，不改变兼容脚本默认设置。`legacy_plugin_request` 的参数示例：
+
+```json
+{"pluginId":"example","method":"GET","path":"status","query":{"mode":"short"}}
+```
+
+```json
+{"pluginId":"example","method":"POST","path":"roll","body":{"sides":6}}
+```
+
+`query` 是字符串到字符串的键值对象，GET 不带 `body`。后端只转发到已配置的本机 `/api/plugins/<id>/<path>`，把提供方的 HTTP 状态及 JSON 返回为 `{status, body}`（空响应体为 `null`）；例如，提供方的 JSON `422` 仍是 `422`，不是 KT 转发故障。不带宿主凭据，不跟重定向，不支持二进制响应。
+
+受信任的网页宿主还可以通过 `card_web_plugin_request` 提交 `panelScope`、`method`、原相对地址 `url`（例如 `/api/plugins/example/status?mode=short`）及可选 POST JSON `body`。只处理页面已就绪且作用域匹配的本局请求，再按白名单和本局许可转发；旧开场页只允许 GET。只返回 `{status, body}`，不把插件配置或宿主凭据交给页面。绝对地址、任意宿主路径及重复查询键不支持。
+
+排查失败时先区分哪一层拒绝：
+
+- **不在 `available`**：检查配置是否放在运行 Studio 的 `KT_CONFIG_DIR` 下；文件缺失时列表为空，配置格式错误时会指出出错的字段。**在 `available` 但未启用**：检查该局的 `enabled`，别用另一局的许可。`available` 只表示有配置，不代表提供方已在线。
+- **方法或路由未启用**：核对配置里的精确 `method` / `path`。**无法连接**：确认独立服务正在同一台机器上监听配置端口。**提供方没有返回 JSON**：检查是否打到了 HTML 登录页或代理错误页；非空响应需带 JSON 类型。不要把提供方本身返回的 JSON 错误当作连接失败。
+- **网页作用域变化**：从当前会话重新打开网页，不沿用旧 `panelScope`。旧开场页拒绝 POST，即使本局和配置都允许该路由。
 
 以上是会话后端接口，浏览器中的旧页面调用仍需接线。没有配置界面、原版插件加载器或任意外部服务转发。
 
