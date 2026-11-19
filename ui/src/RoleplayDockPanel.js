@@ -85,6 +85,7 @@ export const RoleplayDockPanel = {
     // Package catalog worldbooks & card defaults (loaded via package:kohaku-roleplay)
     const catalogWorldbooks = ref([]);
     const catalogCardDefaults = ref({});
+    const catalogCardScriptsDefault = ref(true);
     const catalogLoading = ref(false);
     let catalogSeq = 0;
 
@@ -101,6 +102,7 @@ export const RoleplayDockPanel = {
       playerDescription: "",
       greetingIndex: 0,
       worldbookMode: "__default__",
+      scriptsMode: "__default__",
     });
     const notesDraft = ref("");
     const notesDirty = ref(false);
@@ -381,6 +383,7 @@ export const RoleplayDockPanel = {
             typeof catalogState.cardWorldbookDefaults === "object"
               ? catalogState.cardWorldbookDefaults
               : {};
+          catalogCardScriptsDefault.value = catalogState.cardScriptsDefault !== false;
         }
       } catch {
         // Non-fatal: library dropdown simply stays empty until refreshed.
@@ -472,6 +475,7 @@ export const RoleplayDockPanel = {
         ) {
           tavernForm.value.greetingIndex = 0;
           tavernForm.value.worldbookMode = "__default__";
+          tavernForm.value.scriptsMode = "__default__";
           loadCardDetail(cardId);
         } else {
           selectedDetail.value = null;
@@ -584,6 +588,11 @@ export const RoleplayDockPanel = {
           tavernForm.value.worldbookMode !== "__default__"
         ) {
           payload.worldbookId = tavernForm.value.worldbookMode;
+        }
+        if (tavernForm.value.scriptsMode === "on") {
+          payload.enableCardScripts = true;
+        } else if (tavernForm.value.scriptsMode === "off") {
+          payload.enableCardScripts = false;
         }
         await owner.call("start_tavern", payload);
         notesDirty.value = false;
@@ -892,6 +901,7 @@ export const RoleplayDockPanel = {
       detailLoading,
       detailError,
       catalogWorldbooks,
+      catalogCardScriptsDefault,
       catalogLoading,
       greetings,
       greetingPreviewText,
@@ -1895,6 +1905,28 @@ export const RoleplayDockPanel = {
                 <option v-for="wb in catalogWorldbooks" :key="wb.id" :value="wb.id">
                   {{ t('sessionWorldbookLibraryPick', { name: wb.name }) }}
                 </option>
+              </select>
+            </div>
+
+            <div class="ktrp-field-block">
+              <label class="ktrp-label" for="ktrp-setup-scripts-select">
+                {{ t('sessionScriptsLaunchLabel') }}
+              </label>
+              <select
+                id="ktrp-setup-scripts-select"
+                v-model="tavernForm.scriptsMode"
+                class="ktrp-select"
+                data-testid="kt-rp-setup-scripts-select"
+              >
+                <option value="__default__">
+                  {{
+                    catalogCardScriptsDefault
+                      ? t('sessionScriptsFollowDefaultOn')
+                      : t('sessionScriptsFollowDefaultOff')
+                  }}
+                </option>
+                <option value="on">{{ t('sessionScriptsExplicitOn') }}</option>
+                <option value="off">{{ t('sessionScriptsExplicitOff') }}</option>
               </select>
             </div>
 

@@ -371,5 +371,10 @@
   "cardScriptIssueDependencyLimit": "模块依赖数量或体积超出限制",
   "cardScriptIssueModuleLinkerUnavailable": "本地模块链接器不可用",
   "cardScriptIssueModuleLinkFailed": "模块打包链接失败",
-  "cardScriptIssueUnknown": "不兼容（{issue}）"
+  "cardScriptIssueUnknown": "不兼容（{issue}）",
+  "sessionScriptsLaunchLabel": "本局角色卡脚本",
+  "sessionScriptsFollowDefaultOn": "跟随全局默认（启用）",
+  "sessionScriptsFollowDefaultOff": "跟随全局默认（停用）",
+  "sessionScriptsExplicitOn": "本局显式启用兼容脚本",
+  "sessionScriptsExplicitOff": "本局显式停用角色卡脚本"
 }

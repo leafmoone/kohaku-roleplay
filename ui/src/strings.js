@@ -404,6 +404,11 @@ const EN_FALLBACK = {
   cardScriptIssueModuleLinkerUnavailable: "Local module linker unavailable",
   cardScriptIssueModuleLinkFailed: "Module bundle linking failed",
   cardScriptIssueUnknown: "Incompatible ({issue})",
+  sessionScriptsLaunchLabel: "Card scripts for this session",
+  sessionScriptsFollowDefaultOn: "Use global default (Enabled)",
+  sessionScriptsFollowDefaultOff: "Use global default (Disabled)",
+  sessionScriptsExplicitOn: "Explicitly enable for this session",
+  sessionScriptsExplicitOff: "Explicitly disable for this session",
 };
 
 function interpolate(template, params = {}) {
