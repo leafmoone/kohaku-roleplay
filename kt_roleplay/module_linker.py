@@ -63,7 +63,7 @@ def _virtual_graph(entry: str, remote: dict[str, bytes], original: bytes) -> tup
     return code, edges
 
 
-def _bundle(source: list[str], edges: list[dict[str, int]]) -> str:
+def _bundle(source: list[str], edges: list[dict[str, int]], *, max_output_bytes: int = _MAX_SCRIPT_BYTES) -> str:
     runner = Path(__file__).with_name("link_card_module.mjs")
     node = shutil.which("node")
     if node is None or not (runner.parent.parent / "node_modules" / "rolldown").is_dir():
@@ -81,7 +81,7 @@ def _bundle(source: list[str], edges: list[dict[str, int]]) -> str:
         raise ModuleLinkError("module_linker_unavailable")
     if process.returncode or not process.stdout:
         raise ModuleLinkError("module_link_failed")
-    if len(process.stdout) > _MAX_SCRIPT_BYTES:
+    if len(process.stdout) > max_output_bytes:
         raise ModuleLinkError("dependency_limit")
     return process.stdout.decode("utf-8")
 

@@ -11,11 +11,13 @@ from .errors import CardError
 from .legacy_web import LegacyRemoteOpening
 from .library import CardNotFound, _open, get_card
 from .module_download import _module_target, download_module, download_opening_html
+from .module_linker import ModuleLinkError, _bundle
 from .script_dependencies import ModuleReference, scan_modules
 
 OpeningPageIssue = Literal['entry_unconfirmed', 'entry_needs_resources', 'entry_unsupported']
-_RESOURCES = {'src', 'srcset', 'href', 'xlink:href', 'poster', 'action', 'formaction', 'data'}
-_CSS_REFERENCE = re.compile(r'@import\b|\burl\s*\(', re.I)
+_RESOURCES = {'src', 'srcset', 'imagesrcset', 'href', 'xlink:href', 'poster', 'action', 'formaction', 'data'}
+_CSS_REFERENCE = re.compile(r'@import\b|\b(?:url|image-set)\s*\(', re.I)
+_UNSAFE_SCRIPT_DATA = re.compile(r'</script|<!--|\x00', re.I)
 # The HTML script types include legacy JavaScript MIME type essences.
 _JS_TYPES = {
     '', 'module', 'application/ecmascript', 'application/javascript',
@@ -102,13 +104,17 @@ class _OpeningModuleDeclarations(HTMLParser):
              'param', 'source', 'track', 'wbr'}
     _script_parents = {(), ('html',), ('head',), ('body',), ('html', 'head'), ('html', 'body')}
 
-    def __init__(self) -> None:
+    def __init__(self, *, capture_body: bool = False) -> None:
         super().__init__()
         self.valid = True
         self.tags: list[str] = []
         self.sections: set[str] = set()
         self.script: list[str] | None = None
         self.urls: set[str] = set()
+        self.capture_body = capture_body
+        self.script_count = 0
+        self.body: tuple[tuple[int, int], int, tuple[int, int], str] | None = None
+        self._body_start: tuple[tuple[int, int], int] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if not self.valid:
@@ -124,6 +130,7 @@ class _OpeningModuleDeclarations(HTMLParser):
                 return
             self.sections.add(tag)
         if tag == 'script':
+            self.script_count += 1
             types = [(value or '').lower() for key, value in attrs if key == 'type']
             if any(kind.strip() == 'importmap' for kind in types):
                 self.valid = False
@@ -132,6 +139,8 @@ class _OpeningModuleDeclarations(HTMLParser):
                 key in {'src', 'nomodule'} for key, _ in attrs
             ):
                 self.script = []
+                if self.capture_body:
+                    self._body_start = self.getpos(), len(self.get_starttag_text() or '')
         if tag not in self._void:
             self.tags.append(tag)
 
@@ -143,7 +152,11 @@ class _OpeningModuleDeclarations(HTMLParser):
             return
         self.tags.pop()
         if tag == 'script' and self.script is not None:
-            references, invalid, truncated = scan_modules(''.join(self.script), top_level_only=True)
+            code = ''.join(self.script)
+            if self._body_start is not None:
+                self.body = (*self._body_start, self.getpos(), code)
+                self._body_start = None
+            references, invalid, truncated = scan_modules(code, top_level_only=True)
             self.script = None
             self.urls.update(ref['specifier'] for ref in references
                              if ref['kind'] == 'https' and ref['specifier'] is not None)
@@ -156,9 +169,9 @@ class _OpeningModuleDeclarations(HTMLParser):
             self.handle_starttag(tag, attrs)
 
     def handle_data(self, data: str) -> None:
-        # HTMLParser lacks the browser's escaped script-data state. Refuse its
-        # opening marker in any script, not in ordinary HTML comments.
-        if self.tags and self.tags[-1] == 'script' and '<!--' in data:
+        # HTMLParser can consume text past a browser's script end tag. Do
+        # not use a captured span (or authorize imports) if that is possible.
+        if self.tags and self.tags[-1] == 'script' and _UNSAFE_SCRIPT_DATA.search(data):
             self.valid = False
             return
         if self.valid and self.script is not None:
@@ -181,7 +194,8 @@ def _cached_page_bytes(directory: Path, card_id: str, url: str) -> bytes | None:
     return row[0] if row else None
 
 
-def cached_opening_panel(directory: Path, card_id: str, declared: LegacyRemoteOpening) -> tuple[WebPanel | None, OpeningPageIssue | None]:
+def cached_opening_panel(directory: Path, card_id: str, declared: LegacyRemoteOpening, *,
+                         allow_modules: bool = False) -> tuple[WebPanel | None, OpeningPageIssue | None]:
     source = _cached_page_bytes(directory, card_id, declared.url)
     if source is None:
         return None, 'entry_unconfirmed'
@@ -196,6 +210,8 @@ def cached_opening_panel(directory: Path, card_id: str, declared: LegacyRemoteOp
     if checker.unsupported or checker.truncated or checker.inline:
         return None, 'entry_unsupported'
     if checker.needs_resources:
+        if allow_modules:
+            return _cached_linked_opening_panel(directory, card_id, declared.title, html)
         return None, 'entry_needs_resources'
     return WebPanel(title=declared.title, html=html), None
 
@@ -297,6 +313,74 @@ def _opening_module_url(parent: str, ref: ModuleReference) -> str | None:
         return resolved if _exact_opening_module_target(resolved) else None
     except ValueError:
         return None
+
+
+def _opening_module_graph(entry: str, saved: dict[str, bytes]) -> tuple[list[str], list[dict[str, int]]]:
+    urls: list[str | None] = [None]  # Entry declarations require absolute HTTPS URLs.
+    sources = [entry]
+    indexes: dict[str, int] = {}
+    edges: list[dict[str, int]] = []
+    for index, code in enumerate(sources):
+        parent = urls[index]
+        refs, invalid, truncated = scan_modules(code, top_level_only=True)
+        if invalid or truncated:
+            raise ModuleLinkError('dependency_unsupported')
+        scope: dict[str, int] = {}
+        for ref in refs:
+            spec = ref['specifier']
+            if spec is None or ref['dynamic']:
+                raise ModuleLinkError('dependency_unsupported')
+            if parent is None:
+                url = spec if ref['kind'] == 'https' and _exact_opening_module_target(spec) else None
+            else:
+                url = _opening_module_url(parent, ref)
+            if url is None:
+                raise ModuleLinkError('dependency_unsupported')
+            if url not in indexes:
+                raw = saved.get(url)
+                if raw is None:
+                    raise ModuleLinkError('dependency_missing')
+                indexes[url] = len(sources)
+                urls.append(url)
+                sources.append(raw.decode('utf-8-sig'))
+            scope[spec] = indexes[url]
+        edges.append(scope)
+    return sources, edges
+
+
+def _cached_linked_opening_panel(directory: Path, card_id: str, title: str, html: str) -> tuple[WebPanel | None, OpeningPageIssue | None]:
+    with _open(directory) as db:
+        saved = dict(db.execute('SELECT url,source FROM card_opening_modules WHERE card_id=?', (card_id,)))
+    if not saved:
+        return None, 'entry_needs_resources'
+    availability = _EntryResources(preview=True)
+    declarations = _OpeningModuleDeclarations(capture_body=True)
+    try:
+        for checker in (availability, declarations):
+            checker.feed(html)
+            checker.close()
+    except (AssertionError, ValueError):
+        return None, 'entry_unsupported'
+    if availability.other_resources:
+        return None, 'entry_needs_resources'
+    if (availability.unsupported or availability.truncated or availability.inline or not declarations.valid
+            or declarations.tags or declarations.script_count != 1 or declarations.body is None):
+        return None, 'entry_unsupported'
+    (start_line, start_column), tag_length, (end_line, end_column), code = declarations.body
+    # HTMLParser tracks LF offsets, not Unicode line/paragraph separators.
+    lines = [0, *(match.end() for match in re.finditer('\n', html))]
+    start = lines[start_line - 1] + start_column + tag_length
+    end = lines[end_line - 1] + end_column
+    if html[start:end] != code:
+        return None, 'entry_unsupported'
+    html_room = _MAX_HTML - len((html[:start] + html[end:]).encode('utf-8'))
+    try:
+        linked = _bundle(*_opening_module_graph(code, saved), max_output_bytes=html_room)
+    except ModuleLinkError as exc:
+        return None, 'entry_needs_resources' if str(exc) == 'dependency_missing' else 'entry_unsupported'
+    if _UNSAFE_SCRIPT_DATA.search(linked):
+        return None, 'entry_unsupported'
+    return WebPanel(title=title, html=html[:start] + linked + html[end:]), None
 
 
 def opening_module_dependencies(directory: Path, card_id: str, url: str) -> OpeningModuleDependencies:

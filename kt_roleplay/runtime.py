@@ -75,6 +75,7 @@ class Play(Arguments):
     greetingIndex: int = Field(ge=0)
     worldbookId: str | None = Field(default=None, min_length=1)
     enableCardScripts: bool = False
+    enableOpeningModules: bool = False
 
 
 def _card_scripts_unavailable(scripts: list[CardScript], mvu: MvuInit | None) -> OwnerArgumentError:
@@ -853,7 +854,8 @@ class RoleplayPlugin(BasePlugin):
                     if rule is not None:
                         web_panel, marker = rule.panel, rule.marker
                     elif (remote := card.legacy_remote_opening) is not None and remote.marker in opening:
-                        web_panel, web_panel_issue = await to_thread(cached_opening_panel, library_dir(), choice.cardId, remote)
+                        web_panel, web_panel_issue = await to_thread(cached_opening_panel, library_dir(), choice.cardId, remote,
+                                                                     allow_modules=choice.enableOpeningModules)
                         check_opening_target()
                         marker = remote.marker
                     if web_panel is not None and marker is not None:
