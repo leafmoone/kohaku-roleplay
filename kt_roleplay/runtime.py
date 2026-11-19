@@ -48,6 +48,9 @@ from .script_tool import CardScriptError, RunCardScript
 from .recovery import resume_scene
 
 
+_SCRIPT_CLOCK_UNAVAILABLE = "Card scripts require a KT host with a persisted conversation turn counter"
+
+
 class Arguments(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
@@ -265,8 +268,8 @@ class RoleplayPlugin(BasePlugin):
             return
         record = self._record()
         raw = (record or {}).get("script_state")
-        turn = getattr(self.binding.host_agent, "_turn_index", None)
-        if not raw or raw.get("clock") == "turn" or type(turn) is not int or turn < 1:
+        turn = self._script_turn_index()
+        if not raw or raw.get("clock") == "turn" or turn is None or turn < 1:
             return
         play = TavernSession.model_validate(record)
         state = upgrade_script_clock(play.script_state, turn - int(before_current))
@@ -297,7 +300,7 @@ class RoleplayPlugin(BasePlugin):
                 allowed.add("rp_apply_gameplay")
             if record and (record.get("script_state") or {}).get("approved") and (record.get("mvu") or {}).get("values"):
                 play = TavernSession.model_validate(record)
-                if approved(play.scripts, play.script_state):
+                if self._script_turn_index() is not None and approved(play.scripts, play.script_state):
                     allowed.add("rp_run_card_script")
             return ToolVisibility(allowed_tools=frozenset(allowed), allowed_subagents=frozenset())
         if self.novel is None:
@@ -334,6 +337,8 @@ class RoleplayPlugin(BasePlugin):
     def script_record(self) -> tuple[dict, TavernSession]:
         if self.mode != "tavern" or (record := self._record()) is None:
             raise CardScriptError("Card scripts are only available in an active tavern")
+        if self._script_turn_index() is None:
+            raise CardScriptError(_SCRIPT_CLOCK_UNAVAILABLE)
         return record, TavernSession.model_validate(record)
 
     async def invoke_card_script(self, script_id: str, args: JsonValue) -> None:
@@ -444,10 +449,12 @@ class RoleplayPlugin(BasePlugin):
                 "lore": self.binding.get_state("loreView") if self.binding else None,
                 "media": media_summary(play.media), "mediaIssues": play.media_issues}
         if play.scripts:
+            host_ok = self._script_turn_index() is not None
+            issues = play.script_state.issues if host_ok else {**play.script_state.issues, "$host": _SCRIPT_CLOCK_UNAVAILABLE}
             view["cardScripts"] = {"entries": [s.view() for s in play.scripts],
-                                   "canEnable": bool(play.mvu and play.mvu.values and any(s.enabled and not s.issue for s in play.scripts)),
-                                   "enabled": bool(approved(play.scripts, play.script_state)),
-                                   "issues": play.script_state.issues}
+                                   "canEnable": host_ok and bool(play.mvu and play.mvu.values and any(s.enabled and not s.issue for s in play.scripts)),
+                                   "enabled": host_ok and bool(approved(play.scripts, play.script_state)),
+                                   "issues": issues}
         selected = chosen_key(play.portrait_rules, play.state_fields, play.values)
         if selected is not None:
             view.update(hasPortrait=True, portraitKey=selected)
@@ -494,6 +501,8 @@ class RoleplayPlugin(BasePlugin):
                 if set(args) != {"enabled"} or type(args["enabled"]) is not bool:
                     raise OwnerArgumentError("Expected an explicit script enable or disable choice")
                 play = TavernSession.model_validate(record)
+                if args["enabled"] and self._script_turn_index() is None:
+                    raise OwnerArgumentError(_SCRIPT_CLOCK_UNAVAILABLE)
                 if args["enabled"] and (not play.mvu or not play.mvu.values or not any(s.enabled and not s.issue for s in play.scripts)):
                     raise OwnerArgumentError("This tavern has no compatible scripts and initialized variables")
                 consent = script_fingerprint(play.scripts) if args["enabled"] else None
@@ -609,6 +618,8 @@ class RoleplayPlugin(BasePlugin):
                             mvu = mvu.model_copy(update={"values": apply_literal_update(mvu.values, block)})
                         except (ValueError, RecursionError):
                             mvu = mvu.model_copy(update={"issues": {**mvu.issues, "invalid_opening_update": 1}})
+                if choice.enableCardScripts and self._script_turn_index() is None:
+                    raise OwnerArgumentError(_SCRIPT_CLOCK_UNAVAILABLE)
                 if choice.enableCardScripts and (not mvu or not mvu.values or not any(s.enabled and not s.issue for s in card.scripts)):
                     raise OwnerArgumentError("This card has no compatible scripts and initialized variables")
                 script_state = SessionScripts(clock="turn", approved=script_fingerprint(card.scripts) if choice.enableCardScripts else None)
@@ -684,13 +695,18 @@ class RoleplayPlugin(BasePlugin):
         await self.binding.emit(OutputEvent(type="text", content=text))
         await self.binding.emit(OutputEvent(type="assistant_message", payload={"message": message.to_dict()}))
 
+    def _script_turn_index(self) -> int | None:
+        if self.binding is None or self.binding.controller is None:
+            return None
+        turn = getattr(self.binding.host_agent, "_turn_index", None)
+        return turn if type(turn) is int and turn >= 0 else None
+
     def _script_turn(self):
         record = self._record() if self.mode == "tavern" else None
         if not record or not (record.get("script_state") or {}).get("approved") or self.binding is None:
             return None
-        agent = self.binding.host_agent
-        turn = getattr(agent, "_turn_index", None)
-        return (self.binding.controller, turn) if self.binding.controller and type(turn) is int and turn > 0 else None
+        turn = self._script_turn_index()
+        return (self.binding.controller, turn) if turn else None
 
     async def post_llm_call(self, messages: list[dict], response: str, usage: dict, **kwargs: object) -> None:
         active = self._script_turn()
@@ -768,7 +784,7 @@ class RoleplayPlugin(BasePlugin):
                             "their values into prose.\n" + json.dumps({"mvu_variables": play.mvu.values,
                                                                        "mvu_displayed_paths": [json.loads(key) for key in play.mvu_public]},
                                                                       ensure_ascii=False))
-            if play.script_state.approved:
+            if play.script_state.approved and self._script_turn_index() is not None:
                 script_choices = [{"id": script.id, "name": script.name} for script in approved(play.scripts, play.script_state)]
                 if script_choices:
                     content += "\nOnly use rp_run_card_script for a justified action with a registered ID from this list:\n" + json.dumps(script_choices, ensure_ascii=False)
