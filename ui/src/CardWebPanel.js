@@ -10,16 +10,32 @@ function encodeJsonForInlineScript(value) {
     .replace(/\u2029/g, "\\u2029");
 }
 
+function isNonEmptyPlainObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.keys(value).length > 0;
+}
+
 function buildAuthorPreheatScript(bootData) {
   // Never serialize both legacyOpening and legacyLatest into the author frame:
   // only serialize the single selected message snapshot (or null for CHARX native web panels).
+  const singleMessage = bootData.isLegacyOpening
+    ? bootData.selectedLegacyMessage || null
+    : null;
+  const hasSelectedStatData = isNonEmptyPlainObject(singleMessage?.data?.stat_data);
+  const mvuReadCap =
+    bootData.isLegacyOpening &&
+    hasSelectedStatData &&
+    bootData.legacyMvuRead &&
+    typeof bootData.legacyMvuRead === "object" &&
+    bootData.legacyMvuRead.mode === "kt-message-stat-data-v1"
+      ? { mode: "kt-message-stat-data-v1" }
+      : null;
   const sanitizedBoot = {
     isLegacyOpening: Boolean(bootData.isLegacyOpening),
     playerName: typeof bootData.playerName === "string" ? bootData.playerName : "Player",
     characterName: typeof bootData.characterName === "string" ? bootData.characterName : "",
-    selectedLegacyMessage: bootData.isLegacyOpening
-      ? bootData.selectedLegacyMessage || null
-      : null,
+    selectedLegacyMessage: singleMessage,
+    ...(mvuReadCap ? { legacyMvuRead: mvuReadCap } : {}),
   };
   const payloadJson = encodeJsonForInlineScript(sanitizedBoot);
   return `<script>(function(){
@@ -100,6 +116,139 @@ if (BOOT.isLegacyOpening && BOOT.selectedLegacyMessage) {
     }
     return [];
   };
+
+  const statData = singleMsg.data && singleMsg.data.stat_data;
+  const hasNonEmptyStatData =
+    Boolean(statData) &&
+    typeof statData === "object" &&
+    !Array.isArray(statData) &&
+    Object.keys(statData).length > 0;
+
+  if (
+    BOOT.legacyMvuRead &&
+    BOOT.legacyMvuRead.mode === "kt-message-stat-data-v1" &&
+    hasNonEmptyStatData
+  ) {
+    const _ReflectOwnKeys = Reflect.ownKeys;
+    const _getOwnPropDesc = Object.getOwnPropertyDescriptor;
+    const _getProtoOf = Object.getPrototypeOf;
+    const _ObjectProto = Object.prototype;
+    const _hasOwn =
+      typeof Object.hasOwn === "function"
+        ? Object.hasOwn
+        : Function.prototype.call.bind(_ObjectProto.hasOwnProperty);
+    const _jsonParse = JSON.parse;
+    const _jsonStringify = JSON.stringify;
+    const _structuredClone =
+      typeof window.structuredClone === "function"
+        ? window.structuredClone.bind(window)
+        : null;
+    const _statDataJson = _jsonStringify(statData);
+    if (typeof _statDataJson !== "string") {
+      throw new Error("Failed to serialize read-only MVU snapshot");
+    }
+    const _statDataFrozenSource = _structuredClone ? _jsonParse(_statDataJson) : null;
+
+    const cloneStatDataStrict = function cloneStatDataStrict() {
+      const cloned = _structuredClone
+        ? _structuredClone(_statDataFrozenSource)
+        : _jsonParse(_statDataJson);
+      if (!cloned || typeof cloned !== "object" || Array.isArray(cloned)) {
+        throw new Error("Failed to clone read-only MVU snapshot");
+      }
+      return cloned;
+    };
+
+    const getVariablesFacade = function getVariables(option) {
+      if (!option || typeof option !== "object" || Array.isArray(option)) {
+        throw new Error("getVariables requires an explicit { type: 'message' } option");
+      }
+      const proto = _getProtoOf(option);
+      if (proto !== _ObjectProto && proto !== null) {
+        throw new Error("getVariables option must be a plain object");
+      }
+      const ownKeys = _ReflectOwnKeys(option);
+      let hasOwnType = false;
+      let typeVal = undefined;
+      let hasOwnMessageId = false;
+      let rawId = undefined;
+      for (let i = 0; i < ownKeys.length; i += 1) {
+        const k = ownKeys[i];
+        if (typeof k !== "string" || (k !== "type" && k !== "message_id")) {
+          throw new Error("Unsupported getVariables option key: " + String(k));
+        }
+        const desc = _getOwnPropDesc(option, k);
+        if (!desc || !desc.enumerable || !_hasOwn(desc, "value")) {
+          throw new Error("getVariables option properties must be own enumerable data properties");
+        }
+        if (k === "type") {
+          hasOwnType = true;
+          typeVal = desc.value;
+        } else {
+          hasOwnMessageId = true;
+          rawId = desc.value;
+        }
+      }
+      if (!hasOwnType || typeVal !== "message") {
+        throw new Error("Only message-scoped getVariables({ type: 'message' }) is supported");
+      }
+      const matchesSelected =
+        !hasOwnMessageId ||
+        rawId === undefined ||
+        rawId === "latest" ||
+        rawId === -1 ||
+        rawId === activeId;
+      if (!matchesSelected) {
+        throw new Error("Only the currently selected message snapshot is readable");
+      }
+      return { stat_data: cloneStatDataStrict() };
+    };
+
+    const mvuSubset = Object.freeze({
+      mode: "kt-message-stat-data-v1",
+      readOnly: true
+    });
+
+    const waitGlobalInitializedFacade = function waitGlobalInitialized(name) {
+      if (name === "Mvu") {
+        return Promise.resolve(mvuSubset);
+      }
+      return Promise.reject(
+        new Error("Global is not available in KT read-only sandbox: " + String(name))
+      );
+    };
+
+    try {
+      Object.defineProperty(window, "Mvu", {
+        value: mvuSubset,
+        configurable: false,
+        enumerable: true,
+        writable: false
+      });
+    } catch (_e) {
+      window.Mvu = mvuSubset;
+    }
+    try {
+      Object.defineProperty(window, "getVariables", {
+        value: getVariablesFacade,
+        configurable: false,
+        enumerable: true,
+        writable: false
+      });
+    } catch (_e) {
+      window.getVariables = getVariablesFacade;
+    }
+    try {
+      Object.defineProperty(window, "waitGlobalInitialized", {
+        value: waitGlobalInitializedFacade,
+        configurable: false,
+        enumerable: true,
+        writable: false
+      });
+    } catch (_e) {
+      window.waitGlobalInitialized = waitGlobalInitializedFacade;
+    }
+  }
 }
 
 window.substitudeMacros = function substitudeMacros(text) {
@@ -410,6 +559,17 @@ export const CardWebPanel = {
           ? latestMsg
           : openingMsg
         : null;
+      const selectedHasStatData = isNonEmptyPlainObject(
+        singleSelectedMessage?.data?.stat_data,
+      );
+      const legacyMvuRead =
+        isLegacy &&
+        selectedHasStatData &&
+        payload.legacyMvuRead &&
+        typeof payload.legacyMvuRead === "object" &&
+        payload.legacyMvuRead.mode === "kt-message-stat-data-v1"
+          ? { mode: "kt-message-stat-data-v1" }
+          : null;
 
       activeSelectedMessageId.value =
         singleSelectedMessage && Number.isInteger(singleSelectedMessage.message_id)
@@ -426,6 +586,7 @@ export const CardWebPanel = {
         playerName: props.playerName || "Player",
         characterName: props.characterName || "",
         selectedLegacyMessage: singleSelectedMessage,
+        legacyMvuRead,
       });
     }
 

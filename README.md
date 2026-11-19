@@ -172,6 +172,8 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 新局也可通过开局接口显式传 `enableOpeningMvuRead: true`，另须 `enableOpeningModules: true` 和 `openingPageRuntime: "tavern-page-callbacks-v1"`。这项许可只适用于所选开场实际使用已确认并离线链接的远程网页；可信宿主的 `card_web_panel` 回包只有在已有非空公开快照时才附 `legacyMvuRead: {mode: "kt-message-stat-data-v1"}`。它不是上游 MVU 引擎已启动的信号，不增加公开字段、历史楼层访问或任何变量写入权限。
 
+作者框只在当前选定快照确实有已公开数据时提供 `waitGlobalInitialized('Mvu')` 和 `getVariables({type: 'message', message_id: …})`。前者报告 KT 的只读子集就绪；后者返回一份 `{stat_data}` 副本，只接受选中的消息编号、`-1`、`'latest'` 或省略 `message_id`（都指这份快照，不会改选其他楼层）。撤回公开会关闭旧页面，重新打开只能读取仍获准的数据。
+
 ### 酒馆原生面板
 
 在 `data.extensions["kohaku-roleplay"].panels` 声明一组面板；每项有唯一 `id`、显示用 `label` 和 `type`。状态由 KT 的本局字段更新，面板只负责呈现，不自行推进剧情。
