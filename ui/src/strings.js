@@ -471,6 +471,11 @@ const EN_FALLBACK = {
     "This card's opening web page references external network resources or sub-assets and cannot run inside the offline sandbox.",
   cardWebIssueEntryUnsupported:
     "This card's opening web page uses unsupported HTML tags or syntax and cannot be mounted.",
+  cardScriptsFloatingBarTitle: "Script actions",
+  cardScriptsFloatingBarCount: "{count} action(s)",
+  cardScriptsFloatingCollapseBtn: "Hide actions",
+  cardScriptsFloatingExpandBtn: "Show actions",
+  cardScriptsEntryButtonsSummary: "Published in action bar ({count}): {buttons}",
 };
 
 function interpolate(template, params = {}) {

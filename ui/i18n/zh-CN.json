@@ -427,5 +427,10 @@
   "cardWebPanelInteractiveHint": "在离线双层沙箱中运行 CHARX 网页，仅通过有界桥接读取公开状态或提交合法玩法动作，禁止外网请求与宿主 DOM 访问。",
   "cardWebIssueEntryUnconfirmed": "此角色卡声明了外部开场网页，但尚未在本地角色卡库中确认下载快照。",
   "cardWebIssueEntryNeedsResources": "此角色卡的开场网页依赖外部网络资源或子资产，无法在离线沙箱中运行。",
-  "cardWebIssueEntryUnsupported": "此角色卡的开场网页包含不受支持的 HTML 标签或语法，无法挂载。"
+  "cardWebIssueEntryUnsupported": "此角色卡的开场网页包含不受支持的 HTML 标签或语法，无法挂载。",
+  "cardScriptsFloatingBarTitle": "脚本操作悬浮栏",
+  "cardScriptsFloatingBarCount": "{count} 个操作",
+  "cardScriptsFloatingCollapseBtn": "收起操作",
+  "cardScriptsFloatingExpandBtn": "展开操作",
+  "cardScriptsEntryButtonsSummary": "已发布至顶部操作栏 ({count})：{buttons}"
 }

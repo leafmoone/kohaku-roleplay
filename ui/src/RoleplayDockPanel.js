@@ -126,6 +126,8 @@ export const RoleplayDockPanel = {
     // Session card scripts state
     const scriptBusy = ref(false);
     const scriptError = ref("");
+    const scriptSuccessNotice = ref("");
+    const scriptFloatingExpanded = ref(true);
     const invokingScriptButtonKey = ref("");
     let scriptMutationSeq = 0;
 
@@ -263,6 +265,22 @@ export const RoleplayDockPanel = {
       };
     });
 
+    const runnableScriptButtonGroups = computed(() => {
+      const scripts = sessionCardScripts.value;
+      if (!scripts || !scripts.enabled) return [];
+      return scripts.entries
+        .filter((entry) => entry.enabled && !entry.issue && entry.buttons.length > 0)
+        .map((entry) => ({
+          id: entry.id,
+          name: entry.name,
+          buttons: entry.buttons,
+        }));
+    });
+
+    const runnableScriptButtonTotal = computed(() =>
+      runnableScriptButtonGroups.value.reduce((sum, grp) => sum + grp.buttons.length, 0),
+    );
+
     const sessionHeaderSummary = computed(() => {
       const raw = state.value.headerSummary;
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -397,6 +415,8 @@ export const RoleplayDockPanel = {
       worldbookError.value = "";
       scriptBusy.value = false;
       scriptError.value = "";
+      scriptSuccessNotice.value = "";
+      scriptFloatingExpanded.value = true;
       invokingScriptButtonKey.value = "";
       headerPinsDirty.value = false;
       headerPinsBusy.value = false;
@@ -857,6 +877,7 @@ export const RoleplayDockPanel = {
       const seq = ++scriptMutationSeq;
       scriptBusy.value = true;
       scriptError.value = "";
+      scriptSuccessNotice.value = "";
       actionError.value = "";
       try {
         const nextView = await owner.call("set_card_scripts", { enabled: Boolean(enabled) });
@@ -887,6 +908,7 @@ export const RoleplayDockPanel = {
       scriptBusy.value = true;
       invokingScriptButtonKey.value = btnKey;
       scriptError.value = "";
+      scriptSuccessNotice.value = "";
       actionError.value = "";
       try {
         const nextView = await owner.call("invoke_script_button", {
@@ -897,10 +919,11 @@ export const RoleplayDockPanel = {
         if (nextView && typeof nextView === "object") {
           owner.state.value = nextView;
         }
-        notify(t("cardScriptsButtonInvokedToast", { button: buttonName }), "success");
+        scriptSuccessNotice.value = t("cardScriptsButtonInvokedToast", { button: buttonName });
       } catch (err) {
         if (seq === scriptMutationSeq && tavernScopeKey.value === scopeSnap) {
           scriptError.value = err?.message || String(err);
+          scriptSuccessNotice.value = "";
         }
       } finally {
         if (seq === scriptMutationSeq) {
@@ -1071,9 +1094,13 @@ export const RoleplayDockPanel = {
       cardLoreDiag,
       worldbookIssueLabel,
       sessionCardScripts,
+      runnableScriptButtonGroups,
+      runnableScriptButtonTotal,
       cardScriptIssueLabel,
       scriptBusy,
       scriptError,
+      scriptSuccessNotice,
+      scriptFloatingExpanded,
       invokingScriptButtonKey,
       setSessionCardScripts,
       invokeCardScriptButton,
@@ -1290,6 +1317,89 @@ export const RoleplayDockPanel = {
             </div>
           </div>
 
+          <div
+            v-if="runnableScriptButtonGroups.length"
+            class="ktrp-card-box ktrp-script-floating-bar"
+            role="region"
+            :aria-label="t('cardScriptsFloatingBarTitle')"
+            data-testid="kt-rp-script-floating-bar"
+          >
+            <div class="ktrp-row-between">
+              <div class="ktrp-inline-actions">
+                <strong class="ktrp-box-head" data-testid="kt-rp-script-floating-title">
+                  {{ t('cardScriptsFloatingBarTitle') }}
+                </strong>
+                <span
+                  class="ktrp-chip ktrp-chip--accent"
+                  data-testid="kt-rp-script-floating-count"
+                >
+                  {{ t('cardScriptsFloatingBarCount', { count: runnableScriptButtonTotal }) }}
+                </span>
+              </div>
+              <ActionButton
+                size="sm"
+                :aria-expanded="String(scriptFloatingExpanded)"
+                data-testid="kt-rp-script-floating-toggle-btn"
+                @click="scriptFloatingExpanded = !scriptFloatingExpanded"
+              >
+                {{
+                  scriptFloatingExpanded
+                    ? t('cardScriptsFloatingCollapseBtn')
+                    : t('cardScriptsFloatingExpandBtn')
+                }}
+              </ActionButton>
+            </div>
+
+            <div
+              v-if="scriptError"
+              class="ktrp-banner ktrp-banner--error"
+              role="alert"
+              data-testid="kt-rp-script-floating-error"
+            >
+              <span>{{ scriptError }}</span>
+            </div>
+
+            <p
+              v-if="scriptSuccessNotice"
+              class="ktrp-muted"
+              role="status"
+              data-testid="kt-rp-script-floating-status"
+            >
+              {{ scriptSuccessNotice }}
+            </p>
+
+            <div
+              v-if="scriptFloatingExpanded"
+              class="ktrp-stack"
+              data-testid="kt-rp-script-floating-body"
+            >
+              <div
+                v-for="group in runnableScriptButtonGroups"
+                :key="group.id"
+                class="ktrp-script-floating-group"
+                :data-testid="'kt-rp-card-script-buttons-' + group.id"
+              >
+                <span class="ktrp-label" :data-testid="'kt-rp-script-floating-group-name-' + group.id">
+                  {{ group.name }}
+                </span>
+                <div class="ktrp-inline-actions">
+                  <ActionButton
+                    v-for="(btnName, btnIdx) in group.buttons"
+                    :key="btnName"
+                    size="sm"
+                    :disabled="busy || scriptBusy"
+                    :data-testid="'kt-rp-card-script-btn-' + group.id + '-' + btnIdx"
+                    :data-script-id="group.id"
+                    :data-button-name="btnName"
+                    @click="invokeCardScriptButton(group.id, btnName)"
+                  >
+                    {{ btnName }}
+                  </ActionButton>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <CardWebPanel
             v-if="state.webPanel || state.webPanelIssue"
             :key="'web:' + tavernScopeKey + ':' + mvuPublicSignature"
@@ -1437,26 +1547,18 @@ export const RoleplayDockPanel = {
                   }}
                 </p>
 
-                <div
+                <p
                   v-if="sessionCardScripts.enabled && script.enabled && !script.issue && script.buttons.length"
-                  class="ktrp-field-block"
-                  :data-testid="'kt-rp-card-script-buttons-' + script.id"
+                  class="ktrp-muted"
+                  :data-testid="'kt-rp-card-script-buttons-summary-' + script.id"
                 >
-                  <span class="ktrp-label">{{ t('cardScriptsButtonsLabel') }}</span>
-                  <div class="ktrp-inline-actions">
-                    <ActionButton
-                      v-for="(btnName, btnIdx) in script.buttons"
-                      :key="btnName"
-                      size="sm"
-                      :disabled="busy || scriptBusy"
-                      :data-testid="'kt-rp-card-script-btn-' + script.id + '-' + btnIdx"
-                      :data-button-name="btnName"
-                      @click="invokeCardScriptButton(script.id, btnName)"
-                    >
-                      {{ btnName }}
-                    </ActionButton>
-                  </div>
-                </div>
+                  {{
+                    t('cardScriptsEntryButtonsSummary', {
+                      count: script.buttons.length,
+                      buttons: script.buttons.join(', '),
+                    })
+                  }}
+                </p>
               </div>
             </div>
           </div>
