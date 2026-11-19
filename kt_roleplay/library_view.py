@@ -6,6 +6,8 @@ from pathlib import Path
 from .charx import CardMedia, read_charx_image
 from .errors import CardError
 from .library import get_card, list_cards, original_card
+from .module_library import saved_modules
+from .script_dependencies import script_dependencies
 
 
 def cards_view(directory: Path) -> dict:
@@ -23,7 +25,8 @@ def card_detail(directory: Path, key: str) -> dict:
     return {"id": key, "version": card.version, "fields": card.fields.model_dump(), "warnings": card.warnings,
             "hasPortrait": card.portrait is not None, "hasWorldbook": book is not None, "bookSummary": summary,
             "sourceFormat": card.source_format, "media": media_summary(card.media), "mediaIssues": card.media_issues,
-            "cardScripts": [item.view() for item in card.scripts]}
+            "cardScripts": [item.view() for item in card.scripts],
+            "scriptDependencies": script_dependencies(card.scripts), "scriptModules": saved_modules(directory, key)}
 
 
 def media_summary(assets: list[CardMedia]) -> list[dict[str, str]]:

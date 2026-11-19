@@ -9,12 +9,15 @@ from kohakuterrarium.api.ext import UICallContext
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError, OwnerForbiddenError, UIOwnerMixin
 
 from .card_editor import CopyRequest, edit_draft, save_copy
-from .cards import MAX_CARD_BYTES, CardError, card_format
+from .cards import MAX_CARD_BYTES, CardError, card_format, parse_card
 from .charx import MAX_ARCHIVE_BYTES
-from .library import CardNotFound, card_scripts_default, import_card, list_cards, original_card, remove_card, set_card_scripts_default
+from .library import (CardNotFound, card_scripts_default, import_card, list_cards,
+                      original_card, remove_card, set_card_scripts_default)
 from .library_view import card_detail, media_view, portrait_view
+from .module_library import MAX_CARD_MODULES, snapshot_modules
 from .portrait_library import PortraitCopy, portrait_draft, save_portraits_copy
 from .runtime import library_dir
+from .script_dependencies import script_dependencies
 from .worldbook_library import (MAX_WORLDBOOK_BYTES, WorldbookNotFound, embedded_worldbook, import_worldbook,
                                 list_worldbooks, original_worldbook, preview_worldbook, remove_worldbook,
                                 set_default_worldbook, worldbook_detail)
@@ -38,6 +41,18 @@ def _worldbook_upload(args: dict[str, object]) -> tuple[bytes, str]:
             or not isinstance(name, str)):
         raise OwnerArgumentError("Expected a named Base64-encoded JSON worldbook (2 MiB maximum)")
     return base64.b64decode(source, validate=True), name
+
+
+def _card_upload(args: dict[str, object]) -> bytes:
+    source = args.get("data")
+    if not isinstance(source, str) or not source.isascii() or len(source) > 4 * ((MAX_ARCHIVE_BYTES + 2) // 3):
+        raise OwnerArgumentError("Expected a Base64-encoded JSON/PNG (12 MiB) or CHARX (32 MiB) card")
+    return base64.b64decode(source, validate=True)
+
+
+def _preview_card_dependencies(args: dict[str, object]) -> dict:
+    card = parse_card(_card_upload(args))
+    return {"name": card.fields.name, "scripts": script_dependencies(card.scripts)}
 
 
 class CardCatalog(UIOwnerMixin):
@@ -91,11 +106,19 @@ class CardCatalog(UIOwnerMixin):
                 state = await self.ui_state(context)
                 self.ui_emit("state", state)
                 return state
+            if action == "preview_card_dependencies":
+                if set(args) != {"data"}:
+                    raise OwnerArgumentError("Expected only the card file for dependency preview")
+                return await asyncio.to_thread(_preview_card_dependencies, args)
+            if action == "confirm_card_modules":
+                urls = args.get("urls")
+                if (set(args) != {"id", "urls"} or not isinstance(urls, list) or len(urls) > MAX_CARD_MODULES
+                        or not all(isinstance(url, str) and 0 < len(url) <= 2048 for url in urls)):
+                    raise OwnerArgumentError("Confirm the card and up to six literal HTTPS module sources")
+                modules = await asyncio.to_thread(snapshot_modules, directory, _id(args), urls)
+                return {"modules": modules}
             if action == "import":
-                source = args.get("data")
-                if not isinstance(source, str) or not source.isascii() or len(source) > 4 * ((MAX_ARCHIVE_BYTES + 2) // 3):
-                    raise OwnerArgumentError("Expected a Base64-encoded JSON/PNG (12 MiB) or CHARX (32 MiB) card")
-                card = await asyncio.to_thread(import_card, directory, base64.b64decode(source, validate=True))
+                card = await asyncio.to_thread(import_card, directory, _card_upload(args))
                 self.ui_emit("state", await self.ui_state(context))
                 return card
             if action == "edit_draft":
