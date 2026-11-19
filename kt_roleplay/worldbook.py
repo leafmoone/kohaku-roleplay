@@ -7,13 +7,13 @@ from pydantic import ValidationError
 
 from .errors import CardError
 from .lore import LoreBook, LoreEntry, LorePosition, SecondaryLogic
+from .lore_regex import is_regex_key, valid_regex_key
 
 
 _POSITIONS: dict[int, LorePosition] = {
     0: "before_char", 1: "after_char", 2: "before_notes", 3: "after_notes", 4: "at_depth",
 }
 _LOGIC: dict[int, SecondaryLogic] = {0: "and_any", 1: "not_all", 2: "not_any", 3: "and_all"}
-_REGEX_KEY = re.compile(r"/.+/[a-zA-Z]*", re.DOTALL)
 _SCRIPT_CONTENT = re.compile(r"<%|<\s*(?:script|iframe)\b", re.IGNORECASE)
 _UNSUPPORTED_TRIGGERS = (
     "sticky", "cooldown", "vectorized", "ignoreBudget", "ignore_budget",
@@ -43,7 +43,7 @@ def _read_entry(item: object, *, standalone: bool) -> LoreEntry:
     secondary = item.get("keysecondary" if standalone else "secondary_keys", [])
     if not isinstance(keys, list) or not isinstance(secondary, list):
         raise _SkippedEntry("invalid_entry")
-    if any(isinstance(key, str) and _REGEX_KEY.fullmatch(key) for key in (*keys, *secondary)):
+    if any(isinstance(key, str) and is_regex_key(key) and not valid_regex_key(key) for key in (*keys, *secondary)):
         raise _SkippedEntry("unsupported_key")
     text = item.get("content")
     if isinstance(text, str) and _SCRIPT_CONTENT.search(text):

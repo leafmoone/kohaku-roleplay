@@ -31,6 +31,7 @@ from .portraits import PortraitRule, chosen_key, rules_for
 from .library_view import card_detail, cards_view, media_summary, media_view, portrait_view
 from .library import CardNotFound, get_card
 from .lore import LoreBook, active_entries
+from .lore_regex import MatchBudget
 from .mvu import MvuChange, MvuInit, apply_changes, inspect_initializers, is_initializer, public_options, public_values
 from .mvu_legacy import apply_literal_update, split_opening
 from .mvu_tool import ApplyMvuUpdate, UpdateMvu
@@ -590,8 +591,9 @@ class RoleplayPlugin(BasePlugin):
             def lore_cost(text: str) -> int:
                 return _cost(render_tavern_text(text, play.card, play.player))
 
+            regex_budget = MatchBudget()
             for book in books:
-                chosen = active_entries(book, history, lore_cost, remaining, chat_messages=chat_count)
+                chosen = active_entries(book, history, lore_cost, remaining, chat_messages=chat_count, regex_budget=regex_budget)
                 entries.extend(chosen)
                 remaining -= sum(lore_cost(e.content) for e in chosen)
             content = story_context(play.card, play.player, entries, play.notes)

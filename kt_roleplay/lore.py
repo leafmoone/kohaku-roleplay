@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .lore_regex import MatchBudget, is_regex_key
+
 
 SecondaryLogic = Literal["and_any", "not_all", "not_any", "and_all"]
 LorePosition = Literal["before_char", "after_char", "before_notes", "after_notes", "at_depth"]
@@ -41,9 +43,12 @@ class LoreEntry(BaseModel):
     delay_messages: int = Field(default=0, ge=0)
 
     def matches(self, text: str) -> bool:
-        return self.match_score(text) is not None
+        try:
+            return self.match_score(text) is not None
+        except TimeoutError:
+            return False
 
-    def match_score(self, text: str) -> int | None:
+    def match_score(self, text: str, regex_budget: MatchBudget | None = None) -> int | None:
         if not self.enabled:
             return None
         if self.constant:
@@ -53,6 +58,8 @@ class LoreEntry(BaseModel):
         def found(key: str) -> bool:
             if not key:
                 return False
+            if is_regex_key(key):
+                return (regex_budget if regex_budget is not None else MatchBudget()).found(key, text)
             key = key if self.case_sensitive else key.casefold()
             if self.match_whole_words and len(key.split()) == 1:
                 return re.search(r"(?<!\w)" + re.escape(key) + r"(?!\w)", haystack) is not None
@@ -105,7 +112,9 @@ def _weighted_winner(group: list[tuple[int, LoreEntry]]) -> int:
 
 
 def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str], int], allowance: int,
-                   *, chat_messages: int | None = None) -> list[LoreEntry]:
+                   *, chat_messages: int | None = None, regex_budget: MatchBudget | None = None) -> list[LoreEntry]:
+    if regex_budget is None:
+        regex_budget = MatchBudget()
     budget = min(book.token_budget, allowance)
     message_count = len(history) if chat_messages is None else chat_messages
     scan_text = {}
@@ -135,7 +144,11 @@ def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str],
             visible = scan_text[depth]
             if context:
                 visible += "\n" + context
-            score = entry.match_score(visible)
+            try:
+                score = entry.match_score(visible, regex_budget)
+            except TimeoutError:
+                blocked.add(index)
+                continue
             if score is None:
                 continue
             scores[index] = score
