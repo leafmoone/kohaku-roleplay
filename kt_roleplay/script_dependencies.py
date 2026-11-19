@@ -1,6 +1,6 @@
 """Discover JavaScript module references without executing or resolving code."""
 
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 from urllib.parse import urlsplit
 
 from tree_sitter import Language, Node, Parser
@@ -26,6 +26,7 @@ class ScriptDependencies(TypedDict):
     references: list[ModuleReference]
     syntaxError: bool
     truncated: bool
+    compatibilityNotes: NotRequired[list[str]]
 
 
 def _literal(node: Node | None, source: bytes) -> str | None:
@@ -82,10 +83,35 @@ def _references(root: Node, source: bytes) -> tuple[list[ModuleReference], bool]
     return references, False
 
 
-def scan_modules(code: str) -> tuple[list[ModuleReference], bool, bool]:
-    source = code.encode("utf-8")
+def _schema_helper(root: Node, source: bytes) -> bool:
+    # A named import identifies the public API (including local aliases), not a keyword in prose.
+    for statement in root.named_children:
+        if statement.type != 'import_statement':
+            continue
+        spec = _literal(statement.child_by_field_name('source'), source)
+        if _kind(spec, False) != 'https' or urlsplit(spec).path.rsplit('/', 1)[-1] not in ('mvu_zod.js', 'mvu_zod.mjs'):
+            continue
+        for clause in statement.named_children:
+            if clause.type != 'import_clause':
+                continue
+            for names in clause.named_children:
+                if names.type == 'named_imports' and any(
+                    (name := item.child_by_field_name('name')) is not None and name.text == b'registerMvuSchema'
+                    for item in names.named_children
+                ):
+                    return True
+    return False
+
+
+def _scan(code: str) -> tuple[Node, bytes, list[ModuleReference], bool]:
+    source = code.encode('utf-8')
     root = Parser(_JS).parse(source).root_node
-    references, truncated = _references(root, source)
+    refs, truncated = _references(root, source)
+    return root, source, refs, truncated
+
+
+def scan_modules(code: str) -> tuple[list[ModuleReference], bool, bool]:
+    root, _, references, truncated = _scan(code)
     return references, root.has_error, truncated
 
 
@@ -94,8 +120,11 @@ def script_dependencies(scripts: list[CardScript]) -> list[ScriptDependencies]:
     for script in scripts:
         if not script.content:
             continue
-        references, syntax_error, truncated = scan_modules(script.content)
-        if references or syntax_error:
-            rows.append(ScriptDependencies(scriptId=script.id, name=script.name, enabled=script.enabled,
-                                           references=references, syntaxError=syntax_error, truncated=truncated))
+        root, source, references, truncated = _scan(script.content)
+        if references or root.has_error:
+            row = ScriptDependencies(scriptId=script.id, name=script.name, enabled=script.enabled,
+                                     references=references, syntaxError=root.has_error, truncated=truncated)
+            if b'registerMvuSchema' in source and _schema_helper(root, source):
+                row['compatibilityNotes'] = ['external_mvu_zod_schema']
+            rows.append(row)
     return rows
