@@ -2,7 +2,7 @@
 
 import json
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from urllib.parse import urlsplit
 
 from kohakuterrarium.modules.output.base import BaseOutputModule
@@ -17,6 +17,11 @@ from .script_dependencies import script_dependencies
 _MARKER = re.compile(r'<[A-Za-z][A-Za-z0-9_-]{0,79}\s*/>')
 _FENCE = re.compile(r'```(?:html)?[ \t]*\r?\n(?P<html>.+?)\r?\n```', re.S | re.I)
 _DOCUMENT = re.compile(r'(?:<!doctype\s+html\s*>\s*)?<html(?:\s|>)', re.I)
+_REMOTE_BODY_LOAD = re.compile(
+    r"""<body>\s*<script>\s*\$\(\s*(?P<target>['"])body(?P=target)\s*\)\.load\(\s*"""
+    r"""(?P<source>['"])(?P<url>https://[^\s'"<>\\]+)(?P=source)\s*\)\s*(?:;\s*)?</script>\s*</body>"""
+)
+_REMOTE_PAGE_WARNING = 'A legacy opening page loads external HTML. KT retains the card but does not load this page.'
 _MVU_STATUS_MARKER = '<StatusPlaceHolderImpl/>'
 _MVU_BETA_CDN_PATH = '/gh/MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js'
 _MVU_BETA_RAW_PATH = '/MagicalAstrogy/MagVarUpdate/beta/artifact/bundle.js'
@@ -29,12 +34,26 @@ class LegacyWebRule(BaseModel):
     panel: WebPanel
 
 
-def opening_web_rules(extensions: object, openings: list[str]) -> Iterator[LegacyWebRule]:
-    """Find literal assistant-only, display-only replacements for card openings."""
+def _is_remote_body_loader(html: str) -> bool:
+    match = _REMOTE_BODY_LOAD.fullmatch(html.strip())
+    if match is None:
+        return False
+    try:
+        return bool(urlsplit(match['url']).hostname)
+    except ValueError:
+        return False
+
+
+def opening_web_rules(extensions: object, openings: list[str], warnings: list[str]) -> list[LegacyWebRule]:
+    """Find self-contained opening pages; diagnose a literal remote body loader without running it."""
     rules = extensions.get('regex_scripts') if isinstance(extensions, dict) else None
+    matches: list[LegacyWebRule] = []
     if not isinstance(rules, list):
-        return
+        return matches
+    found_remote = _REMOTE_PAGE_WARNING in warnings
     for rule in rules:
+        if len(matches) >= 4 and found_remote:
+            break
         if (not isinstance(rule, dict) or rule.get('disabled') or rule.get('markdownOnly') is not True
                 or rule.get('promptOnly') or rule.get('placement') != [2] or rule.get('trimStrings')
                 or rule.get('substituteRegex') not in (None, 0)
@@ -57,6 +76,11 @@ def opening_web_rules(extensions: object, openings: list[str]) -> Iterator[Legac
             continue
         html = match['html']
         if not _DOCUMENT.match(html.lstrip()) or not html.rstrip().lower().endswith('</html>'):
+            if not found_remote and _is_remote_body_loader(html):
+                warnings.append(_REMOTE_PAGE_WARNING)
+                found_remote = True
+            continue
+        if len(matches) >= 4:
             continue
         try:
             name.encode('utf-8')
@@ -64,7 +88,8 @@ def opening_web_rules(extensions: object, openings: list[str]) -> Iterator[Legac
                 continue
         except UnicodeEncodeError:
             continue
-        yield LegacyWebRule(marker=marker, panel=WebPanel(title=name.strip(), html=html))
+        matches.append(LegacyWebRule(marker=marker, panel=WebPanel(title=name.strip(), html=html)))
+    return matches
 
 
 def has_mvu_status_adapter(marker: str, scripts: list[CardScript]) -> bool:

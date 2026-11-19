@@ -5,7 +5,6 @@ import binascii
 import json
 from functools import cached_property
 from io import BytesIO
-from itertools import islice
 from typing import Literal
 
 from PIL import Image, UnidentifiedImageError
@@ -201,11 +200,12 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
     cover = next((p for p in portraits if p.field is None), None)
     if cover is not None:
         portrait = base64.b64decode(cover.data)
+    openings = [fields.first_mes, *fields.alternate_greetings]
+    legacy_web = opening_web_rules(extensions, openings, warnings)
     card = ParsedCard(version=version, fields=fields, book=book, warnings=warnings,
                       portrait=portrait, state_fields=definitions, portraits=portraits, source_format=fmt,
                       native_panels=panels, invalid_native_panels=bad_panels,
-                      scripts=inspect_card_scripts(extensions), gameplay_pack=pack,
-                      legacy_web_rules=list(islice(opening_web_rules(extensions, [fields.first_mes, *fields.alternate_greetings]), 4)))
+                      scripts=inspect_card_scripts(extensions), gameplay_pack=pack, legacy_web_rules=legacy_web)
     if book is not None:
         _ = card.lore
     return card
