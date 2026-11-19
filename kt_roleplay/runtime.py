@@ -21,12 +21,13 @@ from kohakuterrarium.modules.ui_owner import OwnerArgumentError, OwnerForbiddenE
 from kohakuterrarium.utils.config_dir import config_dir
 
 from .card_scripts import CardScript, script_fingerprint
+from .card_web import WebPanel
 from .cards import CardError, CardFields
 from .charx import CardMedia
 from .cast import NovelBinding
 from .errors import SettlementRejected
 from .gameplay_pack import GameplayPack, GameplayPackUnavailable, pack_settings, pack_tools, tavern_creature
-from .gameplay import Action, PlayActions, apply_actions, apply_field_changes
+from .gameplay import Action, Actions, PlayActions, apply_actions, apply_field_changes
 from .header_summary import MAX_HEADER_PINS, header_summary
 from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, configured_plugins, request_plugin
 from .novel import Outcome, SceneError, Story
@@ -118,6 +119,7 @@ class TavernSession(Arguments):
     lore_activation: dict[Literal["lore", "worldbook"], dict[str, int]] = Field(default_factory=dict)
     gameplay_pack: GameplayPack | None = None
     legacy_plugins: list[str] = Field(default_factory=list)
+    web_panel: WebPanel | None = None
     scripts: list[CardScript] = Field(default_factory=list)
     script_state: SessionScripts = Field(default_factory=lambda: SessionScripts(clock="turn"))
 
@@ -488,6 +490,8 @@ class RoleplayPlugin(BasePlugin):
                 "lore": self.binding.get_state("loreView") if self.binding else None,
                 "media": media_summary(play.media), "mediaIssues": play.media_issues,
                 'legacyPlugins': play.legacy_plugins}
+        if play.web_panel:
+            view['webPanel'] = {'title': play.web_panel.title}
         if play.scripts:
             host_ok = self._script_turn_index() is not None
             issues = play.script_state.issues if host_ok else {**play.script_state.issues, "$host": _SCRIPT_CLOCK_UNAVAILABLE}
@@ -529,6 +533,26 @@ class RoleplayPlugin(BasePlugin):
                 return self.ui_state()
             if action == "cards" and self.mode in ("persona", "tavern"):
                 return cards_view(library_dir())
+            if action in ('card_web_panel', 'card_web_state', 'card_web_gameplay') and self.mode == 'tavern':
+                record = self._record()
+                play = TavernSession.model_validate(record) if record is not None else None
+                if play is None or play.web_panel is None:
+                    raise OwnerArgumentError('This tavern has no card web panel')
+                if action == 'card_web_panel':
+                    if args:
+                        raise OwnerArgumentError('The card web panel does not take arguments')
+                    return play.web_panel.model_dump()
+                if action == 'card_web_gameplay':
+                    agent = self.binding.host_agent if self.binding else None
+                    if agent and agent.is_processing:
+                        raise OwnerArgumentError('Wait for this tavern before using a card web action')
+                    self.apply_gameplay_actions(Actions.model_validate(args).actions)
+                    play = TavernSession.model_validate(self._record())
+                elif args:
+                    raise OwnerArgumentError('The card web state does not take arguments')
+                return {'fields': public_fields(play.state_fields, play.values),
+                        'panels': public_panels(play.native_panels, play.state_fields, play.values),
+                        'mvu': public_values(play.mvu.values, play.mvu_public) if play.mvu else []}
             if action == "worldbook_slot_detail" and self.mode == "tavern" and (record := self._record()) is not None:
                 slot = args.get("slot")
                 if set(args) != {"slot"} or slot not in ("embedded", "attached"):
@@ -744,7 +768,7 @@ class RoleplayPlugin(BasePlugin):
                                      media=card.media, media_issues=card.media_issues,
                                      scene_media_rules=card.scene_media_rules, native_panels=card.native_panels,
                                      invalid_native_panels=card.invalid_native_panels, mvu=mvu, mvu_legacy=legacy_mvu,
-                                     gameplay_pack=card.gameplay_pack, scripts=scripts, script_state=script_state)
+                                     gameplay_pack=card.gameplay_pack, web_panel=card.web_panel, scripts=scripts, script_state=script_state)
                 self._save(play.model_dump())
                 if enable_scripts:
                     await self._scripts.fire("opening", sequence=0)
@@ -772,7 +796,7 @@ class RoleplayPlugin(BasePlugin):
                 self._save(existing.model_copy(update=Notes.model_validate(args).model_dump()).model_dump())
             else:
                 raise OwnerArgumentError(f"Action {action!r} is not available in the current {self.mode} session")
-        except (ValidationError, CardError, CardNotFound, WorldbookNotFound, CardScriptError, SceneError, GameplayPackUnavailable, LegacyPluginError) as exc:
+        except (ValidationError, CardError, CardNotFound, WorldbookNotFound, CardScriptError, SceneError, GameplayPackUnavailable, LegacyPluginError, SettlementRejected) as exc:
             raise OwnerArgumentError(f"Invalid roleplay request: {exc}") from exc
         view = self.ui_state()
         self.ui_emit("state", view)

@@ -96,6 +96,12 @@ KT 不安装或启动原版酒馆服务器插件。先在独立宿主上运行�
 
 本段只交付了会话后端接口；未接入卡片网页或脚本发出的旧调用，也没有设置界面、原版插件加载器或任意外部服务转发。
 
+### 会话内卡片网页（后端接口）
+
+CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title": "商店", "entry": "panels/shop.html"}`，并在包内提供该 UTF-8 HTML 文件（最多 256 KiB）。首版使用自包含页面，不装载外部资源。导入只读取页面，开局把它保存为本局快照；卡库和会话普通视图只返回 `webPanel.title`。原卡删除不影响已有页面快照。
+
+受信任的宿主组件可在玩家打开时调用 `card_web_panel` 取 `{title, html}`。网页只应通过宿主管理的窄接口读 `card_web_state` 的公开状态，或以 `card_web_gameplay` 提交 `{"actions": [...]}`，沿用原生背包和任务校验。后端正常返回 `{fields, panels, mvu}`，不返回会话历史、笔记或未公开变量。原 HTML 不可直接插入 KT 主页面；前端隔离容器未完成。本接口不自动识别旧卡 `regex_scripts` 生成的网页，不调外部插件，也不是整套 Tavern Helper 接口。
+
 ### 酒馆原生面板
 
 在 `data.extensions["kohaku-roleplay"].panels` 声明一组面板；每项有唯一 `id`、显示用 `label` 和 `type`。状态由 KT 的本局字段更新，面板只负责呈现，不自行推进剧情。

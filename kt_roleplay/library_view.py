@@ -24,6 +24,7 @@ def card_detail(directory: Path, key: str) -> dict:
                    "tokenBudget": book.token_budget, "diagnostics": diagnostics}
     return {"id": key, "version": card.version, "fields": card.fields.model_dump(), "warnings": card.warnings,
             "gameplayPack": card.gameplay_pack.model_dump(exclude={'settings'}) if card.gameplay_pack else None,
+            'webPanel': {'title': card.web_panel.title} if card.web_panel else None,
             "hasPortrait": card.portrait is not None, "hasWorldbook": book is not None, "bookSummary": summary,
             "sourceFormat": card.source_format, "media": media_summary(card.media), "mediaIssues": card.media_issues,
             "cardScripts": [item.view() for item in card.scripts],

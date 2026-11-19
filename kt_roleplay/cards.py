@@ -11,6 +11,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .card_state import StateField, decode_fields
+from .card_web import WebPanel, read_web_panel
 from .charx import CardMedia, inspect_charx_media, is_charx, open_charx, read_charx_card
 from .errors import CardError
 from .gameplay_pack import GameplayPack
@@ -76,6 +77,7 @@ class ParsedCard(BaseModel):
     invalid_native_panels: int = 0
     scripts: list[CardScript] = Field(default_factory=list)
     gameplay_pack: GameplayPack | None = None
+    web_panel: WebPanel | None = None
 
     @cached_property
     def lore(self) -> LoreBook | None:
@@ -135,15 +137,16 @@ def parse_card(raw: bytes) -> ParsedCard:
             if version != 3:
                 raise CardError("CHARX card.json must be a Character Card V3 document")
             media, portrait, issues = inspect_charx_media(archive, members, data.get("assets"))
-        card = _parse_document(version, data, portrait, fmt)
-        extensions = data.get("extensions")
-        namespace = extensions.get("kohaku-roleplay", {}) if isinstance(extensions, dict) else {}
+            card = _parse_document(version, data, portrait, fmt)
+            extensions = data.get('extensions')
+            namespace = extensions.get('kohaku-roleplay', {}) if isinstance(extensions, dict) else {}
+            web_panel = read_web_panel(archive, members, namespace['webPanel']) if 'webPanel' in namespace else None
         rules = []
         if "scene_images" in namespace:
             rules, invalid = read_scene_media(namespace["scene_images"], media, card.state_fields)
             if invalid:
                 issues["invalid_scene_rule"] = invalid
-        return card.model_copy(update={"media": media, "media_issues": issues, "scene_media_rules": rules})
+        return card.model_copy(update={"media": media, "media_issues": issues, "scene_media_rules": rules, "web_panel": web_panel})
     if not 0 < len(raw) <= MAX_CARD_BYTES:
         raise CardError("Choose a non-empty JSON or PNG card no larger than 12 MiB")
     payload, portrait = _png_payload(raw) if fmt == "png" else (raw, None)
@@ -168,6 +171,8 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
     if data.get("assets") and fmt != "charx":
         warnings.append("V3 assets outside a CHARX archive are retained, not automatically fetched.")
     namespace = extensions.get("kohaku-roleplay", {}) if isinstance(extensions, dict) else {}
+    if 'webPanel' in namespace and fmt != 'charx':
+        raise CardError('A card webPanel requires a CHARX archive containing its HTML')
     try:
         pack = GameplayPack.model_validate(namespace['gameplayPack']) if 'gameplayPack' in namespace else None
     except ValidationError as exc:
