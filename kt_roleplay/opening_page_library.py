@@ -16,6 +16,11 @@ from .module_linker import ModuleLinkError, _bundle
 from .script_dependencies import ModuleReference, scan_modules
 
 OpeningPageIssue = Literal['entry_unconfirmed', 'entry_needs_resources', 'entry_unsupported']
+OpeningPageRuntime = Literal['vue-3.5.22']
+_VUE_RUNTIME_URLS = (
+    'https://testingcf.jsdelivr.net/npm/vue@3.5.22/+esm',
+    'https://cdn.jsdelivr.net/npm/vue@3.5.22/+esm',
+)
 _RESOURCES = {'src', 'srcset', 'imagesrcset', 'href', 'xlink:href', 'poster', 'action', 'formaction', 'data'}
 _CSS_REFERENCE = re.compile(r'@import\b|\b(?:url|image-set)\s*\(', re.I)
 _UNSAFE_SCRIPT_DATA = re.compile(r'</script|<!--|\x00', re.I)
@@ -195,7 +200,8 @@ def _cached_page_bytes(directory: Path, card_id: str, url: str) -> bytes | None:
 
 
 def cached_opening_panel(directory: Path, card_id: str, declared: LegacyRemoteOpening, *,
-                         allow_modules: bool = False) -> tuple[WebPanel | None, OpeningPageIssue | None]:
+                         allow_modules: bool = False,
+                         runtime: OpeningPageRuntime | None = None) -> tuple[WebPanel | None, OpeningPageIssue | None]:
     source = _cached_page_bytes(directory, card_id, declared.url)
     if source is None:
         return None, 'entry_unconfirmed'
@@ -211,7 +217,7 @@ def cached_opening_panel(directory: Path, card_id: str, declared: LegacyRemoteOp
         return None, 'entry_unsupported'
     if checker.needs_resources:
         if allow_modules:
-            return _cached_linked_opening_panel(directory, card_id, declared.title, html)
+            return _cached_linked_opening_panel(directory, card_id, declared.title, html, runtime=runtime)
         return None, 'entry_needs_resources'
     return WebPanel(title=declared.title, html=html), None
 
@@ -329,7 +335,8 @@ def _opening_module_url(parent: str, ref: ModuleReference) -> str | None:
 
 
 def _opening_module_graph(entry: str, saved: dict[str, bytes], *,
-                          pending: dict[str, str | None] | None = None) -> tuple[list[str], list[dict[str, int]]]:
+                          pending: dict[str, str | None] | None = None,
+                          runtime: OpeningPageRuntime | None = None) -> tuple[list[str], list[dict[str, int]]]:
     urls: list[str | None] = [None]  # Entry declarations require absolute HTTPS URLs.
     sources = [entry]
     indexes: dict[str, int] = {}
@@ -364,6 +371,21 @@ def _opening_module_graph(entry: str, saved: dict[str, bytes], *,
                 sources.append(raw.decode('utf-8-sig'))
             scope[spec] = indexes[url]
         edges.append(scope)
+    if runtime is not None:
+        vue = [indexes[url] for url in _VUE_RUNTIME_URLS if url in indexes]
+        if len(vue) != 1:
+            raise ModuleLinkError('dependency_missing' if not vue else 'dependency_unsupported')
+        # Import the same already-approved module instance as the author graph;
+        # reactivity must not be split between this global and the author's Pinia.
+        wrapper = 'import "kt:opening-prelude"; import "kt:author-entry";'
+        prelude = '''import * as vue from "kt:approved-vue";
+if (vue.version !== "3.5.22") throw new Error("The approved Vue runtime is not version 3.5.22");
+Object.defineProperty(globalThis, "Vue", { value: vue });'''
+        # Add a virtual root rather than prefixing the author source, which
+        # can contain a leading hashbang valid only at offset zero.
+        routes = {'kt:opening-prelude': len(sources) + 1, 'kt:author-entry': 1}
+        shifted = [{name: index + 1 for name, index in scope.items()} for scope in edges]
+        return [wrapper, *sources, prelude], [routes, *shifted, {'kt:approved-vue': vue[0] + 1}]
     return sources, edges
 
 
@@ -402,7 +424,8 @@ def _opening_module_bytes(db: Connection, card_id: str) -> dict[str, bytes]:
     return dict(db.execute('SELECT url,source FROM card_opening_modules WHERE card_id=? ORDER BY url', (card_id,)))
 
 
-def _cached_linked_opening_panel(directory: Path, card_id: str, title: str, html: str) -> tuple[WebPanel | None, OpeningPageIssue | None]:
+def _cached_linked_opening_panel(directory: Path, card_id: str, title: str, html: str, *,
+                                 runtime: OpeningPageRuntime | None) -> tuple[WebPanel | None, OpeningPageIssue | None]:
     with _open(directory) as db:
         saved = _opening_module_bytes(db, card_id)
     if not saved:
@@ -413,7 +436,7 @@ def _cached_linked_opening_panel(directory: Path, card_id: str, title: str, html
             return None, 'entry_unsupported'
         start, end, code = body
         html_room = _MAX_HTML - len((html[:start] + html[end:]).encode('utf-8'))
-        linked = _bundle(*_opening_module_graph(code, saved), max_output_bytes=html_room)
+        linked = _bundle(*_opening_module_graph(code, saved, runtime=runtime), max_output_bytes=html_room)
     except ModuleLinkError as exc:
         needs = str(exc) in ('dependency_missing', 'other_resources')
         return None, 'entry_needs_resources' if needs else 'entry_unsupported'

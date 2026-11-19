@@ -162,6 +162,8 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 新局可在卡库开局时勾选「运行已确认的开场网页模块」（接口 `enableOpeningModules: true`），只使用本卡已经确认且完整的静态模块图。此开关与兼容卡脚本独立，每次开局默认关闭，成功开局后复位。该方式只支持一个可识别的内联模块脚本，不支持图片、样式表或动态模块等额外资源；已安装 Node.js 和包内 Rolldown 时，KT 离线链接模块，将结果作为本局只读网页快照，玩家仍要在 Dock 中显式打开才运行。依赖未齐、入口不支持或无法链接时保留正常文本开场，不回填旧局。原开场 HTML 和模块缓存仍按原字节保存。
 
+开局接口另支持显式 `openingPageRuntime: "vue-3.5.22"`（试验性、默认无、须同时允许开场模块，目前没有卡库选项）。仅在本卡已确认、可离线链接的网页依赖图中恰有一个精确的 jsDelivr `vue@3.5.22/+esm` 时，在作者的隔离页面内提供只读 `Vue` 全局。它复用图中同一模块，不另外下载，不接触宿主 Vue、其他局、库原件或历史快照；对自包含网页无作用。这不是完整 Tavern Helper：不提供 Lodash、jQuery、Zod、MVU 就绪或变量写回。
+
 ### 酒馆原生面板
 
 在 `data.extensions["kohaku-roleplay"].panels` 声明一组面板；每项有唯一 `id`、显示用 `label` 和 `type`。状态由 KT 的本局字段更新，面板只负责呈现，不自行推进剧情。

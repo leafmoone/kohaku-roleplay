@@ -14,7 +14,7 @@ from kohakuterrarium.modules.tool.base import ToolContext
 from kohakuterrarium.terrarium.tools.context import resolve_group_context, resolve_group_target
 from pydantic import TypeAdapter
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
 from kohakuterrarium.core.conversation.elide import TOOL_FEEDBACK_KIND, estimate_message_tokens
 from kohakuterrarium.llm.message import UserMessage
 from kohakuterrarium.modules.plugin.base import BasePlugin, PluginBlockError, PluginContext, ToolVisibility
@@ -47,7 +47,7 @@ from .lore_timing import LoreTiming
 from .mvu import MvuChange, MvuInit, apply_changes, inspect_initializers, is_initializer, public_options, public_values
 from .mvu_legacy import apply_literal_update, split_opening
 from .mvu_tool import ApplyMvuUpdate, UpdateMvu
-from .opening_page_library import OpeningPageIssue, cached_opening_panel
+from .opening_page_library import OpeningPageIssue, OpeningPageRuntime, cached_opening_panel
 from .panels import ChoicePanel, InventoryPanel, NativePanel, QuestPanel, public_panels
 from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
 from .worldbook import read_worldbook
@@ -77,6 +77,13 @@ class Play(Arguments):
     worldbookId: str | None = Field(default=None, min_length=1)
     enableCardScripts: bool = False
     enableOpeningModules: bool = False
+    openingPageRuntime: OpeningPageRuntime | None = None
+
+    @model_validator(mode='after')
+    def _opening_runtime_consent(self) -> 'Play':
+        if self.openingPageRuntime is not None and not self.enableOpeningModules:
+            raise ValueError('An opening-page runtime also needs explicit opening module permission')
+        return self
 
 
 def _card_scripts_unavailable(scripts: list[CardScript], mvu: MvuInit | None) -> OwnerArgumentError:
@@ -887,7 +894,8 @@ class RoleplayPlugin(BasePlugin):
                         web_panel, marker = rule.panel, rule.marker
                     elif (remote := card.legacy_remote_opening) is not None and remote.marker in opening:
                         web_panel, web_panel_issue = await to_thread(cached_opening_panel, library_dir(), choice.cardId, remote,
-                                                                     allow_modules=choice.enableOpeningModules)
+                                                                     allow_modules=choice.enableOpeningModules,
+                                                                     runtime=choice.openingPageRuntime)
                         check_opening_target()
                         marker = remote.marker
                     if web_panel is not None and marker is not None:
