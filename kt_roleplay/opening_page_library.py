@@ -4,12 +4,13 @@ from pathlib import Path
 import re
 from sqlite3 import Connection
 from typing import Literal, TypedDict
+from urllib.parse import urljoin, urlsplit
 
 from .card_web import WebPanel, _MAX_HTML
 from .errors import CardError
 from .legacy_web import LegacyRemoteOpening
 from .library import CardNotFound, _open, get_card
-from .module_download import download_module, download_opening_html
+from .module_download import _module_target, download_module, download_opening_html
 from .script_dependencies import ModuleReference, scan_modules
 
 OpeningPageIssue = Literal['entry_unconfirmed', 'entry_needs_resources', 'entry_unsupported']
@@ -27,6 +28,9 @@ _JS_TYPES = {
 _MAX_PAGE_REFERENCES = 32
 _MAX_OPENING_MODULES = 16
 _MAX_OPENING_MODULE_BYTES = 4 * 1024 * 1024
+_DNS_LABEL = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?')
+_MODULE_PATH = re.compile(r"(?:[A-Za-z0-9._~!$&()*+,;=:@/-]|%[0-9A-Fa-f]{2})*")
+_MODULE_QUERY = re.compile(r"(?:[A-Za-z0-9._~!$&()*+,;=:@/?-]|%[0-9A-Fa-f]{2})*")
 
 
 class _EntryResources(HTMLParser):
@@ -234,6 +238,80 @@ class OpeningPageSnapshot(TypedDict):
     size: int
 
 
+class OpeningModuleReference(ModuleReference):
+    resolvedUrl: str | None
+
+
+class OpeningModuleDependencies(TypedDict):
+    url: str
+    references: list[OpeningModuleReference]
+    unsupported: bool
+
+
+def _has_dot_segment(path: str) -> bool:
+    return any(part.lower().replace('%2e', '.') in ('.', '..') for part in path.split('/'))
+
+
+def _exact_opening_module_target(url: str) -> bool:
+    """Accept only URL spellings with the same browser and HTTPS request target."""
+    if not url.isascii() or not url.startswith('https://') or '#' in url:
+        return False
+    try:
+        parts = urlsplit(url)
+        host, target = _module_target(url)
+        labels = host.split('.')
+        # Reject IDNA mapping, numeric/IP-like hosts, and noncanonical ports.
+        if (len(host) > 253 or len(labels) < 2 or not labels[-1][:1].isalpha()
+                or any(not _DNS_LABEL.fullmatch(label) or label.startswith('xn--') for label in labels)
+                or parts.netloc.lower() not in (host, host + ':443')):
+            return False
+        if (_has_dot_segment(parts.path) or '//' in parts.path or (url.endswith('?') and not parts.query)
+                or not _MODULE_PATH.fullmatch(parts.path) or not _MODULE_QUERY.fullmatch(parts.query)):
+            return False
+        return target == (parts.path or '/') + (f'?{parts.query}' if parts.query else '')
+    except (CardError, ValueError):
+        return False
+
+
+def _opening_module_url(parent: str, ref: ModuleReference) -> str | None:
+    spec = ref['specifier']
+    if ref['dynamic'] or spec is None or '#' in spec or not _exact_opening_module_target(parent):
+        return None
+    try:
+        relative = urlsplit(spec)
+        if spec.endswith('?') and not relative.query:
+            return None
+        if ref['kind'] == 'https':
+            resolved = spec
+        elif spec.startswith(('/', './', '../')) and not spec.startswith('//') and not relative.netloc:
+            # Resolve only explicit paths. Refuse paths whose encoded dot segments
+            # or repeated separators can be interpreted differently by a browser.
+            if (not _MODULE_PATH.fullmatch(relative.path) or not _MODULE_QUERY.fullmatch(relative.query)
+                    or '//' in relative.path or any(part.lower().replace('%2e', '.') in ('.', '..')
+                                                    and part not in ('.', '..') for part in relative.path.split('/'))):
+                return None
+            resolved = urljoin(parent, spec)
+        else:
+            return None
+        return resolved if _exact_opening_module_target(resolved) else None
+    except ValueError:
+        return None
+
+
+def opening_module_dependencies(directory: Path, card_id: str, url: str) -> OpeningModuleDependencies:
+    """Read one previously confirmed parent; never fetch any of its imports."""
+    with _open(directory) as db:
+        row = db.execute('SELECT source FROM card_opening_modules WHERE card_id=? AND url=?', (card_id, url)).fetchone()
+    if row is None:
+        raise CardError('Confirm the parent opening module before inspecting its dependencies')
+    references, invalid, truncated = scan_modules(row[0].decode('utf-8-sig'), top_level_only=True)
+    unsupported = invalid or truncated
+    return OpeningModuleDependencies(url=url, unsupported=unsupported, references=[
+        OpeningModuleReference(**ref, resolvedUrl=None if unsupported else _opening_module_url(url, ref))
+        for ref in references
+    ])
+
+
 def _saved_opening_modules(db: Connection, card_id: str) -> dict[str, int]:
     return dict(db.execute('SELECT url,length(source) FROM card_opening_modules WHERE card_id=?', (card_id,)))
 
@@ -243,17 +321,24 @@ def _check_opening_module_size(saved: dict[str, int], new_bytes: int) -> None:
         raise CardError('A saved opening page may keep at most sixteen modules or 4 MiB')
 
 
-def snapshot_opening_module(directory: Path, card_id: str, url: str) -> OpeningPageSnapshot:
-    """Save one explicitly confirmed static import of the cached entry, without following it."""
+def snapshot_opening_module(directory: Path, card_id: str, url: str, *, parent_url: str | None = None) -> OpeningPageSnapshot:
+    """Save one confirmed static edge from the entry or an already confirmed parent."""
     entry_url, entry = _saved_opening_entry(directory, card_id)
-    declarations = _OpeningModuleDeclarations()
-    try:
-        declarations.feed(entry.decode('utf-8-sig'))
-        declarations.close()
-    except (AssertionError, ValueError):
-        declarations.valid = False
-    if not declarations.valid or declarations.tags or url not in declarations.urls:
-        raise CardError('Confirm a literal HTTPS import from an inline module in the saved opening page')
+    if parent_url is None:
+        declarations = _OpeningModuleDeclarations()
+        try:
+            declarations.feed(entry.decode('utf-8-sig'))
+            declarations.close()
+        except (AssertionError, ValueError):
+            declarations.valid = False
+        if not declarations.valid or declarations.tags or url not in declarations.urls:
+            raise CardError('Confirm a literal HTTPS import from an inline module in the saved opening page')
+    else:
+        imports = opening_module_dependencies(directory, card_id, parent_url)
+        if imports['unsupported'] or not any(ref['resolvedUrl'] == url for ref in imports['references']):
+            raise CardError('Confirm one exact static import declared by the saved parent opening module')
+    if not _exact_opening_module_target(url):
+        raise CardError('Opening module sources must use an unambiguous HTTPS host and request path')
     with _open(directory) as db:
         saved = _saved_opening_modules(db, card_id)
     if url in saved:
@@ -265,6 +350,8 @@ def snapshot_opening_module(directory: Path, card_id: str, url: str) -> OpeningP
         if db.execute('SELECT 1 FROM card_opening_pages WHERE card_id=? AND url=?', (card_id, entry_url)).fetchone() is None:
             raise CardError('The saved opening page changed before the module was stored')
         saved = _saved_opening_modules(db, card_id)
+        if parent_url is not None and parent_url not in saved:
+            raise CardError('The parent opening module changed before its dependency was stored')
         if url in saved:
             return OpeningPageSnapshot(url=url, size=saved[url])
         _check_opening_module_size(saved, len(source))

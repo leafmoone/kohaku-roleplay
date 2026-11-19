@@ -15,7 +15,8 @@ from .library import (CardNotFound, card_scripts_default, import_card, list_card
                       original_card, remove_card, set_card_scripts_default)
 from .library_view import card_detail, media_view, portrait_view
 from .module_library import MAX_CARD_MODULES, snapshot_modules
-from .opening_page_library import opening_page_dependencies, snapshot_opening_module, snapshot_opening_page
+from .opening_page_library import (opening_module_dependencies, opening_page_dependencies,
+                                   snapshot_opening_module, snapshot_opening_page)
 from .portrait_library import PortraitCopy, portrait_draft, save_portraits_copy
 from .runtime import library_dir
 from .script_dependencies import script_dependencies
@@ -129,11 +130,19 @@ class CardCatalog(UIOwnerMixin):
                 if set(args) != {"id"}:
                     raise OwnerArgumentError("Choose the card with the saved opening page")
                 return await asyncio.to_thread(opening_page_dependencies, directory, _id(args))
-            if action == "confirm_card_opening_module":
+            if action == "preview_card_opening_module_dependencies":
                 url = args.get("url")
                 if set(args) != {"id", "url"} or not isinstance(url, str) or not 0 < len(url) <= 2048:
-                    raise OwnerArgumentError("Confirm the card and one literal module URL from its saved opening page")
-                module = await asyncio.to_thread(snapshot_opening_module, directory, _id(args), url)
+                    raise OwnerArgumentError("Choose the card and its saved parent opening module")
+                return await asyncio.to_thread(opening_module_dependencies, directory, _id(args), url)
+            if action == "confirm_card_opening_module":
+                url = args.get("url")
+                parent = args.get("parentUrl")
+                if (set(args) not in ({"id", "url"}, {"id", "url", "parentUrl"})
+                        or not isinstance(url, str) or not 0 < len(url) <= 2048
+                        or ("parentUrl" in args and (not isinstance(parent, str) or not 0 < len(parent) <= 2048))):
+                    raise OwnerArgumentError("Confirm the card and one module URL from its saved opening page or parent module")
+                module = await asyncio.to_thread(snapshot_opening_module, directory, _id(args), url, parent_url=parent)
                 return {"openingModule": module}
             if action == "import":
                 card = await asyncio.to_thread(import_card, directory, _card_upload(args))
