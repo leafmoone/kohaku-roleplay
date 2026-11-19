@@ -166,7 +166,9 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 另一个精确选项 `openingPageRuntime: "vue-3.5.22-lodash-4.18.1"` 也需要 `enableOpeningModules: true`。它在同一个隔离页提供可调用的 `_`，使用插件安装目录内由 npm 锁文件固定的 Lodash 4.18.1（MIT 许可随生成快照保留），不使用卡片声明的 Lodash URL，也不在运行时下载或安装。先按上文在已安装插件目录执行 `npm ci --ignore-scripts --omit=dev`；缺少本地依赖时保留文本开场。此选项的生成快照限额为 352 KiB，原 HTML、缓存模块及仅 Vue 选项的限额不变。
 
-如作者页还使用 Zod classic 的 `object`、`record`、`string`、`enum` 和 `coerce`，可显式选择 `openingPageRuntime: "vue-3.5.22-lodash-4.18.1-zod-4.6.7"`，仍需 `enableOpeningModules: true`。它从同一 npm 锁定的 Zod 4.6.7 离线链接这些真实导出，只在作者框提供 `z` 和 `z.z`（不提供完整 Zod 命名空间）；MIT 许可保留在快照。缺少本地包时不挂面板，生成快照限额为 480 KiB，其他路径不变。以上选项均不提供完整 Tavern Helper、jQuery、MVU 就绪或变量写回。
+如作者页还使用 Zod classic 的 `object`、`record`、`string`、`enum` 和 `coerce`，可显式选择 `openingPageRuntime: "vue-3.5.22-lodash-4.18.1-zod-4.6.7"`，仍需 `enableOpeningModules: true`。它从同一 npm 锁定的 Zod 4.6.7 离线链接这些真实导出，只在作者框提供 `z` 和 `z.z`（不提供完整 Zod 命名空间）；MIT 许可保留在快照。缺少本地包时不挂面板，生成快照限额为 480 KiB，其他路径不变。
+
+实验性 `openingPageRuntime: "tavern-page-callbacks-v1"` 在相同 Vue／Lodash／Zod 版本与模块许可上增加两项作者页回调：`errorCatched(fn)` 保留函数结果，向本页控制台记录并原样抛回同步异常或 Promise 拒绝；`$(fn)` 只在本页 DOM 就绪后异步调用 `fn`，不提供选择器、加载、AJAX、父页面或宿主日志／toast 接口。生成快照上限仍为 480 KiB。以上选项均不提供完整 Tavern Helper、jQuery、MVU 就绪或变量写回。
 
 ### 酒馆原生面板
 
