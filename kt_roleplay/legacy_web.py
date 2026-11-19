@@ -3,6 +3,7 @@
 import json
 import re
 from collections.abc import Callable
+from typing import TypedDict
 from urllib.parse import urlsplit
 
 from kohakuterrarium.modules.output.base import BaseOutputModule
@@ -132,6 +133,16 @@ def mvu_reply_has_body(text: str) -> bool:
     return len(text) >= 5 or len(text.encode('utf-16-le', errors='surrogatepass')) >= 10
 
 
+def _assistant_reply_text(message: object) -> str | None:
+    if not isinstance(message, dict) or message.get('role') != 'assistant' or message.get('tool_calls'):
+        return None
+    content = message.get('content')
+    if isinstance(content, list):
+        content = '\n'.join(part['text'] for part in content if isinstance(part, dict)
+                            and part.get('type') == 'text' and isinstance(part.get('text'), str))
+    return content if isinstance(content, str) and 0 < len(content) <= 32 * 1024 else None
+
+
 class LegacyReplyCapture(BaseOutputModule):
     """Receive the canonical assistant reply, not streamed, tool, or replay text."""
 
@@ -149,14 +160,7 @@ class LegacyReplyCapture(BaseOutputModule):
         capture = self.capture
         if capture is None or event.type != 'assistant_message':
             return
-        message = event.payload.get('message')
-        if not isinstance(message, dict) or message.get('role') != 'assistant' or message.get('tool_calls'):
-            return
-        content = message.get('content')
-        if isinstance(content, list):
-            content = '\n'.join(part['text'] for part in content if isinstance(part, dict)
-                                and part.get('type') == 'text' and isinstance(part.get('text'), str))
-        if isinstance(content, str) and 0 < len(content) <= 32 * 1024:
+        if (content := _assistant_reply_text(event.payload.get('message'))) is not None:
             capture(content)
 
 
@@ -165,6 +169,45 @@ class LegacyReplyState(BaseModel):
     turn: int
     text: str
     values: dict[str, JsonValue]
+    branch: int | None = None
+
+
+class LegacyMessageAnchor(TypedDict):
+    turn: int
+    branchId: int
+    eventId: int
+    roundStartEventId: int
+
+
+LEGACY_MESSAGE_EVENT_LIMIT = 128
+
+
+def completed_legacy_message_anchor(reply: LegacyReplyState, events: list[dict]) -> LegacyMessageAnchor | None:
+    """Match success, canonical message and round start in one namespace-local window."""
+    branch = reply.branch
+    if branch is None or branch < 1 or reply.turn < 1:
+        return None
+    ended = False
+    anchor = None
+    for event in events[:LEGACY_MESSAGE_EVENT_LIMIT]:
+        if event.get('turn_index') != reply.turn or event.get('branch_id') != branch:
+            continue
+        kind = event.get('type')
+        if kind == 'processing_end':
+            if ended or event.get('completed') is not True:
+                return None
+            ended = True
+        elif kind == 'assistant_message':
+            key, start = event.get('event_id'), event.get('round_start_event_id')
+            if (not ended or anchor or _assistant_reply_text(event.get('message')) != reply.text
+                    or type(key) is not int or type(start) is not int or not 0 < start < key):
+                return None
+            anchor = LegacyMessageAnchor(turn=reply.turn, branchId=branch, eventId=key, roundStartEventId=start)
+        elif kind == 'assistant_round_start':
+            return anchor if anchor and event.get('event_id') == anchor['roundStartEventId'] else None
+        elif kind in ('processing_start', 'user_message', 'processing_error', 'interrupt'):
+            return None
+    return None
 
 
 class LegacyOpeningState(BaseModel):

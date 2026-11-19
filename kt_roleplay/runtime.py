@@ -31,8 +31,9 @@ from .gameplay_pack import GameplayPack, GameplayPackUnavailable, pack_settings,
 from .gameplay import Action, Actions, PlayActions, apply_actions, apply_field_changes
 from .header_summary import MAX_HEADER_PINS, header_summary
 from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, LegacyWebRequest, configured_plugins, request_plugin
-from .legacy_web import (LegacyOpeningState, LegacyReplyCapture, LegacyReplyState, has_mvu_status_adapter,
-                         legacy_web_message, mvu_reply_has_body)
+from .legacy_web import (LEGACY_MESSAGE_EVENT_LIMIT, LegacyMessageAnchor, LegacyOpeningState, LegacyReplyCapture,
+                         LegacyReplyState, completed_legacy_message_anchor, has_mvu_status_adapter, legacy_web_message,
+                         mvu_reply_has_body)
 from .novel import Outcome, SceneError, Story
 from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields
 from .state_tool import SetCardState
@@ -324,10 +325,35 @@ class RoleplayPlugin(BasePlugin):
         if not marked and (not mvu_reply_has_body(text) or not play.mvu or not play.mvu.values
                            or not approved(play.scripts, play.script_state)):
             return
-        reply = LegacyReplyState(turn=turn, text=text, values=play.mvu.values if play.mvu else {})
+        branch = getattr(agent, '_branch_id', None)
+        reply = LegacyReplyState(turn=turn, text=text, values=play.mvu.values if play.mvu else {},
+                                 branch=branch if type(branch) is int and branch > 0 else None)
         if reply != play.legacy_reply_web:
             self._save(play.model_copy(update={'legacy_reply_web': reply}).model_dump())
             self.ui_emit('state', self.ui_state())
+
+    async def _web_message_anchor(self, play: TavernSession, message_id: int) -> LegacyMessageAnchor | None:
+        reply = play.legacy_reply_web
+        binding = self.binding
+        token = self._web_panel_scope
+        if not binding or not play.legacy_opening_web or not reply or reply.branch is None or reply.turn != message_id:
+            return None
+        agent, store = binding.host_agent, binding.session_store
+        if not agent or not store:
+            return None
+
+        def still_current() -> bool:
+            return (self.binding is binding and binding.session_store is store and binding.host_agent is agent
+                    and self._web_panel_scope == token and not agent.is_processing
+                    and self._script_turn_index() == reply.turn and getattr(agent, '_branch_id', None) == reply.branch
+                    and (self._record() or {}).get('legacy_reply_web') == reply.model_dump())
+
+        run = getattr(store, 'run', None)
+        recent = getattr(store, 'recent_agent_events', None)
+        if not callable(run) or not callable(recent) or not still_current():
+            return None
+        events = await run(recent, binding.agent_name, limit=LEGACY_MESSAGE_EVENT_LIMIT)
+        return completed_legacy_message_anchor(reply, events) if still_current() else None
 
     async def on_unload(self) -> None:
         if self._legacy_reply_capture is not None:
@@ -599,7 +625,8 @@ class RoleplayPlugin(BasePlugin):
                 return self.ui_state()
             if action == "cards" and self.mode in ("persona", "tavern"):
                 return cards_view(library_dir())
-            if action in ('card_web_panel', 'card_web_state', 'card_web_gameplay', 'card_web_plugin_request') and self.mode == 'tavern':
+            if action in ('card_web_panel', 'card_web_state', 'card_web_gameplay', 'card_web_plugin_request',
+                          'card_web_message_anchor') and self.mode == 'tavern':
                 record = self._record()
                 play = TavernSession.model_validate(record) if record is not None else None
                 if play is None or play.web_panel is None or not play.web_panel_ready or not self._web_panel_scope:
@@ -617,6 +644,11 @@ class RoleplayPlugin(BasePlugin):
                 if args.get('panelScope') != self._web_panel_scope:
                     raise OwnerArgumentError('The card web panel session changed; open the panel again')
                 payload = {key: value for key, value in args.items() if key != 'panelScope'}
+                if action == 'card_web_message_anchor':
+                    message_id = payload.get('messageId')
+                    if set(payload) != {'messageId'} or type(message_id) is not int or message_id < 1:
+                        raise OwnerArgumentError('Choose the current completed card web reply')
+                    return {'anchor': await self._web_message_anchor(play, message_id)}
                 if action == 'card_web_plugin_request':
                     call = LegacyWebRequest.model_validate(payload).to_plugin_request()
                     if play.legacy_opening_web is not None and call.method != 'GET':
