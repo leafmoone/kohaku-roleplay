@@ -16,6 +16,8 @@ import {
   base64ToUint8Array,
   collectGreetings,
   expandPlaceholders,
+  normalizeWorldbookDiagnostics,
+  normalizeWorldbookEntries,
   readFileAsBase64,
   sanitizeDownloadFilename,
   validateCardFile,
@@ -66,10 +68,23 @@ export const CardLibraryView = {
     const savedCopyBanner = ref(false);
     const exporting = ref(false);
 
+    // Card default worldbook & embedded worldbook inspector state
+    const defaultWorldbookDraft = ref("");
+    const savingDefaultWorldbook = ref(false);
+    const embeddedInspectorOpen = ref(false);
+    const embeddedBook = ref(null);
+    const embeddedLoading = ref(false);
+    const embeddedError = ref("");
+    const embeddedEntryQuery = ref("");
+    const embeddedEntryFilter = ref("all");
+    const selectedEmbeddedEntryIndex = ref(null);
+    let embeddedSeq = 0;
+
     // Studio quick-launch state (used in tab mode)
     const tavernLaunchPlayer = ref("Player");
     const tavernLaunchDesc = ref("");
     const tavernLaunchGreetingIndex = ref(0);
+    const tavernLaunchWorldbookMode = ref("__default__");
     const novelCastIds = ref([]);
     const novelTitle = ref("");
     const launchedSession = ref(null);
@@ -85,6 +100,61 @@ export const CardLibraryView = {
     );
     const isCharxCard = computed(() => detail.value?.sourceFormat === "charx");
     const cards = computed(() => (Array.isArray(state.value.cards) ? state.value.cards : []));
+    const worldbooks = computed(() =>
+      Array.isArray(state.value.worldbooks) ? state.value.worldbooks : [],
+    );
+    const cardWorldbookDefaults = computed(() =>
+      state.value.cardWorldbookDefaults && typeof state.value.cardWorldbookDefaults === "object"
+        ? state.value.cardWorldbookDefaults
+        : {},
+    );
+    const currentCardDefaultWorldbookId = computed(() => {
+      const id = selectedId.value;
+      if (!id) return "";
+      const raw = cardWorldbookDefaults.value[id];
+      return typeof raw === "string" ? raw : "";
+    });
+    const currentCardDefaultWorldbook = computed(
+      () => worldbooks.value.find((wb) => wb.id === currentCardDefaultWorldbookId.value) || null,
+    );
+    const embeddedDiagnostics = computed(() =>
+      normalizeWorldbookDiagnostics(
+        embeddedBook.value?.diagnostics || detail.value?.bookSummary?.diagnostics,
+      ),
+    );
+    const embeddedEntries = computed(() =>
+      normalizeWorldbookEntries(embeddedBook.value?.entries),
+    );
+    const embeddedSupportedCount = computed(
+      () => embeddedEntries.value.filter((entry) => !entry.issue).length,
+    );
+    const embeddedIssuesCount = computed(
+      () => embeddedEntries.value.filter((entry) => Boolean(entry.issue)).length,
+    );
+    const filteredEmbeddedEntries = computed(() => {
+      const mode = embeddedEntryFilter.value;
+      const q = embeddedEntryQuery.value.trim().toLowerCase();
+      return embeddedEntries.value.filter((entry) => {
+        if (mode === "supported" && entry.issue) return false;
+        if (mode === "issues" && !entry.issue) return false;
+        if (!q) return true;
+        const title = (
+          entry.name || t("worldbookEntryUntitled", { index: entry.index + 1 })
+        ).toLowerCase();
+        if (title.includes(q)) return true;
+        if (entry.keys.some((k) => k.toLowerCase().includes(q))) return true;
+        if (entry.secondaryKeys.some((k) => k.toLowerCase().includes(q))) return true;
+        return false;
+      });
+    });
+    const selectedEmbeddedEntry = computed(() => {
+      const list = filteredEmbeddedEntries.value;
+      if (!list.length) return null;
+      return (
+        list.find((entry) => entry.index === selectedEmbeddedEntryIndex.value) ||
+        list[0]
+      );
+    });
     const filteredCards = computed(() => {
       const q = query.value.trim().toLowerCase();
       if (!q) return cards.value;
@@ -143,12 +213,43 @@ export const CardLibraryView = {
     );
 
     watch(selectedId, () => {
+      embeddedSeq += 1;
       tavernLaunchGreetingIndex.value = 0;
+      tavernLaunchWorldbookMode.value = "__default__";
       editingCopy.value = false;
       editingPortraits.value = false;
       expandedDetails.value = {};
       greetingsExpanded.value = false;
+      embeddedInspectorOpen.value = false;
+      embeddedLoading.value = false;
+      embeddedBook.value = null;
+      embeddedError.value = "";
+      embeddedEntryQuery.value = "";
+      embeddedEntryFilter.value = "all";
+      selectedEmbeddedEntryIndex.value = null;
     });
+
+    watch(
+      [selectedId, currentCardDefaultWorldbookId],
+      ([, defId]) => {
+        defaultWorldbookDraft.value = defId || "";
+      },
+      { immediate: true },
+    );
+
+    watch(
+      filteredEmbeddedEntries,
+      (list) => {
+        if (!list.length) {
+          selectedEmbeddedEntryIndex.value = null;
+          return;
+        }
+        if (!list.some((entry) => entry.index === selectedEmbeddedEntryIndex.value)) {
+          selectedEmbeddedEntryIndex.value = list[0].index;
+        }
+      },
+      { immediate: true },
+    );
 
     function isDetailExpanded(key) {
       return Boolean(expandedDetails.value[key]);
@@ -179,6 +280,108 @@ export const CardLibraryView = {
       } catch (err) {
         actionError.value = err?.message || String(err);
       }
+    }
+
+    function openWorldbookLibraryTab() {
+      try {
+        openTab("kohaku-roleplay/worldbooks");
+      } catch (err) {
+        actionError.value = err?.message || String(err);
+      }
+    }
+
+    function worldbookIssueLabel(code, count = 1) {
+      switch (code) {
+        case "unsupported_position":
+          return t("worldbookIssueUnsupportedPosition", { count });
+        case "unsupported_trigger":
+          return t("worldbookIssueUnsupportedTrigger", { count });
+        case "unsupported_key":
+          return t("worldbookIssueUnsupportedKey", { count });
+        case "script_content":
+          return t("worldbookIssueScriptContent", { count });
+        case "invalid_entry":
+          return t("worldbookIssueInvalidEntry", { count });
+        default:
+          return t("worldbookIssueUnknown", { code, count });
+      }
+    }
+
+    async function saveCardDefaultWorldbook() {
+      const card = selectedCard.value;
+      if (!card || busy.value || savingDefaultWorldbook.value) return;
+      const targetCardId = card.id;
+      const bookId = defaultWorldbookDraft.value ? defaultWorldbookDraft.value : null;
+      savingDefaultWorldbook.value = true;
+      actionError.value = "";
+      try {
+        const nextState = await owner.call("set_default_worldbook", {
+          cardId: targetCardId,
+          bookId,
+        });
+        if (nextState && typeof nextState === "object") {
+          owner.state.value = nextState;
+          owner.status.value = "ready";
+          owner.error.value = "";
+        } else {
+          const refreshed = await owner.refresh();
+          if (!refreshed || owner.status.value !== "ready") {
+            return;
+          }
+        }
+        notify(t("cardDefaultWorldbookSavedToast"), "success");
+      } catch (err) {
+        actionError.value = err?.message || String(err);
+      } finally {
+        savingDefaultWorldbook.value = false;
+      }
+    }
+
+    async function toggleEmbeddedInspector() {
+      if (embeddedInspectorOpen.value) {
+        embeddedSeq += 1;
+        embeddedLoading.value = false;
+        embeddedInspectorOpen.value = false;
+        return;
+      }
+      const card = selectedCard.value;
+      if (!card) return;
+      const targetCardId = card.id;
+      embeddedInspectorOpen.value = true;
+      embeddedError.value = "";
+      embeddedEntryQuery.value = "";
+      embeddedEntryFilter.value = "all";
+      selectedEmbeddedEntryIndex.value = null;
+      if (embeddedBook.value && embeddedBook.value.cardId === targetCardId) {
+        return;
+      }
+      const seq = ++embeddedSeq;
+      embeddedLoading.value = true;
+      try {
+        const result = await owner.call("embedded_worldbook", { id: targetCardId });
+        if (seq === embeddedSeq && selectedId.value === targetCardId) {
+          embeddedBook.value = result
+            ? {
+                cardId: targetCardId,
+                name: result.name || card.name,
+                diagnostics: normalizeWorldbookDiagnostics(result.diagnostics),
+                entries: normalizeWorldbookEntries(result.entries),
+              }
+            : null;
+        }
+      } catch (err) {
+        if (seq === embeddedSeq && selectedId.value === targetCardId) {
+          embeddedError.value = err?.message || String(err);
+        }
+      } finally {
+        if (seq === embeddedSeq) {
+          embeddedLoading.value = false;
+        }
+      }
+    }
+
+    function selectEmbeddedEntry(index) {
+      selectedEmbeddedEntryIndex.value = index;
     }
 
     let detailSeq = 0;
@@ -379,14 +582,23 @@ export const CardLibraryView = {
       busy.value = true;
       actionError.value = "";
       try {
-        const resp = await kt.api.post("taverns", {
+        const payload = {
           cardId: card.id,
           player: {
             name: tavernLaunchPlayer.value.trim() || "Player",
             description: tavernLaunchDesc.value.trim(),
           },
           greetingIndex: Number(tavernLaunchGreetingIndex.value) || 0,
-        });
+        };
+        if (tavernLaunchWorldbookMode.value === "__none__") {
+          payload.worldbookId = null;
+        } else if (
+          tavernLaunchWorldbookMode.value &&
+          tavernLaunchWorldbookMode.value !== "__default__"
+        ) {
+          payload.worldbookId = tavernLaunchWorldbookMode.value;
+        }
+        const resp = await kt.api.post("taverns", payload);
         const data = resp?.data || resp || {};
         launchedSession.value = {
           kind: "tavern",
@@ -474,6 +686,30 @@ export const CardLibraryView = {
       toggleGreetingsExpanded,
       openStudioTab,
       openSettingsLibrary,
+      openWorldbookLibraryTab,
+      worldbooks,
+      cardWorldbookDefaults,
+      currentCardDefaultWorldbookId,
+      currentCardDefaultWorldbook,
+      defaultWorldbookDraft,
+      savingDefaultWorldbook,
+      saveCardDefaultWorldbook,
+      embeddedInspectorOpen,
+      embeddedBook,
+      embeddedLoading,
+      embeddedError,
+      embeddedDiagnostics,
+      embeddedEntries,
+      embeddedSupportedCount,
+      embeddedIssuesCount,
+      embeddedEntryQuery,
+      embeddedEntryFilter,
+      filteredEmbeddedEntries,
+      selectedEmbeddedEntry,
+      selectedEmbeddedEntryIndex,
+      toggleEmbeddedInspector,
+      selectEmbeddedEntry,
+      worldbookIssueLabel,
       detail,
       detailLoading,
       detailError,
@@ -507,6 +743,7 @@ export const CardLibraryView = {
       tavernLaunchPlayer,
       tavernLaunchDesc,
       tavernLaunchGreetingIndex,
+      tavernLaunchWorldbookMode,
       launchGreetingPreview,
       novelCastIds,
       novelCastLimit: NOVEL_CAST_LIMIT,
@@ -535,6 +772,15 @@ export const CardLibraryView = {
           <p class="ktrp-muted">{{ t('studioDiscoverHint') }}</p>
         </div>
         <div class="ktrp-library-banner-actions">
+          <ActionButton
+            size="sm"
+            variant="ghost"
+            icon="i-carbon-notebook"
+            data-testid="kt-rp-open-worldbooks-tab-btn"
+            @click="openWorldbookLibraryTab"
+          >
+            {{ t('openWorldbookLibraryBtn') }}
+          </ActionButton>
           <ActionButton
             v-if="props.mode === 'settings'"
             size="sm"
@@ -852,6 +1098,295 @@ export const CardLibraryView = {
                 test-id-prefix="kt-rp-detail-media"
               />
 
+              <div
+                class="ktrp-card-box"
+                data-testid="kt-rp-card-default-worldbook"
+              >
+                <div class="ktrp-row-between">
+                  <div>
+                    <h4>{{ t('cardDefaultWorldbookTitle') }}</h4>
+                    <p class="ktrp-muted">{{ t('cardDefaultWorldbookHint') }}</p>
+                  </div>
+                  <span
+                    v-if="currentCardDefaultWorldbook"
+                    class="ktrp-chip ktrp-chip--accent"
+                    data-testid="kt-rp-card-default-worldbook-current"
+                  >
+                    {{ currentCardDefaultWorldbook.name }}
+                  </span>
+                </div>
+                <div class="ktrp-row-between">
+                  <select
+                    v-model="defaultWorldbookDraft"
+                    class="ktrp-select"
+                    :disabled="busy || savingDefaultWorldbook"
+                    data-testid="kt-rp-card-default-worldbook-select"
+                  >
+                    <option value="">{{ t('cardDefaultWorldbookNone') }}</option>
+                    <option
+                      v-for="wb in worldbooks"
+                      :key="wb.id"
+                      :value="wb.id"
+                    >
+                      {{ wb.name }} ({{ wb.supportedEntries }}/{{ wb.totalEntries }})
+                    </option>
+                  </select>
+                  <ActionButton
+                    size="sm"
+                    variant="primary"
+                    :disabled="busy || savingDefaultWorldbook"
+                    data-testid="kt-rp-card-default-worldbook-save-btn"
+                    @click="saveCardDefaultWorldbook"
+                  >
+                    {{ t('cardDefaultWorldbookSaveBtn') }}
+                  </ActionButton>
+                </div>
+              </div>
+
+              <div
+                v-if="detail.hasWorldbook"
+                class="ktrp-card-box"
+                data-testid="kt-rp-card-embedded-worldbook"
+              >
+                <div class="ktrp-row-between">
+                  <div>
+                    <h4>{{ t('cardEmbeddedWorldbookTitle') }}</h4>
+                    <p
+                      v-if="embeddedDiagnostics"
+                      class="ktrp-muted"
+                      data-testid="kt-rp-card-embedded-diag-summary"
+                    >
+                      {{
+                        t('worldbookDiagSummary', {
+                          supported: embeddedDiagnostics.supportedEntries,
+                          total: embeddedDiagnostics.totalEntries,
+                          skipped: embeddedDiagnostics.skippedEntries,
+                        })
+                      }}
+                    </p>
+                  </div>
+                  <ActionButton
+                    size="sm"
+                    :disabled="busy || embeddedLoading"
+                    data-testid="kt-rp-card-embedded-inspect-btn"
+                    @click="toggleEmbeddedInspector"
+                  >
+                    {{
+                      embeddedInspectorOpen
+                        ? t('cardEmbeddedWorldbookHideBtn')
+                        : t('cardEmbeddedWorldbookInspectBtn')
+                    }}
+                  </ActionButton>
+                </div>
+
+                <div
+                  v-if="embeddedDiagnostics && embeddedDiagnostics.issues.length"
+                  class="ktrp-chip-row"
+                  data-testid="kt-rp-card-embedded-diag-issues"
+                >
+                  <span
+                    v-for="issue in embeddedDiagnostics.issues"
+                    :key="issue.code"
+                    class="ktrp-chip"
+                    :data-testid="'kt-rp-card-embedded-issue-' + issue.code"
+                  >
+                    {{ worldbookIssueLabel(issue.code, issue.count) }}
+                  </span>
+                </div>
+
+                <div
+                  v-if="embeddedInspectorOpen"
+                  class="ktrp-stack"
+                  data-testid="kt-rp-card-embedded-reader"
+                >
+                  <div v-if="embeddedLoading" class="ktrp-empty" role="status">
+                    {{ t('loading') }}
+                  </div>
+                  <div
+                    v-else-if="embeddedError"
+                    class="ktrp-banner ktrp-banner--error"
+                    role="alert"
+                  >
+                    <span>{{ embeddedError }}</span>
+                  </div>
+                  <template v-else-if="embeddedBook">
+                    <div class="ktrp-row-between">
+                      <strong>{{ t('worldbookEntriesDirectoryTitle', { count: embeddedEntries.length }) }}</strong>
+                      <div class="ktrp-inline-actions">
+                        <button
+                          type="button"
+                          class="ktrp-chip"
+                          :class="{ 'ktrp-chip--accent': embeddedEntryFilter === 'all' }"
+                          data-testid="kt-rp-card-embedded-filter-all"
+                          @click="embeddedEntryFilter = 'all'"
+                        >
+                          {{ t('worldbookFilterAll', { count: embeddedEntries.length }) }}
+                        </button>
+                        <button
+                          type="button"
+                          class="ktrp-chip"
+                          :class="{ 'ktrp-chip--accent': embeddedEntryFilter === 'supported' }"
+                          data-testid="kt-rp-card-embedded-filter-supported"
+                          @click="embeddedEntryFilter = 'supported'"
+                        >
+                          {{ t('worldbookFilterSupported', { count: embeddedSupportedCount }) }}
+                        </button>
+                        <button
+                          type="button"
+                          class="ktrp-chip"
+                          :class="{ 'ktrp-chip--accent': embeddedEntryFilter === 'issues' }"
+                          data-testid="kt-rp-card-embedded-filter-issues"
+                          @click="embeddedEntryFilter = 'issues'"
+                        >
+                          {{ t('worldbookFilterIssues', { count: embeddedIssuesCount }) }}
+                        </button>
+                      </div>
+                    </div>
+
+                    <input
+                      v-model="embeddedEntryQuery"
+                      type="search"
+                      class="ktrp-input"
+                      :placeholder="t('worldbookEntrySearchPlaceholder')"
+                      data-testid="kt-rp-card-embedded-entry-search"
+                    />
+
+                    <div
+                      v-if="!embeddedEntries.length"
+                      class="ktrp-empty"
+                      data-testid="kt-rp-card-embedded-entries-empty"
+                    >
+                      {{ t('worldbookNoEntries') }}
+                    </div>
+                    <div
+                      v-else-if="!filteredEmbeddedEntries.length"
+                      class="ktrp-empty"
+                      data-testid="kt-rp-card-embedded-entries-no-match"
+                    >
+                      {{ t('worldbookNoEntryMatches') }}
+                    </div>
+                    <template v-else>
+                      <div
+                        class="ktrp-card-grid"
+                        role="listbox"
+                        data-testid="kt-rp-card-embedded-entry-list"
+                      >
+                        <button
+                          v-for="entry in filteredEmbeddedEntries"
+                          :key="entry.index"
+                          type="button"
+                          class="ktrp-card-tile"
+                          role="option"
+                          :aria-selected="selectedEmbeddedEntry && entry.index === selectedEmbeddedEntry.index"
+                          :data-testid="'kt-rp-card-embedded-entry-item-' + entry.index"
+                          @click="selectEmbeddedEntry(entry.index)"
+                        >
+                          <div class="ktrp-card-tile-meta">
+                            <span class="ktrp-card-tile-name">
+                              {{ entry.name || t('worldbookEntryUntitled', { index: entry.index + 1 }) }}
+                            </span>
+                            <span class="ktrp-chip-row">
+                              <span class="ktrp-chip">
+                                {{ entry.enabled ? t('worldbookEntryEnabledBadge') : t('worldbookEntryDisabledBadge') }}
+                              </span>
+                              <span v-if="entry.position" class="ktrp-chip">
+                                {{ t('worldbookEntryPositionLabel', { position: entry.position }) }}
+                              </span>
+                              <span
+                                v-if="entry.issue"
+                                class="ktrp-chip"
+                                :data-testid="'kt-rp-card-embedded-entry-issue-' + entry.index"
+                              >
+                                {{ worldbookIssueLabel(entry.issue, 1) }}
+                              </span>
+                              <span v-else class="ktrp-chip ktrp-chip--accent">
+                                {{ t('worldbookEntrySupportedBadge') }}
+                              </span>
+                            </span>
+                          </div>
+                        </button>
+                      </div>
+
+                      <div
+                        v-if="selectedEmbeddedEntry"
+                        class="ktrp-sub-card"
+                        data-testid="kt-rp-card-embedded-entry-detail"
+                      >
+                        <h4 data-testid="kt-rp-card-embedded-entry-title">
+                          {{
+                            selectedEmbeddedEntry.name ||
+                            t('worldbookEntryUntitled', { index: selectedEmbeddedEntry.index + 1 })
+                          }}
+                        </h4>
+                        <div class="ktrp-chip-row" data-testid="kt-rp-card-embedded-entry-badges">
+                          <span class="ktrp-chip">
+                            {{
+                              selectedEmbeddedEntry.enabled
+                                ? t('worldbookEntryEnabledBadge')
+                                : t('worldbookEntryDisabledBadge')
+                            }}
+                          </span>
+                          <span v-if="selectedEmbeddedEntry.position" class="ktrp-chip">
+                            {{ t('worldbookEntryPositionLabel', { position: selectedEmbeddedEntry.position }) }}
+                          </span>
+                          <span
+                            v-if="selectedEmbeddedEntry.issue"
+                            class="ktrp-chip"
+                            data-testid="kt-rp-card-embedded-entry-detail-issue"
+                          >
+                            {{ worldbookIssueLabel(selectedEmbeddedEntry.issue, 1) }}
+                          </span>
+                          <span v-else class="ktrp-chip ktrp-chip--accent">
+                            {{ t('worldbookEntrySupportedBadge') }}
+                          </span>
+                        </div>
+
+                        <div class="ktrp-field-block" data-testid="kt-rp-card-embedded-entry-keys">
+                          <span class="ktrp-label">{{ t('worldbookEntryPrimaryKeys') }}</span>
+                          <div v-if="selectedEmbeddedEntry.keys.length" class="ktrp-tag-list">
+                            <span
+                              v-for="(k, idx) in selectedEmbeddedEntry.keys"
+                              :key="idx"
+                              class="ktrp-tag"
+                            >{{ k }}</span>
+                          </div>
+                          <p v-else class="ktrp-muted">{{ t('worldbookEntryNoKeys') }}</p>
+                        </div>
+
+                        <div
+                          v-if="selectedEmbeddedEntry.secondaryKeys.length"
+                          class="ktrp-field-block"
+                          data-testid="kt-rp-card-embedded-entry-secondary-keys"
+                        >
+                          <span class="ktrp-label">{{ t('worldbookEntrySecondaryKeys') }}</span>
+                          <div class="ktrp-tag-list">
+                            <span
+                              v-for="(k, idx) in selectedEmbeddedEntry.secondaryKeys"
+                              :key="idx"
+                              class="ktrp-tag"
+                            >{{ k }}</span>
+                          </div>
+                        </div>
+
+                        <div class="ktrp-field-block">
+                          <span class="ktrp-label">{{ t('worldbookEntryContentTitle') }}</span>
+                          <pre
+                            v-if="selectedEmbeddedEntry.content"
+                            class="ktrp-pre"
+                            data-testid="kt-rp-card-embedded-entry-content"
+                          >{{ selectedEmbeddedEntry.content }}</pre>
+                          <p
+                            v-else
+                            class="ktrp-muted"
+                            data-testid="kt-rp-card-embedded-entry-content"
+                          >{{ t('worldbookEntryEmptyContent') }}</p>
+                        </div>
+                      </div>
+                    </template>
+                  </template>
+                </div>
+              </div>
+
             <div class="ktrp-detail-sections">
                 <div
                   v-if="detail.fields?.description"
@@ -1036,6 +1571,29 @@ export const CardLibraryView = {
                     <div v-if="launchGreetingPreview" class="ktrp-quote-box ktrp-pre">
                       {{ launchGreetingPreview }}
                     </div>
+                  </div>
+                  <div class="ktrp-field-block">
+                    <label class="ktrp-label" for="ktrp-studio-worldbook-select">
+                      {{ t('sessionWorldbookLaunchLabel') }}
+                    </label>
+                    <select
+                      id="ktrp-studio-worldbook-select"
+                      v-model="tavernLaunchWorldbookMode"
+                      class="ktrp-select"
+                      data-testid="kt-rp-studio-worldbook-select"
+                    >
+                      <option value="__default__">
+                        {{
+                          currentCardDefaultWorldbook
+                            ? t('sessionWorldbookFollowDefault', { name: currentCardDefaultWorldbook.name })
+                            : t('sessionWorldbookFollowDefaultNone')
+                        }}
+                      </option>
+                      <option value="__none__">{{ t('sessionWorldbookExplicitNone') }}</option>
+                      <option v-for="wb in worldbooks" :key="wb.id" :value="wb.id">
+                        {{ t('sessionWorldbookLibraryPick', { name: wb.name }) }}
+                      </option>
+                    </select>
                   </div>
                   <div class="ktrp-row-end">
                     <ActionButton
