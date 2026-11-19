@@ -94,13 +94,15 @@ KT 不安装或启动原版酒馆服务器插件。先在独立宿主上运行�
 
 本局的 `roleplay` owner 提供 `legacy_plugin_options`（查看可用及已启用的插件）、`set_legacy_plugins`（用 `pluginIds` 设置本局可调用的插件）和 `legacy_plugin_request`（传入 `pluginId`、`method`、`path`，可选字符串 `query` 和 POST JSON `body`）。后端只转发到已配置的本机 `/api/plugins/<id>/<path>`，以 `{status, body}` 返回结果；不带宿主凭据，不跟重定向，不支持二进制响应。调用许可随会话存档保存，不改变兼容脚本默认开启的规则。
 
-本段只交付了会话后端接口；未接入卡片网页或脚本发出的旧调用，也没有设置界面、原版插件加载器或任意外部服务转发。
+受信任的网页宿主还可以通过 `card_web_plugin_request` 提交 `panelScope`、`method`、原相对地址 `url`（例如 `/api/plugins/example/status?mode=short`）及可选 POST JSON `body`。只处理已打开且作用域匹配的本局网页，再按原有白名单和本局启用状态转发；旧开场页只允许 GET。只返回 `{status, body}`，不把插件配置或宿主凭据交给页面。绝对地址、任意宿主路径及重复查询键不支持。
+
+以上是会话后端接口，浏览器中的旧页面调用仍需接线。没有配置界面、原版插件加载器或任意外部服务转发。
 
 ### 会话内卡片网页（后端接口）
 
 CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title": "商店", "entry": "panels/shop.html"}`，并在包内提供该 UTF-8 HTML 文件（最多 256 KiB）。首版使用自包含页面，不装载外部资源。导入只读取页面，开局把它保存为本局快照；卡库和会话普通视图只返回 `webPanel.title`。旧库中未缓存声明时，从原件识别后可新开一局，不修改已有会话。原卡删除不影响已有页面快照。
 
-受信任的宿主组件可在本局开场完成、玩家打开面板时调用 `card_web_panel` 取 `{title, html, panelScope}`。组件在读 `card_web_state` 或向 `card_web_gameplay` 提交 `{"actions": [...]}` 时带上同一 `panelScope`，仍由本局 owner 处理；切局误转发或重新挂载前的迟到请求会被拒绝。作用域标记不写存档，恢复后要重新打开面板。背包和任务沿用原生校验，状态及结算回包是 `{fields, panels, mvu}`，不返回会话历史、笔记或未公开变量。原 HTML 不可直接插入 KT 主页面；前端隔离容器未完成。本接口不调外部插件，也不是整套 Tavern Helper 接口。
+受信任的宿主组件可在本局开场完成、玩家打开面板时调用 `card_web_panel` 取 `{title, html, panelScope}`。组件在读 `card_web_state` 或向 `card_web_gameplay` 提交 `{"actions": [...]}` 时带上同一 `panelScope`，仍由本局 owner 处理；切局误转发或重新挂载前的迟到请求会被拒绝。作用域标记不写存档，恢复后要重新打开面板。背包和任务沿用原生校验，状态及结算回包是 `{fields, panels, mvu}`，不返回会话历史、笔记或未公开变量。原 HTML 不可直接插入 KT 主页面；前端隔离容器未完成。请求已启用的外部插件走上文单独接口；这些后端接口不是整套 Tavern Helper。
 
 旧卡如果用仅显示、仅作用于助理文本的 `regex_scripts`，把开场中的一个字面标记替换为完整围栏 HTML，KT 可识别这类页面；不会运行脚本、通用正则替换或把 HTML 发给模型。显式 CHARX 网页优先。旧卡页面只读，`card_web_panel` 额外返回 `legacyMarker` 及 `legacyOpening`（开场消息编号 `0` 和发布当时的 `data.stat_data`，只含玩家当前选择公开的路径）；继续对话的当前值不会被冒充为开场值。其他历史楼层、`display_data` / `delta_data`、整个酒馆页面或虚拟浏览器 API 不在这个后端切片。
 

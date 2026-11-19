@@ -30,7 +30,7 @@ from .errors import SettlementRejected
 from .gameplay_pack import GameplayPack, GameplayPackUnavailable, pack_settings, pack_tools, tavern_creature
 from .gameplay import Action, Actions, PlayActions, apply_actions, apply_field_changes
 from .header_summary import MAX_HEADER_PINS, header_summary
-from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, configured_plugins, request_plugin
+from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, LegacyWebRequest, configured_plugins, request_plugin
 from .legacy_web import LegacyOpeningState, selected_opening_values
 from .novel import Outcome, SceneError, Story
 from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields
@@ -529,6 +529,18 @@ class RoleplayPlugin(BasePlugin):
         view["headerSummary"] = header_summary(view, play.header_pins)
         return view
 
+    async def _request_legacy_plugin(self, call: LegacyRequest, panel_scope: str | None) -> dict[str, JsonValue]:
+        record = self._record()
+        if not record or call.pluginId not in record.get('legacy_plugins', []):
+            raise OwnerArgumentError(f'Legacy plugin {call.pluginId} is not enabled in this tavern')
+        providers = await to_thread(configured_plugins, library_dir())
+        current = self._record()
+        if panel_scope is not None and panel_scope != self._web_panel_scope:
+            raise OwnerArgumentError('The card web panel session changed; open the panel again')
+        if not current or call.pluginId not in current.get('legacy_plugins', []):
+            raise OwnerArgumentError(f'Legacy plugin {call.pluginId} is no longer enabled in this tavern')
+        return await to_thread(request_plugin, providers, call)
+
     async def ui_call(self, action: str, args: dict[str, object], context, *,
                       prepared_worldbook: WorldbookSnapshot | None = None) -> dict[str, object] | None:
         if context is not None and context.multi_user:
@@ -542,7 +554,7 @@ class RoleplayPlugin(BasePlugin):
                 return self.ui_state()
             if action == "cards" and self.mode in ("persona", "tavern"):
                 return cards_view(library_dir())
-            if action in ('card_web_panel', 'card_web_state', 'card_web_gameplay') and self.mode == 'tavern':
+            if action in ('card_web_panel', 'card_web_state', 'card_web_gameplay', 'card_web_plugin_request') and self.mode == 'tavern':
                 record = self._record()
                 play = TavernSession.model_validate(record) if record is not None else None
                 if play is None or play.web_panel is None or not play.web_panel_ready or not self._web_panel_scope:
@@ -560,6 +572,11 @@ class RoleplayPlugin(BasePlugin):
                 if args.get('panelScope') != self._web_panel_scope:
                     raise OwnerArgumentError('The card web panel session changed; open the panel again')
                 payload = {key: value for key, value in args.items() if key != 'panelScope'}
+                if action == 'card_web_plugin_request':
+                    call = LegacyWebRequest.model_validate(payload).to_plugin_request()
+                    if play.legacy_opening_web is not None and call.method != 'GET':
+                        raise OwnerArgumentError('The legacy opening page is read-only')
+                    return await self._request_legacy_plugin(call, self._web_panel_scope)
                 if action == 'card_web_gameplay':
                     if play.legacy_opening_web is not None:
                         raise OwnerArgumentError('The legacy opening page is read-only')
@@ -587,14 +604,7 @@ class RoleplayPlugin(BasePlugin):
                     raise OwnerArgumentError('Start a tavern before using legacy plugins')
                 play = TavernSession.model_validate(record)
                 if action == 'legacy_plugin_request':
-                    call = LegacyRequest.model_validate(args)
-                    if call.pluginId not in play.legacy_plugins:
-                        raise OwnerArgumentError(f'Legacy plugin {call.pluginId} is not enabled in this tavern')
-                    providers = await to_thread(configured_plugins, library_dir())
-                    current = self._record()
-                    if not current or call.pluginId not in current.get('legacy_plugins', []):
-                        raise OwnerArgumentError(f'Legacy plugin {call.pluginId} is no longer enabled in this tavern')
-                    return await to_thread(request_plugin, providers, call)
+                    return await self._request_legacy_plugin(LegacyRequest.model_validate(args), None)
                 if action == 'legacy_plugin_options':
                     if args:
                         raise OwnerArgumentError('Plugin options do not take any arguments')

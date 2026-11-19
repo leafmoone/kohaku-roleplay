@@ -1,10 +1,11 @@
 """Expose configured endpoints of an independently running local Tavern plugin."""
 
 import json
+import re
 from http.client import HTTPConnection, HTTPException
 from pathlib import Path
 from typing import Annotated, Literal
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, model_validator
 
@@ -12,6 +13,7 @@ PluginId = Annotated[str, Field(pattern=r'^[A-Za-z0-9_-]{1,64}$')]
 EndpointPath = Annotated[str, Field(pattern=r'^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$', max_length=160)]
 Method = Literal['GET', 'POST']
 _MAX_JSON = 256 * 1024
+_WEB_ROUTE = re.compile(r'/api/plugins/(?P<plugin>[A-Za-z0-9_-]{1,64})/(?P<route>[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*)(?:\?(?P<query>[^#]*))?')
 
 
 class LegacyEndpoint(BaseModel):
@@ -36,6 +38,30 @@ class LegacyRequest(LegacyEndpoint):
         if self.method == 'GET' and 'body' in self.model_fields_set:
             raise ValueError('A GET plugin request cannot carry a body')
         return self
+
+
+class LegacyWebRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    method: Method
+    url: str = Field(min_length=1, max_length=4096)
+    body: JsonValue = None
+
+    def to_plugin_request(self) -> LegacyRequest:
+        match = _WEB_ROUTE.fullmatch(self.url)
+        if match is None or any(char.isspace() or ord(char) < 32 for char in self.url):
+            raise LegacyPluginError('Expected a relative /api/plugins/<id>/<route> URL')
+        raw_query = match['query'] or ''
+        if re.search(r'%(?![0-9A-Fa-f]{2})', raw_query):
+            raise LegacyPluginError('Invalid encoding in the plugin query')
+        try:
+            pairs = parse_qsl(raw_query, keep_blank_values=True, max_num_fields=32, errors='strict')
+        except ValueError as exc:
+            raise LegacyPluginError('Invalid or excessive plugin query parameters') from exc
+        query = dict(pairs)
+        if len(query) != len(pairs):
+            raise LegacyPluginError('Repeated plugin query parameter')
+        args = self.model_dump(exclude={'url'}, exclude_unset=True)
+        return LegacyRequest.model_validate({**args, 'pluginId': match['plugin'], 'path': match['route'], 'query': query})
 
 
 class LegacySelection(BaseModel):
