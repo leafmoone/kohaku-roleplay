@@ -181,14 +181,15 @@ class LegacyMessageAnchor(TypedDict):
 
 LEGACY_MESSAGE_EVENT_LIMIT = 128
 LEGACY_MESSAGE_SLOT = 'mes-text-v1'
+_MESSAGE_ID_MAX = 2**53 - 1
 
 
 class LegacyMessageLocator(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
-    turn: int = Field(ge=1, le=2**53 - 1)
-    branchId: int = Field(ge=1, le=2**53 - 1)
-    eventId: int = Field(ge=1, le=2**53 - 1)
-    roundStartEventId: int = Field(ge=1, le=2**53 - 1)
+    turn: int = Field(ge=1, le=_MESSAGE_ID_MAX)
+    branchId: int = Field(ge=1, le=_MESSAGE_ID_MAX)
+    eventId: int = Field(ge=1, le=_MESSAGE_ID_MAX)
+    roundStartEventId: int = Field(ge=1, le=_MESSAGE_ID_MAX)
 
     @model_validator(mode='after')
     def _physical_order(self) -> 'LegacyMessageLocator':
@@ -243,26 +244,30 @@ def legacy_slot_options(text: str) -> list[dict[str, str]]:
 def completed_legacy_message_anchor(reply: LegacyReplyState, events: list[dict]) -> LegacyMessageAnchor | None:
     """Match success, canonical message and round start in one namespace-local window."""
     branch = reply.branch
-    if branch is None or branch < 1 or reply.turn < 1:
+    if branch is None or not 1 <= branch <= _MESSAGE_ID_MAX or not 1 <= reply.turn <= _MESSAGE_ID_MAX:
         return None
-    ended = False
+    terminal = None
     anchor = None
     for event in events[:LEGACY_MESSAGE_EVENT_LIMIT]:
-        if event.get('turn_index') != reply.turn or event.get('branch_id') != branch:
+        turn, event_branch = event.get('turn_index'), event.get('branch_id')
+        if turn != reply.turn or event_branch != branch:
             continue
-        kind = event.get('type')
+        if type(turn) is not int or type(event_branch) is not int:
+            return None
+        kind, key = event.get('type'), event.get('event_id')
         if kind == 'processing_end':
-            if ended or event.get('completed') is not True:
+            if (terminal is not None or event.get('completed') is not True
+                    or type(key) is not int or not 1 <= key <= _MESSAGE_ID_MAX):
                 return None
-            ended = True
+            terminal = key
         elif kind == 'assistant_message':
-            key, start = event.get('event_id'), event.get('round_start_event_id')
-            if (not ended or anchor or _assistant_reply_text(event.get('message')) != reply.text
-                    or type(key) is not int or type(start) is not int or not 0 < start < key):
+            start = event.get('round_start_event_id')
+            if (terminal is None or anchor or _assistant_reply_text(event.get('message')) != reply.text
+                    or type(key) is not int or type(start) is not int or not 0 < start < key < terminal):
                 return None
             anchor = LegacyMessageAnchor(turn=reply.turn, branchId=branch, eventId=key, roundStartEventId=start)
         elif kind == 'assistant_round_start':
-            return anchor if anchor and event.get('event_id') == anchor['roundStartEventId'] else None
+            return anchor if anchor and type(key) is int and key == anchor['roundStartEventId'] else None
         elif kind in ('processing_start', 'user_message', 'processing_error', 'interrupt'):
             return None
     return None
