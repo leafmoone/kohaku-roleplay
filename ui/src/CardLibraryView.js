@@ -34,6 +34,74 @@ import { useRoleplayText } from "./strings.js";
  * When `mode === 'tab'`, also exposes Tavern & Novel launch actions via `kt.api.post(...)`.
  */
 const NOVEL_CAST_LIMIT = 32;
+const MAX_CARD_MODULES = 6;
+
+function normalizeScriptDependencies(rawScripts) {
+  if (!Array.isArray(rawScripts)) return [];
+  return rawScripts
+    .filter((item) => item && typeof item === "object")
+    .map((item, idx) => {
+      const scriptId =
+        typeof item.scriptId === "string" && item.scriptId.trim()
+          ? item.scriptId.trim()
+          : `script-${idx + 1}`;
+      const name =
+        typeof item.name === "string" && item.name.trim() ? item.name.trim() : scriptId;
+      const enabled = Boolean(item.enabled);
+      const syntaxError = Boolean(item.syntaxError);
+      const truncated = Boolean(item.truncated);
+      const eligible = enabled && !syntaxError && !truncated;
+      const references = Array.isArray(item.references)
+        ? item.references
+            .filter((refItem) => refItem && typeof refItem === "object")
+            .map((refItem) => {
+              const specifier =
+                typeof refItem.specifier === "string" && refItem.specifier.trim()
+                  ? refItem.specifier.trim()
+                  : null;
+              const kind =
+                refItem.kind === "https" || refItem.kind === "relative"
+                  ? refItem.kind
+                  : "unsupported";
+              const dynamic = Boolean(refItem.dynamic);
+              return {
+                specifier,
+                kind,
+                dynamic,
+                selectable: Boolean(eligible && kind === "https" && !dynamic && specifier),
+              };
+            })
+        : [];
+      const compatibilityNotes = Array.isArray(item.compatibilityNotes)
+        ? item.compatibilityNotes.filter((n) => typeof n === "string" && n.trim())
+        : [];
+      return {
+        scriptId,
+        name,
+        enabled,
+        syntaxError,
+        truncated,
+        eligible,
+        references,
+        compatibilityNotes,
+      };
+    });
+}
+
+function collectEligibleHttpsUrls(normalizedScripts) {
+  const seen = new Set();
+  const urls = [];
+  for (const script of normalizedScripts) {
+    if (!script.eligible) continue;
+    for (const refItem of script.references) {
+      if (refItem.selectable && refItem.specifier && !seen.has(refItem.specifier)) {
+        seen.add(refItem.specifier);
+        urls.push(refItem.specifier);
+      }
+    }
+  }
+  return urls;
+}
 
 export const CardLibraryView = {
   name: "RoleplayCardLibraryView",
@@ -81,11 +149,22 @@ export const CardLibraryView = {
     const selectedEmbeddedEntryIndex = ref(null);
     let embeddedSeq = 0;
 
+    // Pre-import & existing card script module dependency confirmation state
+    const pendingImportDeps = ref(null);
+    const pendingImportSelectedUrls = ref([]);
+    const pendingImportedCardRefresh = ref(null);
+    const detailSelectedModuleUrls = ref([]);
+    const confirmingDetailModules = ref(false);
+    const detailModulesError = ref("");
+    let importPreviewSeq = 0;
+    let detailModulesSeq = 0;
+
     // Studio quick-launch state (used in tab mode)
     const tavernLaunchPlayer = ref("Player");
     const tavernLaunchDesc = ref("");
     const tavernLaunchGreetingIndex = ref(0);
     const tavernLaunchWorldbookMode = ref("__default__");
+    const tavernLaunchScriptsMode = ref("__default__");
     const novelCastIds = ref([]);
     const novelTitle = ref("");
     const launchedSession = ref(null);
@@ -157,6 +236,25 @@ export const CardLibraryView = {
         list[0]
       );
     });
+    const detailScriptDependencies = computed(() =>
+      normalizeScriptDependencies(detail.value?.scriptDependencies),
+    );
+    const detailSavedModules = computed(() =>
+      Array.isArray(detail.value?.scriptModules)
+        ? detail.value.scriptModules
+            .filter((m) => m && typeof m === "object" && typeof m.url === "string" && m.url)
+            .map((m) => ({ url: m.url, size: Number(m.size) || 0 }))
+        : [],
+    );
+    const detailSavedModuleMap = computed(
+      () => new Map(detailSavedModules.value.map((m) => [m.url, m.size])),
+    );
+    const detailEligibleHttpsUrls = computed(() =>
+      collectEligibleHttpsUrls(detailScriptDependencies.value),
+    );
+    const pendingEligibleHttpsUrls = computed(() =>
+      collectEligibleHttpsUrls(pendingImportDeps.value?.scripts || []),
+    );
     const filteredCards = computed(() => {
       const q = query.value.trim().toLowerCase();
       if (!q) return cards.value;
@@ -216,8 +314,10 @@ export const CardLibraryView = {
 
     watch(selectedId, () => {
       embeddedSeq += 1;
+      detailModulesSeq += 1;
       tavernLaunchGreetingIndex.value = 0;
       tavernLaunchWorldbookMode.value = "__default__";
+      tavernLaunchScriptsMode.value = "__default__";
       editingCopy.value = false;
       editingPortraits.value = false;
       expandedDetails.value = {};
@@ -229,6 +329,9 @@ export const CardLibraryView = {
       embeddedEntryQuery.value = "";
       embeddedEntryFilter.value = "all";
       selectedEmbeddedEntryIndex.value = null;
+      confirmingDetailModules.value = false;
+      detailSelectedModuleUrls.value = [];
+      detailModulesError.value = "";
     });
 
     watch(
@@ -432,6 +535,17 @@ export const CardLibraryView = {
           const result = await owner.call("detail", { id });
           if (!stale && seq === detailSeq) {
             detail.value = result || null;
+            const normDeps = normalizeScriptDependencies(result?.scriptDependencies);
+            const eligible = collectEligibleHttpsUrls(normDeps);
+            const savedSet = new Set(
+              Array.isArray(result?.scriptModules)
+                ? result.scriptModules.map((m) => m?.url).filter(Boolean)
+                : [],
+            );
+            const unsavedEligible = eligible.filter((u) => !savedSet.has(u));
+            detailSelectedModuleUrls.value = (
+              unsavedEligible.length ? unsavedEligible : eligible
+            ).slice(0, MAX_CARD_MODULES);
           }
         } catch (err) {
           if (!stale && seq === detailSeq) {
@@ -543,8 +657,12 @@ export const CardLibraryView = {
     async function handleFileChange(event) {
       const file = event.target?.files?.[0];
       if (event.target) event.target.value = "";
-      if (!file) return;
+      if (!file || busy.value) return;
 
+      const seq = ++importPreviewSeq;
+      pendingImportDeps.value = null;
+      pendingImportSelectedUrls.value = [];
+      pendingImportedCardRefresh.value = null;
       actionError.value = "";
       const check = validateCardFile(file, maxCardBytes.value, maxArchiveBytes.value);
       if (!check.ok) {
@@ -560,16 +678,202 @@ export const CardLibraryView = {
       busy.value = true;
       try {
         const base64 = await readFileAsBase64(file);
-        const imported = await owner.call("import", { data: base64 });
-        await owner.refresh();
-        portraitRevision.value += 1;
-        if (imported?.id) {
-          selectedId.value = imported.id;
+        const preview = await owner.call("preview_card_dependencies", { data: base64 });
+        if (seq !== importPreviewSeq) return;
+        const scripts = normalizeScriptDependencies(preview?.scripts);
+        const resolvedName =
+          typeof preview?.name === "string" && preview.name.trim()
+            ? preview.name.trim()
+            : file.name;
+        if (scripts.length > 0) {
+          const eligibleUrls = collectEligibleHttpsUrls(scripts);
+          pendingImportSelectedUrls.value = eligibleUrls.slice(0, MAX_CARD_MODULES);
+          pendingImportDeps.value = {
+            data: base64,
+            name: resolvedName,
+            scripts,
+            importedId: "",
+            downloadError: "",
+            refreshFailed: false,
+          };
+          return;
         }
+        const imported = await owner.call("import", { data: base64 });
+        const importedId = typeof imported?.id === "string" ? imported.id : "";
+        const importedName =
+          typeof imported?.name === "string" && imported.name.trim()
+            ? imported.name.trim()
+            : resolvedName;
+        const refreshed = await owner.refresh();
+        portraitRevision.value += 1;
+        if (!refreshed || owner.status.value !== "ready") {
+          pendingImportedCardRefresh.value = { id: importedId, name: importedName };
+          return;
+        }
+        if (importedId) {
+          selectedId.value = importedId;
+        }
+      } catch (err) {
+        if (seq === importPreviewSeq) {
+          actionError.value = err?.message || String(err);
+        }
+      } finally {
+        if (seq === importPreviewSeq) {
+          busy.value = false;
+        }
+      }
+    }
+
+    function togglePendingModuleUrl(url) {
+      if (!url || busy.value) return;
+      if (!pendingEligibleHttpsUrls.value.includes(url)) return;
+      const list = [...pendingImportSelectedUrls.value];
+      const idx = list.indexOf(url);
+      if (idx >= 0) {
+        list.splice(idx, 1);
+        pendingImportSelectedUrls.value = list;
+      } else if (list.length < MAX_CARD_MODULES) {
+        list.push(url);
+        pendingImportSelectedUrls.value = list;
+      }
+    }
+
+    function cancelPendingImport() {
+      if (busy.value) return;
+      importPreviewSeq += 1;
+      const pending = pendingImportDeps.value;
+      if (pending?.importedId && pending?.refreshFailed) {
+        pendingImportedCardRefresh.value = {
+          id: pending.importedId,
+          name: pending.name,
+        };
+      }
+      pendingImportDeps.value = null;
+      pendingImportSelectedUrls.value = [];
+      actionError.value = "";
+    }
+
+    async function completePendingImport(withSelectedModules) {
+      const pending = pendingImportDeps.value;
+      if (!pending || busy.value) return;
+      const seq = ++importPreviewSeq;
+      busy.value = true;
+      actionError.value = "";
+      pending.downloadError = "";
+      try {
+        let cardId = pending.importedId;
+        if (!cardId) {
+          const imported = await owner.call("import", { data: pending.data });
+          cardId = typeof imported?.id === "string" ? imported.id : "";
+          pending.importedId = cardId;
+          if (typeof imported?.name === "string" && imported.name.trim()) {
+            pending.name = imported.name.trim();
+          }
+          const refreshed = await owner.refresh();
+          portraitRevision.value += 1;
+          if (!refreshed || owner.status.value !== "ready") {
+            pending.refreshFailed = true;
+          } else {
+            pending.refreshFailed = false;
+            if (cardId) {
+              selectedId.value = cardId;
+            }
+          }
+        } else if (pending.refreshFailed) {
+          const refreshed = await owner.refresh();
+          if (refreshed && owner.status.value === "ready") {
+            pending.refreshFailed = false;
+            if (cardId) {
+              selectedId.value = cardId;
+            }
+          }
+        }
+        const urls = withSelectedModules
+          ? pendingImportSelectedUrls.value
+              .filter((u) => pendingEligibleHttpsUrls.value.includes(u))
+              .slice(0, MAX_CARD_MODULES)
+          : [];
+        if (urls.length > 0 && cardId) {
+          try {
+            const res = await owner.call("confirm_card_modules", {
+              id: cardId,
+              urls,
+            });
+            const savedList = Array.isArray(res?.modules) ? res.modules : [];
+            if (detail.value && detail.value.id === cardId) {
+              detail.value = {
+                ...detail.value,
+                scriptModules: savedList,
+              };
+            }
+            notify(t("cardDepsModulesSavedToast", { count: savedList.length }), "success");
+          } catch (dlErr) {
+            pending.downloadError = dlErr?.message || String(dlErr);
+            return;
+          }
+        }
+        if (pending.refreshFailed) {
+          pendingImportedCardRefresh.value = { id: cardId, name: pending.name };
+        }
+        pendingImportDeps.value = null;
+        pendingImportSelectedUrls.value = [];
       } catch (err) {
         actionError.value = err?.message || String(err);
       } finally {
-        busy.value = false;
+        if (seq === importPreviewSeq) {
+          busy.value = false;
+        }
+      }
+    }
+
+    function toggleDetailModuleUrl(url) {
+      if (!url || busy.value || confirmingDetailModules.value) return;
+      if (!detailEligibleHttpsUrls.value.includes(url)) return;
+      const list = [...detailSelectedModuleUrls.value];
+      const idx = list.indexOf(url);
+      if (idx >= 0) {
+        list.splice(idx, 1);
+        detailSelectedModuleUrls.value = list;
+      } else if (list.length < MAX_CARD_MODULES) {
+        list.push(url);
+        detailSelectedModuleUrls.value = list;
+      }
+    }
+
+    async function confirmDetailCardModules() {
+      const card = selectedCard.value;
+      if (!card || busy.value || confirmingDetailModules.value) return;
+      const targetCardId = card.id;
+      const urls = detailSelectedModuleUrls.value
+        .filter((u) => detailEligibleHttpsUrls.value.includes(u))
+        .slice(0, MAX_CARD_MODULES);
+      if (!urls.length) return;
+      const seq = ++detailModulesSeq;
+      confirmingDetailModules.value = true;
+      detailModulesError.value = "";
+      actionError.value = "";
+      try {
+        const res = await owner.call("confirm_card_modules", {
+          id: targetCardId,
+          urls,
+        });
+        if (seq !== detailModulesSeq || selectedId.value !== targetCardId) return;
+        const savedList = Array.isArray(res?.modules) ? res.modules : [];
+        if (detail.value && detail.value.id === targetCardId) {
+          detail.value = {
+            ...detail.value,
+            scriptModules: savedList,
+          };
+        }
+        notify(t("cardDepsModulesSavedToast", { count: savedList.length }), "success");
+      } catch (err) {
+        if (seq === detailModulesSeq && selectedId.value === targetCardId) {
+          detailModulesError.value = err?.message || String(err);
+        }
+      } finally {
+        if (seq === detailModulesSeq) {
+          confirmingDetailModules.value = false;
+        }
       }
     }
 
@@ -626,6 +930,11 @@ export const CardLibraryView = {
           tavernLaunchWorldbookMode.value !== "__default__"
         ) {
           payload.worldbookId = tavernLaunchWorldbookMode.value;
+        }
+        if (tavernLaunchScriptsMode.value === "on") {
+          payload.enableCardScripts = true;
+        } else if (tavernLaunchScriptsMode.value === "off") {
+          payload.enableCardScripts = false;
         }
         const resp = await kt.api.post("taverns", payload);
         const data = resp?.data || resp || {};
@@ -691,10 +1000,26 @@ export const CardLibraryView = {
     }
 
     async function refreshLibrary() {
+      if (busy.value) return;
       actionError.value = "";
+      const pendingCard = pendingImportedCardRefresh.value;
+      const pendingDeps = pendingImportDeps.value;
       try {
-        await owner.refresh();
+        const refreshed = await owner.refresh();
         portraitRevision.value += 1;
+        if (!refreshed || owner.status.value !== "ready") {
+          return;
+        }
+        if (pendingCard) {
+          pendingImportedCardRefresh.value = null;
+          if (pendingCard.id) {
+            selectedId.value = pendingCard.id;
+          }
+        }
+        if (pendingDeps?.importedId && pendingDeps.refreshFailed) {
+          pendingDeps.refreshFailed = false;
+          selectedId.value = pendingDeps.importedId;
+        }
       } catch (err) {
         actionError.value = err?.message || String(err);
       }
@@ -742,6 +1067,23 @@ export const CardLibraryView = {
       toggleEmbeddedInspector,
       selectEmbeddedEntry,
       worldbookIssueLabel,
+      maxCardModules: MAX_CARD_MODULES,
+      pendingImportDeps,
+      pendingImportSelectedUrls,
+      pendingEligibleHttpsUrls,
+      pendingImportedCardRefresh,
+      togglePendingModuleUrl,
+      cancelPendingImport,
+      completePendingImport,
+      detailScriptDependencies,
+      detailSavedModules,
+      detailSavedModuleMap,
+      detailEligibleHttpsUrls,
+      detailSelectedModuleUrls,
+      confirmingDetailModules,
+      detailModulesError,
+      toggleDetailModuleUrl,
+      confirmDetailCardModules,
       detail,
       detailLoading,
       detailError,
@@ -776,6 +1118,7 @@ export const CardLibraryView = {
       tavernLaunchDesc,
       tavernLaunchGreetingIndex,
       tavernLaunchWorldbookMode,
+      tavernLaunchScriptsMode,
       launchGreetingPreview,
       novelCastIds,
       novelCastLimit: NOVEL_CAST_LIMIT,
@@ -853,8 +1196,231 @@ export const CardLibraryView = {
         </ActionButton>
       </div>
 
+      <!-- Top-level notice when a card was imported but catalog refresh failed -->
       <div
-        v-if="owner.status.value === 'error' || owner.status.value === 'absent'"
+        v-if="pendingImportedCardRefresh"
+        class="ktrp-banner ktrp-banner--info"
+        role="alert"
+        data-testid="kt-rp-card-imported-refresh-error"
+      >
+        <span>
+          {{ t('cardDepsImportedRefreshFailedBanner', { name: pendingImportedCardRefresh.name }) }}
+          <small v-if="owner.error.value">{{ owner.error.value }}</small>
+        </span>
+        <div class="ktrp-inline-actions">
+          <ActionButton
+            size="sm"
+            variant="primary"
+            :disabled="busy"
+            data-testid="kt-rp-card-imported-refresh-retry-btn"
+            @click="refreshLibrary"
+          >
+            {{ t('cardDepsRetryRefreshBtn') }}
+          </ActionButton>
+          <ActionButton
+            size="sm"
+            variant="ghost"
+            :disabled="busy"
+            data-testid="kt-rp-card-imported-refresh-dismiss-btn"
+            @click="pendingImportedCardRefresh = null"
+          >
+            {{ t('dismissBtn') }}
+          </ActionButton>
+        </div>
+      </div>
+
+      <!-- Top-level pre-import / post-import module dependency review panel (remains visible even if owner.refresh failed) -->
+      <div
+        v-if="pendingImportDeps"
+        class="ktrp-card-box"
+        data-testid="kt-rp-card-deps-preview"
+      >
+        <div class="ktrp-row-between">
+          <div>
+            <span class="ktrp-chip ktrp-chip--accent" data-testid="kt-rp-card-deps-preview-badge">
+              {{ t('cardDepsPreviewBadge') }}
+            </span>
+            <h4 data-testid="kt-rp-card-deps-preview-title">
+              {{ t('cardDepsPreviewTitle', { name: pendingImportDeps.name }) }}
+            </h4>
+            <p class="ktrp-muted">{{ t('cardDepsPreviewHint', { max: maxCardModules }) }}</p>
+          </div>
+        </div>
+
+        <div
+          v-if="pendingImportDeps.refreshFailed"
+          class="ktrp-banner ktrp-banner--info"
+          role="alert"
+          data-testid="kt-rp-card-deps-preview-refresh-error"
+        >
+          <span>
+            {{ t('cardDepsImportedRefreshFailedBanner', { name: pendingImportDeps.name }) }}
+            <small v-if="owner.error.value">{{ owner.error.value }}</small>
+          </span>
+          <ActionButton
+            size="sm"
+            :disabled="busy"
+            data-testid="kt-rp-card-deps-preview-refresh-retry-btn"
+            @click="refreshLibrary"
+          >
+            {{ t('cardDepsRetryRefreshBtn') }}
+          </ActionButton>
+        </div>
+
+        <div
+          v-if="pendingImportDeps.downloadError"
+          class="ktrp-banner ktrp-banner--error"
+          role="alert"
+          data-testid="kt-rp-card-deps-preview-download-error"
+        >
+          <span>
+            {{
+              t('cardDepsImportedDownloadFailedBanner', {
+                name: pendingImportDeps.name,
+                error: pendingImportDeps.downloadError,
+              })
+            }}
+          </span>
+        </div>
+
+        <div class="ktrp-stack" data-testid="kt-rp-card-deps-preview-scripts">
+          <div
+            v-for="script in pendingImportDeps.scripts"
+            :key="script.scriptId"
+            class="ktrp-sub-card"
+            :data-testid="'kt-rp-card-deps-preview-script-' + script.scriptId"
+          >
+            <div class="ktrp-row-between">
+              <strong>{{ script.name }}</strong>
+              <div class="ktrp-chip-row">
+                <span class="ktrp-chip">
+                  {{
+                    script.enabled
+                      ? t('cardScriptsEntryEnabledBadge')
+                      : t('cardScriptsEntryDisabledBadge')
+                  }}
+                </span>
+                <span
+                  v-if="script.syntaxError"
+                  class="ktrp-chip"
+                  :data-testid="'kt-rp-card-deps-preview-syntax-error-' + script.scriptId"
+                >
+                  {{ t('cardDepsScriptSyntaxErrorBadge') }}
+                </span>
+                <span
+                  v-if="script.truncated"
+                  class="ktrp-chip"
+                  :data-testid="'kt-rp-card-deps-preview-truncated-' + script.scriptId"
+                >
+                  {{ t('cardDepsScriptTruncatedBadge') }}
+                </span>
+              </div>
+            </div>
+
+            <p
+              v-if="script.compatibilityNotes.includes('external_mvu_zod_schema')"
+              class="ktrp-muted"
+              :data-testid="'kt-rp-card-deps-preview-note-zod-' + script.scriptId"
+            >
+              {{ t('cardDepsNoteExternalMvuZod') }}
+            </p>
+
+            <div
+              v-if="script.references.length"
+              class="ktrp-stack"
+              :data-testid="'kt-rp-card-deps-preview-refs-' + script.scriptId"
+            >
+              <label
+                v-for="(refItem, rIdx) in script.references"
+                :key="rIdx"
+                class="ktrp-row-between"
+                :data-testid="'kt-rp-card-deps-preview-ref-' + script.scriptId + '-' + rIdx"
+              >
+                <div class="ktrp-inline-actions" style="min-width: 0; flex: 1;">
+                  <input
+                    v-if="refItem.selectable"
+                    type="checkbox"
+                    :checked="pendingImportSelectedUrls.includes(refItem.specifier)"
+                    :disabled="
+                      busy ||
+                      (!pendingImportSelectedUrls.includes(refItem.specifier) &&
+                        pendingImportSelectedUrls.length >= maxCardModules)
+                    "
+                    :data-testid="'kt-rp-card-deps-preview-check-' + script.scriptId + '-' + rIdx"
+                    :data-url="refItem.specifier"
+                    @change="togglePendingModuleUrl(refItem.specifier)"
+                  />
+                  <code class="ktrp-pre" style="word-break: break-all;">{{
+                    refItem.specifier || t('cardDepsRefUnspecified')
+                  }}</code>
+                </div>
+                <span
+                  class="ktrp-chip"
+                  :class="{ 'ktrp-chip--accent': refItem.selectable }"
+                  :data-testid="'kt-rp-card-deps-preview-kind-' + script.scriptId + '-' + rIdx"
+                >
+                  {{
+                    refItem.kind === 'https'
+                      ? refItem.selectable
+                        ? t('cardDepsRefKindHttps')
+                        : t('cardDepsRefKindHttpsIneligible')
+                      : refItem.kind === 'relative'
+                        ? t('cardDepsRefKindRelative')
+                        : t('cardDepsRefKindUnsupported')
+                  }}
+                </span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <p v-if="pendingEligibleHttpsUrls.length > maxCardModules" class="ktrp-muted">
+          {{ t('cardDepsMaxLimitHint', { max: maxCardModules }) }}
+        </p>
+
+        <div class="ktrp-inline-actions" data-testid="kt-rp-card-deps-preview-actions">
+          <ActionButton
+            v-if="pendingEligibleHttpsUrls.length > 0"
+            variant="primary"
+            size="sm"
+            :disabled="busy || !pendingImportSelectedUrls.length"
+            data-testid="kt-rp-card-deps-confirm-import-btn"
+            @click="completePendingImport(true)"
+          >
+            {{
+              pendingImportDeps.importedId
+                ? t('cardDepsRetryConfirmModulesBtn', { count: pendingImportSelectedUrls.length })
+                : t('cardDepsImportConfirmModulesBtn', { count: pendingImportSelectedUrls.length })
+            }}
+          </ActionButton>
+          <ActionButton
+            v-if="!pendingImportDeps.importedId"
+            size="sm"
+            :variant="pendingEligibleHttpsUrls.length > 0 ? 'ghost' : 'primary'"
+            :disabled="busy"
+            data-testid="kt-rp-card-deps-import-without-modules-btn"
+            @click="completePendingImport(false)"
+          >
+            {{ t('cardDepsImportWithoutModulesBtn') }}
+          </ActionButton>
+          <ActionButton
+            size="sm"
+            variant="ghost"
+            :disabled="busy"
+            data-testid="kt-rp-card-deps-cancel-import-btn"
+            @click="cancelPendingImport"
+          >
+            {{
+              pendingImportDeps.importedId
+                ? t('cardDepsKeepImportedWithoutModulesBtn')
+                : t('cardDepsCancelImportBtn')
+            }}
+          </ActionButton>
+        </div>
+      </div>
+
+      <div
+        v-if="!pendingImportedCardRefresh && !pendingImportDeps && (owner.status.value === 'error' || owner.status.value === 'absent')"
         class="ktrp-banner ktrp-banner--error"
         role="alert"
         data-testid="kt-rp-library-load-error"
@@ -1441,6 +2007,167 @@ export const CardLibraryView = {
                 </div>
               </div>
 
+              <!-- Card Script Module Dependencies & Saved Offline Snapshots -->
+              <div
+                v-if="detailScriptDependencies.length || detailSavedModules.length"
+                class="ktrp-card-box"
+                data-testid="kt-rp-card-script-deps"
+              >
+                <div class="ktrp-row-between">
+                  <div>
+                    <h4>{{ t('cardDepsDetailTitle') }}</h4>
+                    <p class="ktrp-muted">{{ t('cardDepsDetailHint') }}</p>
+                  </div>
+                </div>
+
+                <div
+                  v-if="detailModulesError"
+                  class="ktrp-banner ktrp-banner--error"
+                  role="alert"
+                  data-testid="kt-rp-card-script-deps-error"
+                >
+                  <span>{{ detailModulesError }}</span>
+                </div>
+
+                <div class="ktrp-field-block" data-testid="kt-rp-card-saved-modules">
+                  <span class="ktrp-label">
+                    {{ t('cardDepsSavedModulesTitle', { count: detailSavedModules.length }) }}
+                  </span>
+                  <div v-if="detailSavedModules.length" class="ktrp-stack">
+                    <div
+                      v-for="(mod, mIdx) in detailSavedModules"
+                      :key="mod.url"
+                      class="ktrp-row-between"
+                      :data-testid="'kt-rp-card-saved-module-' + mIdx"
+                      :data-url="mod.url"
+                    >
+                      <code class="ktrp-pre" style="word-break: break-all;">{{ mod.url }}</code>
+                      <span class="ktrp-chip ktrp-chip--accent">
+                        {{ t('cardDepsRefKindHttpsSaved', { size: mod.size }) }}
+                      </span>
+                    </div>
+                  </div>
+                  <p v-else class="ktrp-muted" data-testid="kt-rp-card-no-saved-modules">
+                    {{ t('cardDepsNoSavedModules') }}
+                  </p>
+                </div>
+
+                <div
+                  v-if="detailScriptDependencies.length"
+                  class="ktrp-stack"
+                  data-testid="kt-rp-card-script-deps-list"
+                >
+                  <div
+                    v-for="script in detailScriptDependencies"
+                    :key="script.scriptId"
+                    class="ktrp-sub-card"
+                    :data-testid="'kt-rp-card-script-dep-' + script.scriptId"
+                  >
+                    <div class="ktrp-row-between">
+                      <strong>{{ script.name }}</strong>
+                      <div class="ktrp-chip-row">
+                        <span class="ktrp-chip">
+                          {{
+                            script.enabled
+                              ? t('cardScriptsEntryEnabledBadge')
+                              : t('cardScriptsEntryDisabledBadge')
+                          }}
+                        </span>
+                        <span
+                          v-if="script.syntaxError"
+                          class="ktrp-chip"
+                          :data-testid="'kt-rp-card-script-dep-syntax-error-' + script.scriptId"
+                        >
+                          {{ t('cardDepsScriptSyntaxErrorBadge') }}
+                        </span>
+                        <span
+                          v-if="script.truncated"
+                          class="ktrp-chip"
+                          :data-testid="'kt-rp-card-script-dep-truncated-' + script.scriptId"
+                        >
+                          {{ t('cardDepsScriptTruncatedBadge') }}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p
+                      v-if="script.compatibilityNotes.includes('external_mvu_zod_schema')"
+                      class="ktrp-muted"
+                      :data-testid="'kt-rp-card-script-dep-note-zod-' + script.scriptId"
+                    >
+                      {{ t('cardDepsNoteExternalMvuZod') }}
+                    </p>
+
+                    <div
+                      v-if="script.references.length"
+                      class="ktrp-stack"
+                      :data-testid="'kt-rp-card-script-dep-refs-' + script.scriptId"
+                    >
+                      <label
+                        v-for="(refItem, rIdx) in script.references"
+                        :key="rIdx"
+                        class="ktrp-row-between"
+                        :data-testid="'kt-rp-card-script-dep-ref-' + script.scriptId + '-' + rIdx"
+                      >
+                        <div class="ktrp-inline-actions" style="min-width: 0; flex: 1;">
+                          <input
+                            v-if="refItem.selectable"
+                            type="checkbox"
+                            :checked="detailSelectedModuleUrls.includes(refItem.specifier)"
+                            :disabled="
+                              busy ||
+                              confirmingDetailModules ||
+                              (!detailSelectedModuleUrls.includes(refItem.specifier) &&
+                                detailSelectedModuleUrls.length >= maxCardModules)
+                            "
+                            :data-testid="'kt-rp-card-script-dep-check-' + script.scriptId + '-' + rIdx"
+                            :data-url="refItem.specifier"
+                            @change="toggleDetailModuleUrl(refItem.specifier)"
+                          />
+                          <code class="ktrp-pre" style="word-break: break-all;">{{
+                            refItem.specifier || t('cardDepsRefUnspecified')
+                          }}</code>
+                        </div>
+                        <span
+                          class="ktrp-chip"
+                          :class="{ 'ktrp-chip--accent': refItem.selectable }"
+                          :data-testid="'kt-rp-card-script-dep-kind-' + script.scriptId + '-' + rIdx"
+                        >
+                          {{
+                            refItem.kind === 'https'
+                              ? detailSavedModuleMap.has(refItem.specifier)
+                                ? t('cardDepsRefKindHttpsSaved', {
+                                    size: detailSavedModuleMap.get(refItem.specifier),
+                                  })
+                                : refItem.selectable
+                                  ? t('cardDepsRefKindHttps')
+                                  : t('cardDepsRefKindHttpsIneligible')
+                              : refItem.kind === 'relative'
+                                ? t('cardDepsRefKindRelative')
+                                : t('cardDepsRefKindUnsupported')
+                          }}
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  v-if="detailEligibleHttpsUrls.length > 0"
+                  class="ktrp-row-end"
+                >
+                  <ActionButton
+                    variant="primary"
+                    size="sm"
+                    :disabled="busy || confirmingDetailModules || !detailSelectedModuleUrls.length"
+                    data-testid="kt-rp-card-script-deps-confirm-btn"
+                    @click="confirmDetailCardModules"
+                  >
+                    {{ t('cardDepsConfirmSelectedBtn', { count: detailSelectedModuleUrls.length }) }}
+                  </ActionButton>
+                </div>
+              </div>
+
             <div class="ktrp-detail-sections">
                 <div
                   v-if="detail.fields?.description"
@@ -1647,6 +2374,27 @@ export const CardLibraryView = {
                       <option v-for="wb in worldbooks" :key="wb.id" :value="wb.id">
                         {{ t('sessionWorldbookLibraryPick', { name: wb.name }) }}
                       </option>
+                    </select>
+                  </div>
+                  <div class="ktrp-field-block">
+                    <label class="ktrp-label" for="ktrp-studio-scripts-select">
+                      {{ t('sessionScriptsLaunchLabel') }}
+                    </label>
+                    <select
+                      id="ktrp-studio-scripts-select"
+                      v-model="tavernLaunchScriptsMode"
+                      class="ktrp-select"
+                      data-testid="kt-rp-studio-scripts-select"
+                    >
+                      <option value="__default__">
+                        {{
+                          cardScriptsDefault
+                            ? t('sessionScriptsFollowDefaultOn')
+                            : t('sessionScriptsFollowDefaultOff')
+                        }}
+                      </option>
+                      <option value="on">{{ t('sessionScriptsExplicitOn') }}</option>
+                      <option value="off">{{ t('sessionScriptsExplicitOff') }}</option>
                     </select>
                   </div>
                   <div class="ktrp-row-end">
