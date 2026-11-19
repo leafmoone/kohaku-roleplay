@@ -174,7 +174,7 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 作者框只在当前选定快照确实有已公开数据时提供 `waitGlobalInitialized('Mvu')` 和 `getVariables({type: 'message', message_id: …})`。前者报告 KT 的只读子集就绪；后者返回一份 `{stat_data}` 副本，只接受选中的消息编号、`-1`、`'latest'` 或省略 `message_id`（都指这份快照，不会改选其他楼层）。撤回公开会关闭旧页面，重新打开只能读取仍获准的数据。
 
-可信宿主还可在新局通过 `openingMvuCounter: {path: ["计数"], minimum: 0, maximum: 100}` 授予已初始化的一个整数计数器（需同时允许上述网页读取，并公开该路径）。这是 `card_web_mvu_counter` 的宿主管理接口：只接受本局 `panelScope`、开场 `messageId: 0`、当前 `revision` 和 `expected`，以及范围内单步 `value`。首个正式回合开始后或撤回公开后不能再写；成功回包是已保存的新 revision 和公开快照。它复用已获准的本局 MVU 结算，不执行未批准的作者脚本，也不提供任意路径或整棵变量树写入。当前作者框仍只读；网页按钮没有接到此接口。
+可信宿主还可在新局通过 `openingMvuCounter: {path: ["计数"], minimum: 0, maximum: 100}` 授予已初始化的一个整数计数器（需同时允许上述网页读取，并公开该路径）。这是 `card_web_mvu_counter` 的宿主管理接口：只接受本局 `panelScope`、开场 `messageId: 0`、当前 `revision` 和 `expected`，以及范围内单步 `value`。首个正式回合开始后或撤回公开后不能再写；成功回包是已保存的新 revision 和公开快照。它复用已获准的本局 MVU 结算，不执行未批准的作者脚本，也不提供任意路径或整棵变量树写入。只有取得该授权且选中开场的作者框才提供 `updateVariablesWith(fn, {type: 'message'})`。`fn` 必须同步，只拿到当前公开数据的副本；桥只提取获准整数的单步变化，忽略其他字段，不变时不提交。界面更新以宿主的成功回执为准。无授权、选其他消息或撤回公开后，不开放此写入。
 
 ### 酒馆原生面板
 

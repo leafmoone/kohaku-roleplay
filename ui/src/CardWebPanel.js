@@ -15,6 +15,43 @@ function isNonEmptyPlainObject(value) {
   return Object.keys(value).length > 0;
 }
 
+function normalizeCounterGrant(rawGrant, selectedMessage) {
+  if (!rawGrant || typeof rawGrant !== "object" || Array.isArray(rawGrant)) return null;
+  if (!selectedMessage || selectedMessage.message_id !== 0) return null;
+  if (rawGrant.messageId !== 0) return null;
+  if (
+    !Array.isArray(rawGrant.path) ||
+    rawGrant.path.length < 1 ||
+    rawGrant.path.length > 16 ||
+    !rawGrant.path.every((p) => typeof p === "string" && p.length > 0 && p.length <= 160)
+  ) {
+    return null;
+  }
+  if (
+    typeof rawGrant.minimum !== "number" ||
+    !Number.isSafeInteger(rawGrant.minimum) ||
+    typeof rawGrant.maximum !== "number" ||
+    !Number.isSafeInteger(rawGrant.maximum) ||
+    rawGrant.minimum >= rawGrant.maximum
+  ) {
+    return null;
+  }
+  if (
+    typeof rawGrant.revision !== "number" ||
+    !Number.isSafeInteger(rawGrant.revision) ||
+    rawGrant.revision < 0
+  ) {
+    return null;
+  }
+  return {
+    messageId: 0,
+    path: [...rawGrant.path],
+    minimum: rawGrant.minimum,
+    maximum: rawGrant.maximum,
+    revision: rawGrant.revision,
+  };
+}
+
 function buildAuthorPreheatScript(bootData) {
   // Never serialize both legacyOpening and legacyLatest into the author frame:
   // only serialize the single selected message snapshot (or null for CHARX native web panels).
@@ -30,12 +67,16 @@ function buildAuthorPreheatScript(bootData) {
     bootData.legacyMvuRead.mode === "kt-message-stat-data-v1"
       ? { mode: "kt-message-stat-data-v1" }
       : null;
+  const mvuCounterCap = mvuReadCap
+    ? normalizeCounterGrant(bootData.legacyMvuCounter, singleMessage)
+    : null;
   const sanitizedBoot = {
     isLegacyOpening: Boolean(bootData.isLegacyOpening),
     playerName: typeof bootData.playerName === "string" ? bootData.playerName : "Player",
     characterName: typeof bootData.characterName === "string" ? bootData.characterName : "",
     selectedLegacyMessage: singleMessage,
     ...(mvuReadCap ? { legacyMvuRead: mvuReadCap } : {}),
+    ...(mvuCounterCap ? { legacyMvuCounter: mvuCounterCap } : {}),
   };
   const payloadJson = encodeJsonForInlineScript(sanitizedBoot);
   return `<script>(function(){
@@ -133,6 +174,9 @@ if (BOOT.isLegacyOpening && BOOT.selectedLegacyMessage) {
     const _getOwnPropDesc = Object.getOwnPropertyDescriptor;
     const _getProtoOf = Object.getPrototypeOf;
     const _ObjectProto = Object.prototype;
+    const _ArrayIsArray = Array.isArray;
+    const _isSafeInteger = Number.isSafeInteger;
+    const _mathAbs = Math.abs;
     const _hasOwn =
       typeof Object.hasOwn === "function"
         ? Object.hasOwn
@@ -143,29 +187,48 @@ if (BOOT.isLegacyOpening && BOOT.selectedLegacyMessage) {
       typeof window.structuredClone === "function"
         ? window.structuredClone.bind(window)
         : null;
-    const _statDataJson = _jsonStringify(statData);
+    let _statDataJson = _jsonStringify(statData);
     if (typeof _statDataJson !== "string") {
       throw new Error("Failed to serialize read-only MVU snapshot");
     }
-    const _statDataFrozenSource = _structuredClone ? _jsonParse(_statDataJson) : null;
+    let _statDataFrozenSource = _structuredClone ? _jsonParse(_statDataJson) : null;
+
+    const replaceCanonicalStatData = function replaceCanonicalStatData(nextStatData) {
+      if (!nextStatData || typeof nextStatData !== "object" || _ArrayIsArray(nextStatData)) {
+        throw new Error("Invalid canonical MVU snapshot");
+      }
+      const nextJson = _jsonStringify(nextStatData);
+      if (typeof nextJson !== "string") {
+        throw new Error("Failed to serialize canonical MVU snapshot");
+      }
+      const parsed = _jsonParse(nextJson);
+      if (!parsed || typeof parsed !== "object" || _ArrayIsArray(parsed)) {
+        throw new Error("Failed to parse canonical MVU snapshot");
+      }
+      _statDataJson = nextJson;
+      _statDataFrozenSource = _structuredClone ? parsed : null;
+      if (singleMsg.data && typeof singleMsg.data === "object") {
+        singleMsg.data.stat_data = _jsonParse(nextJson);
+      }
+    };
 
     const cloneStatDataStrict = function cloneStatDataStrict() {
       const cloned = _structuredClone
         ? _structuredClone(_statDataFrozenSource)
         : _jsonParse(_statDataJson);
-      if (!cloned || typeof cloned !== "object" || Array.isArray(cloned)) {
+      if (!cloned || typeof cloned !== "object" || _ArrayIsArray(cloned)) {
         throw new Error("Failed to clone read-only MVU snapshot");
       }
       return cloned;
     };
 
-    const getVariablesFacade = function getVariables(option) {
-      if (!option || typeof option !== "object" || Array.isArray(option)) {
-        throw new Error("getVariables requires an explicit { type: 'message' } option");
+    const validateMessageOption = function validateMessageOption(option, fnName) {
+      if (!option || typeof option !== "object" || _ArrayIsArray(option)) {
+        throw new Error(fnName + " requires an explicit { type: 'message' } option");
       }
       const proto = _getProtoOf(option);
       if (proto !== _ObjectProto && proto !== null) {
-        throw new Error("getVariables option must be a plain object");
+        throw new Error(fnName + " option must be a plain object");
       }
       const ownKeys = _ReflectOwnKeys(option);
       let hasOwnType = false;
@@ -175,11 +238,11 @@ if (BOOT.isLegacyOpening && BOOT.selectedLegacyMessage) {
       for (let i = 0; i < ownKeys.length; i += 1) {
         const k = ownKeys[i];
         if (typeof k !== "string" || (k !== "type" && k !== "message_id")) {
-          throw new Error("Unsupported getVariables option key: " + String(k));
+          throw new Error("Unsupported " + fnName + " option key: " + String(k));
         }
         const desc = _getOwnPropDesc(option, k);
         if (!desc || !desc.enumerable || !_hasOwn(desc, "value")) {
-          throw new Error("getVariables option properties must be own enumerable data properties");
+          throw new Error(fnName + " option properties must be own enumerable data properties");
         }
         if (k === "type") {
           hasOwnType = true;
@@ -190,7 +253,7 @@ if (BOOT.isLegacyOpening && BOOT.selectedLegacyMessage) {
         }
       }
       if (!hasOwnType || typeVal !== "message") {
-        throw new Error("Only message-scoped getVariables({ type: 'message' }) is supported");
+        throw new Error("Only message-scoped " + fnName + "({ type: 'message' }) is supported");
       }
       const matchesSelected =
         !hasOwnMessageId ||
@@ -199,10 +262,137 @@ if (BOOT.isLegacyOpening && BOOT.selectedLegacyMessage) {
         rawId === -1 ||
         rawId === activeId;
       if (!matchesSelected) {
-        throw new Error("Only the currently selected message snapshot is readable");
+        throw new Error("Only the currently selected message snapshot is accessible");
       }
+    };
+
+    const getVariablesFacade = function getVariables(option) {
+      validateMessageOption(option, "getVariables");
       return { stat_data: cloneStatDataStrict() };
     };
+
+    const readOwnGrantInteger = function readOwnGrantInteger(rootStatData, pathParts) {
+      let cur = rootStatData;
+      for (let i = 0; i < pathParts.length; i += 1) {
+        if (!cur || typeof cur !== "object" || _ArrayIsArray(cur)) {
+          throw new Error("Granted counter path container is not a plain object");
+        }
+        const proto = _getProtoOf(cur);
+        if (proto !== _ObjectProto && proto !== null) {
+          throw new Error("Granted counter path container must be a plain object");
+        }
+        const seg = pathParts[i];
+        const desc = _getOwnPropDesc(cur, seg);
+        if (!desc || !desc.enumerable || !_hasOwn(desc, "value")) {
+          throw new Error("Granted counter property must be an own enumerable data property");
+        }
+        cur = desc.value;
+      }
+      if (typeof cur !== "number" || !_isSafeInteger(cur)) {
+        throw new Error("Granted counter value must be a safe integer");
+      }
+      return cur;
+    };
+
+    const rawCounterGrant = BOOT.legacyMvuCounter;
+    const hasValidCounterGrant =
+      activeId === 0 &&
+      Boolean(rawCounterGrant) &&
+      typeof rawCounterGrant === "object" &&
+      !_ArrayIsArray(rawCounterGrant) &&
+      rawCounterGrant.messageId === 0 &&
+      _ArrayIsArray(rawCounterGrant.path) &&
+      rawCounterGrant.path.length > 0 &&
+      typeof rawCounterGrant.minimum === "number" &&
+      _isSafeInteger(rawCounterGrant.minimum) &&
+      typeof rawCounterGrant.maximum === "number" &&
+      _isSafeInteger(rawCounterGrant.maximum) &&
+      rawCounterGrant.minimum < rawCounterGrant.maximum &&
+      typeof rawCounterGrant.revision === "number" &&
+      _isSafeInteger(rawCounterGrant.revision) &&
+      rawCounterGrant.revision >= 0;
+
+    if (hasValidCounterGrant) {
+      const grantPath = rawCounterGrant.path.slice();
+      const grantMin = rawCounterGrant.minimum;
+      const grantMax = rawCounterGrant.maximum;
+      let currentRevision = rawCounterGrant.revision;
+      let counterWriteInFlight = false;
+
+      const updateVariablesWithFacade = async function updateVariablesWith(updater, option) {
+        if (counterWriteInFlight) {
+          throw new Error("A counter update is already in flight");
+        }
+        counterWriteInFlight = true;
+        try {
+          if (typeof updater !== "function") {
+            throw new Error("updateVariablesWith requires a synchronous updater function");
+          }
+          validateMessageOption(option, "updateVariablesWith");
+          const baseStatData = cloneStatDataStrict();
+          const expectedVal = readOwnGrantInteger(baseStatData, grantPath);
+          const draftContainer = { stat_data: cloneStatDataStrict() };
+          const returned = updater(draftContainer);
+          if (
+            returned &&
+            (typeof returned === "object" || typeof returned === "function") &&
+            typeof returned.then === "function"
+          ) {
+            throw new Error("Async updater callbacks are not supported");
+          }
+          const candidateContainer =
+            returned && typeof returned === "object" && !_ArrayIsArray(returned)
+              ? returned
+              : draftContainer;
+          const candidateDesc = _getOwnPropDesc(candidateContainer, "stat_data");
+          if (!candidateDesc || !candidateDesc.enumerable || !_hasOwn(candidateDesc, "value")) {
+            throw new Error("Updated variables must contain an own enumerable stat_data object");
+          }
+          const nextVal = readOwnGrantInteger(candidateDesc.value, grantPath);
+          if (nextVal === expectedVal) {
+            return { stat_data: cloneStatDataStrict() };
+          }
+          if (_mathAbs(nextVal - expectedVal) !== 1 || nextVal < grantMin || nextVal > grantMax) {
+            throw new Error("The opening counter can only change by one step within its granted range");
+          }
+          const receipt = await callBridge("card_web_mvu_counter", {
+            messageId: 0,
+            revision: currentRevision,
+            expected: expectedVal,
+            value: nextVal
+          });
+          if (
+            !receipt ||
+            typeof receipt !== "object" ||
+            typeof receipt.revision !== "number" ||
+            !_isSafeInteger(receipt.revision) ||
+            !receipt.data ||
+            typeof receipt.data !== "object" ||
+            !receipt.data.stat_data ||
+            typeof receipt.data.stat_data !== "object" ||
+            _ArrayIsArray(receipt.data.stat_data)
+          ) {
+            throw new Error("Invalid counter settlement receipt");
+          }
+          currentRevision = receipt.revision;
+          replaceCanonicalStatData(receipt.data.stat_data);
+          return { stat_data: cloneStatDataStrict() };
+        } finally {
+          counterWriteInFlight = false;
+        }
+      };
+
+      try {
+        Object.defineProperty(window, "updateVariablesWith", {
+          value: updateVariablesWithFacade,
+          configurable: false,
+          enumerable: true,
+          writable: false
+        });
+      } catch (_e) {
+        window.updateVariablesWith = updateVariablesWithFacade;
+      }
+    }
 
     const mvuSubset = Object.freeze({
       mode: "kt-message-stat-data-v1",
@@ -373,7 +563,12 @@ html, body {
 "use strict";
 const MOUNT_TOKEN = ${mountTokenJson};
 const INNER_HTML = ${innerHtmlJson};
-const ALLOWED_ACTIONS = new Set(["card_web_state", "card_web_gameplay", "card_web_plugin_request"]);
+const ALLOWED_ACTIONS = new Set([
+  "card_web_state",
+  "card_web_gameplay",
+  "card_web_plugin_request",
+  "card_web_mvu_counter"
+]);
 const innerFrame = document.getElementById("ktrp-inner-sandbox");
 innerFrame.srcdoc = INNER_HTML;
 
@@ -431,6 +626,8 @@ window.addEventListener("message", function(ev) {
  * - Outer iframe: `sandbox="allow-scripts"` + strict CSP (`default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src 'none'`)
  * - Inner iframe: `sandbox="allow-scripts"` (opaque origin, never `allow-same-origin`)
  */
+const activeCounterTxByScope = new Map();
+
 export const CardWebPanel = {
   name: "RoleplayCardWebPanel",
   components: { ActionButton },
@@ -457,6 +654,7 @@ export const CardWebPanel = {
     const activeSnapshotTarget = ref("latest");
     const userPinnedOpening = ref(false);
     const activeSelectedMessageId = ref(null);
+    const activeCounterGrant = ref(null);
     const hasLegacyLatest = ref(false);
     const latestTurnNumber = ref(null);
     const cachedPanelPayload = ref(null);
@@ -510,6 +708,7 @@ export const CardWebPanel = {
       activePanelScope.value = "";
       cachedPanelPayload.value = null;
       activeSelectedMessageId.value = null;
+      activeCounterGrant.value = null;
       hasLegacyLatest.value = false;
       latestTurnNumber.value = null;
       outerSrcdoc.value = "";
@@ -570,11 +769,16 @@ export const CardWebPanel = {
         payload.legacyMvuRead.mode === "kt-message-stat-data-v1"
           ? { mode: "kt-message-stat-data-v1" }
           : null;
+      const legacyMvuCounter =
+        legacyMvuRead && resolvedTarget === "opening"
+          ? normalizeCounterGrant(payload.legacyMvuCounter, singleSelectedMessage)
+          : null;
 
       activeSelectedMessageId.value =
         singleSelectedMessage && Number.isInteger(singleSelectedMessage.message_id)
           ? singleSelectedMessage.message_id
           : null;
+      activeCounterGrant.value = legacyMvuCounter;
       activePanelScope.value = String(payload.panelScope);
       activeMountToken.value = token;
       activeTitle.value = String(payload.title || props.webPanelMeta?.title || "");
@@ -587,6 +791,7 @@ export const CardWebPanel = {
         characterName: props.characterName || "",
         selectedLegacyMessage: singleSelectedMessage,
         legacyMvuRead,
+        legacyMvuCounter,
       });
     }
 
@@ -701,9 +906,123 @@ export const CardWebPanel = {
       if (
         action !== "card_web_state" &&
         action !== "card_web_gameplay" &&
-        action !== "card_web_plugin_request"
+        action !== "card_web_plugin_request" &&
+        action !== "card_web_mvu_counter"
       ) {
         replyToOuter(false, null, "Unsupported card web action");
+        return;
+      }
+
+      if (action === "card_web_mvu_counter") {
+        const grantSnap = activeCounterGrant.value;
+        if (
+          !grantSnap ||
+          activeSnapshotTarget.value !== "opening" ||
+          activeSelectedMessageId.value !== 0
+        ) {
+          replyToOuter(false, null, "The opening counter is not writable in this view");
+          return;
+        }
+        if (activeCounterTxByScope.has(scopeSnap)) {
+          replyToOuter(false, null, "A counter update is already in flight");
+          return;
+        }
+        const reqRevision = payload.revision;
+        const reqExpected = payload.expected;
+        const reqValue = payload.value;
+        if (
+          payload.messageId !== 0 ||
+          typeof reqRevision !== "number" ||
+          !Number.isSafeInteger(reqRevision) ||
+          reqRevision !== grantSnap.revision ||
+          typeof reqExpected !== "number" ||
+          !Number.isSafeInteger(reqExpected) ||
+          typeof reqValue !== "number" ||
+          !Number.isSafeInteger(reqValue) ||
+          Math.abs(reqValue - reqExpected) !== 1 ||
+          reqValue < grantSnap.minimum ||
+          reqValue > grantSnap.maximum
+        ) {
+          replyToOuter(
+            false,
+            null,
+            "The opening counter can only change by one step within its granted range",
+          );
+          return;
+        }
+        const txToken = Symbol("counterTx");
+        activeCounterTxByScope.set(scopeSnap, txToken);
+        try {
+          const result = await props.owner.call("card_web_mvu_counter", {
+            panelScope: panelScopeSnap,
+            messageId: 0,
+            revision: grantSnap.revision,
+            expected: reqExpected,
+            value: reqValue,
+          });
+          if (
+            !isOpen.value ||
+            activeMountToken.value !== tokenSnap ||
+            activePanelScope.value !== panelScopeSnap ||
+            props.scopeKey !== scopeSnap ||
+            props.mvuPublicSignature !== mvuSigSnap ||
+            activeSnapshotTarget.value !== "opening" ||
+            activeSelectedMessageId.value !== 0
+          ) {
+            return;
+          }
+          if (
+            result &&
+            typeof result === "object" &&
+            typeof result.revision === "number" &&
+            Number.isSafeInteger(result.revision) &&
+            result.data &&
+            typeof result.data === "object"
+          ) {
+            activeCounterGrant.value = {
+              ...grantSnap,
+              revision: result.revision,
+            };
+            if (cachedPanelPayload.value && typeof cachedPanelPayload.value === "object") {
+              cachedPanelPayload.value = {
+                ...cachedPanelPayload.value,
+                ...(cachedPanelPayload.value.legacyOpening
+                  ? {
+                      legacyOpening: {
+                        ...cachedPanelPayload.value.legacyOpening,
+                        data: result.data,
+                      },
+                    }
+                  : {}),
+                ...(cachedPanelPayload.value.legacyMvuCounter
+                  ? {
+                      legacyMvuCounter: {
+                        ...cachedPanelPayload.value.legacyMvuCounter,
+                        revision: result.revision,
+                      },
+                    }
+                  : {}),
+              };
+            }
+          }
+          error.value = "";
+          replyToOuter(true, result, "");
+        } catch (err) {
+          const msg = err?.message || String(err);
+          if (
+            isOpen.value &&
+            activeMountToken.value === tokenSnap &&
+            props.scopeKey === scopeSnap &&
+            props.mvuPublicSignature === mvuSigSnap
+          ) {
+            error.value = msg;
+          }
+          replyToOuter(false, null, msg);
+        } finally {
+          if (activeCounterTxByScope.get(scopeSnap) === txToken) {
+            activeCounterTxByScope.delete(scopeSnap);
+          }
+        }
         return;
       }
 
