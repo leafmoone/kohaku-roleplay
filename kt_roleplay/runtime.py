@@ -43,7 +43,7 @@ from .projections import Persona, Player, expand, insert_depth_lore, persona_con
 from .worldbook import read_worldbook
 from .worldbook_library import WorldbookNotFound, WorldbookReference, default_worldbook_for_play, snapshot_detail, worldbook_for_play
 from .scene_tools import ingest_report
-from .script_session import ScriptSession, SessionScripts, approved
+from .script_session import ScriptSession, SessionScripts, approved, upgrade_script_clock
 from .script_tool import CardScriptError, RunCardScript
 from .recovery import resume_scene
 
@@ -104,7 +104,7 @@ class TavernSession(Arguments):
     mvu_legacy: bool = False
     lore_activation: dict[Literal["lore", "worldbook"], dict[str, int]] = Field(default_factory=dict)
     scripts: list[CardScript] = Field(default_factory=list)
-    script_state: SessionScripts = Field(default_factory=SessionScripts)
+    script_state: SessionScripts = Field(default_factory=lambda: SessionScripts(clock="turn"))
 
 
 def library_dir() -> Path:
@@ -218,6 +218,10 @@ class RoleplayPlugin(BasePlugin):
         return False
 
     async def on_event(self, event) -> None:
+        if self.mode == "tavern" and event.type == "user_input" and not (event.context or {}).get("rerun"):
+            # The host journals a fresh turn before this hook. Migrate old receipts
+            # through its predecessor, not through the new input being processed.
+            self._upgrade_saved_script_clock(before_current=True)
         if self.mode == "novel" and event.type == "user_input":
             self.can_open_scene = True
             # Never apply an interrupted continuation to a new player turn.
@@ -252,6 +256,21 @@ class RoleplayPlugin(BasePlugin):
             channel, callback = self.report_watch
             channel.remove_on_send(callback)
             self.report_watch = None
+
+    async def on_agent_start(self) -> None:
+        self._upgrade_saved_script_clock()
+
+    def _upgrade_saved_script_clock(self, *, before_current: bool = False) -> None:
+        if self.mode != "tavern" or self.binding is None or self.binding.session_store is None:
+            return
+        record = self._record()
+        raw = (record or {}).get("script_state")
+        turn = getattr(self.binding.host_agent, "_turn_index", None)
+        if not raw or raw.get("clock") == "turn" or type(turn) is not int or turn < 1:
+            return
+        play = TavernSession.model_validate(record)
+        state = upgrade_script_clock(play.script_state, turn - int(before_current))
+        self._save(play.model_copy(update={"script_state": state}).model_dump())
 
     async def on_unload(self) -> None:
         self._unwatch_reports()
@@ -592,7 +611,7 @@ class RoleplayPlugin(BasePlugin):
                             mvu = mvu.model_copy(update={"issues": {**mvu.issues, "invalid_opening_update": 1}})
                 if choice.enableCardScripts and (not mvu or not mvu.values or not any(s.enabled and not s.issue for s in card.scripts)):
                     raise OwnerArgumentError("This card has no compatible scripts and initialized variables")
-                script_state = SessionScripts(approved=script_fingerprint(card.scripts) if choice.enableCardScripts else None)
+                script_state = SessionScripts(clock="turn", approved=script_fingerprint(card.scripts) if choice.enableCardScripts else None)
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player,
                                      greeting=expand(opening, card.fields.name, choice.player.name, ""),
                                      lore=lore, worldbook=book, worldbookRef=book_ref, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
@@ -665,28 +684,32 @@ class RoleplayPlugin(BasePlugin):
         await self.binding.emit(OutputEvent(type="text", content=text))
         await self.binding.emit(OutputEvent(type="assistant_message", payload={"message": message.to_dict()}))
 
-    def _script_controller(self):
+    def _script_turn(self):
         record = self._record() if self.mode == "tavern" else None
-        if record and (record.get("script_state") or {}).get("approved") and self.binding:
-            return self.binding.controller
-        return None
+        if not record or not (record.get("script_state") or {}).get("approved") or self.binding is None:
+            return None
+        agent = self.binding.host_agent
+        turn = getattr(agent, "_turn_index", None)
+        return (self.binding.controller, turn) if self.binding.controller and type(turn) is int and turn > 0 else None
 
     async def post_llm_call(self, messages: list[dict], response: str, usage: dict, **kwargs: object) -> None:
-        controller = self._script_controller()
-        if controller is None or not response.strip():
+        active = self._script_turn()
+        if active is None or not response.strip():
             return
+        controller, turn = active
         message = controller._completed_assistant_message
         history = controller.conversation.get_messages()
         if message is not None and history and history[-1] is message and not message.tool_calls:
-            await self._scripts.fire("assistant", sequence=len(history), args={"text": response[:900]})
+            await self._scripts.fire("assistant", sequence=turn, args={"text": response[:900]})
 
     async def pre_llm_call(self, messages: list[dict], **kwargs: object) -> list[dict] | None:
-        if (controller := self._script_controller()) is not None:
+        if (active := self._script_turn()) is not None:
+            controller, turn = active
             history = controller.conversation.get_messages()
             if history:
                 message = history[-1]
                 if message.role == "user" and (message.metadata or {}).get("kind") != TOOL_FEEDBACK_KIND:
-                    await self._scripts.fire("user", sequence=len(history), args={"text": message.get_text_content()[:900]})
+                    await self._scripts.fire("user", sequence=turn, args={"text": message.get_text_content()[:900]})
         record = self._record()
         if self.novel:
             content = self.novel.prompt(self.binding)

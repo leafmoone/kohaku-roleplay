@@ -12,8 +12,19 @@ from .script_tool import CardScriptError, run_card_script
 class SessionScripts(BaseModel):
     model_config = ConfigDict(strict=True)
     approved: str | None = None
+    clock: Literal["history", "turn"] = "history"
     seen: dict[Literal["opening", "user", "assistant"], int] = Field(default_factory=dict)
     issues: dict[str, str] = Field(default_factory=dict)
+
+
+def upgrade_script_clock(state: SessionScripts, last_turn: int) -> SessionScripts:
+    if state.clock == "turn":
+        return state
+    # Old experimental saves stored context length, which is not a turn number.
+    # Mark already seen phases through the restored turn without replaying them.
+    return state.model_copy(update={"clock": "turn", "seen": {
+        phase: sequence if phase == "opening" else last_turn for phase, sequence in state.seen.items()
+    }})
 
 
 def approved(bundle: list[CardScript], state: SessionScripts) -> list[CardScript]:
@@ -37,6 +48,13 @@ class ScriptSession:
                     raise CardScriptError("This tavern has no approved script with initialized variables")
                 return
             old = play.script_state
+            if sequence is not None and event != "opening" and old.clock != "turn":
+                # A late attach can miss the start hook: be conservative about replay.
+                upgraded = upgrade_script_clock(old, sequence)
+                self.host._save(play.model_copy(update={"script_state": upgraded}).model_dump())
+                old = upgraded
+                play = play.model_copy(update={"script_state": upgraded})
+                record = self.host._record()
             if sequence is not None and old.seen.get(event, -1) >= sequence:
                 return
             if script_id is not None:
