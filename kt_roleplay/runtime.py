@@ -24,10 +24,10 @@ from .card_scripts import CardScript, script_fingerprint
 from .cards import CardError, CardFields
 from .charx import CardMedia
 from .cast import NovelBinding
-from .gameplay import Action, PlayActions, apply_actions
+from .gameplay import Action, PlayActions, apply_actions, apply_field_changes
 from .header_summary import MAX_HEADER_PINS, header_summary
 from .novel import Outcome, SceneError, Story
-from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields, update_values
+from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields
 from .state_tool import SetCardState
 from .portraits import PortraitRule, chosen_key, rules_for
 from .library_view import card_detail, cards_view, media_summary, media_view, portrait_view
@@ -355,7 +355,7 @@ class RoleplayPlugin(BasePlugin):
         if self.mode != "tavern" or self._record() is None:
             raise SceneError("Bind a card in a tavern session before changing state")
         play = TavernSession.model_validate(self._record())
-        values = update_values(play.state_fields, play.values, changes)
+        values = apply_field_changes(play.native_panels, play.state_fields, play.values, changes)
         self._save(play.model_copy(update={"values": values}).model_dump())
         self.ui_emit("state", self.ui_state())
 
@@ -808,7 +808,7 @@ class RoleplayPlugin(BasePlugin):
                                      play.state_fields, play.values)
             if gameplay:
                 content += ("\nFor an inventory or quest action, use rp_apply_gameplay with these panel IDs; "
-                            "do not repeat it through rp_set_card_state.\n" + json.dumps(gameplay, ensure_ascii=False))
+                            "do not replace inventory contents or set a quest to its completed value through rp_set_card_state.\n" + json.dumps(gameplay, ensure_ascii=False))
             if play.mvu is not None and play.mvu.values:
                 content += ("\nThese are initialized variables in the current fictional session only. Use rp_update_mvu to "
                             "record only justified changes. Variables not selected for display are private; do not copy "

@@ -80,7 +80,7 @@
 | `quest` | `status` 指向公开枚举，`completed` 是该枚举中的完成值；可用 `objectives: [{"label":"…","field":"…","equals":"…"}]` 显示单项目标。 |
 | `choices` | `options: [{"label":"…","text":"…"}]`；面板明示实际要发送的内容，玩家点击后才作为一条普通输入提交。不支持宿主斜杠命令。 |
 
-声明背包或任务面板后，酒馆会启用同包的 `rp_apply_gameplay`：`gain_item`、`consume_item` 更新指定背包的数量；`complete_objective` 按面板内从 0 开始的目标序号写入声明的完成值；`complete_quest` 要求所有目标先完成。动作按顺序处理，数量不足或无效目标会拒绝整批，不会只完成前半段。通用状态工具仍兼容现有卡；动作约束属于玩法工具本身。
+声明背包或任务面板后，酒馆会启用同包的 `rp_apply_gameplay`：`gain_item`、`consume_item` 更新指定背包的数量；`complete_objective` 按面板内从 0 开始的目标序号写入声明的完成值；`complete_quest` 要求所有目标先完成。动作按顺序处理，数量不足或无效目标会拒绝整批，不会只完成前半段。`rp_set_card_state` 可写普通字段、目标进度和任务的非完成阶段，但不能整表替换已声明的背包，也不能直接把任务状态设为完成；包含此类写入的混合批次同样整批拒绝。如果多个任务共用一个状态字段和值，影响它们的动作必须满足所有相关任务的完成条件。已有存档不改写，新规则在下次写入时生效。
 
 引用私有字段、类型不匹配或未知面板声明会跳过并提示。读取已保存的公开字段，不把面板配置或伏笔写回卡片；不改变普通形象和小说的行为，也不替代聊天框的自由输入。现有正文中的原生选项组件继续可用。
 
@@ -90,6 +90,7 @@
 - `kt_roleplay/`：后端，含卡片解析、素材库、人物形象/游玩投影和世界书筛选；`card_state.py` 定义卡片状态协议，`state_tool.py` 提供酒馆更新工具，`mvu.py` / `mvu_tool.py` 负责静态初值与本局原生更新工具，`panels.py` 投影酒馆原生面板，`novel.py` / `scene_tools.py` / `recovery.py` 处理小说裁定、分发回报与中断恢复。
 - `kt_roleplay/card_editor.py`：在原格式上另存卡片；`charx.py`：读取归档及本地媒体；`portraits.py` / `portrait_library.py`：处理嵌入的本地图片、公开状态映射与立绘副本。
 - `package.json` / `package-lock.json`：卡片模块离线链接器的一次性 Node.js 安装声明；`kt_roleplay/module_*.py`、`script_dependencies.py` 和 `link_card_module.mjs` 负责检查、保存与链接。
+- [原生玩法最小示例：物资登记员](examples/native-ledger.json)：可直接在角色库导入并开酒馆。无需卡片 JS、MVU 或 Node。查看 `state` 如何声明库存、核对结果和任务状态，再看 `panels` 如何引用它们。点击「核对清单」只发送所示玩家输入；由玩法工具记录动作，面板读取结果，不靠按钮直接改存档。
 - `ui/`：KT UI SDK 扩展，包含角色库、卡片编辑、会话侧栏、行动选项与语言资源。
 
 ## 兼容范围

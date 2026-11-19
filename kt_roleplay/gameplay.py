@@ -1,6 +1,6 @@
 """Atomic gameplay actions on authored inventory and quest panels."""
 
-from typing import Annotated, Literal, Protocol
+from typing import Annotated, Literal, Protocol, TypeGuard
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 from pydantic import BaseModel, ConfigDict, Field
@@ -37,6 +37,21 @@ class Actions(BaseModel):
     actions: list[Action] = Field(min_length=1, max_length=24)
 
 
+def _completes(panel: NativePanel, key: str, value: Value) -> TypeGuard[QuestPanel]:
+    return isinstance(panel, QuestPanel) and panel.status == key and panel.completed == value
+
+
+def apply_field_changes(panels: list[NativePanel], fields: list[StateField], stored: dict[str, Value],
+                        changes: list[FieldUpdate]) -> dict[str, Value]:
+    for change in changes:
+        for panel in panels:
+            if isinstance(panel, InventoryPanel) and panel.field == change.key:
+                raise ValueError(f'Inventory {panel.id} requires gain_item or consume_item via rp_apply_gameplay')
+            if _completes(panel, change.key, change.value):
+                raise ValueError(f'Quest {panel.id} requires complete_quest via rp_apply_gameplay')
+    return update_values(fields, stored, changes)
+
+
 def apply_actions(panels: list[NativePanel], fields: list[StateField], stored: dict[str, Value], actions: list[Action]) -> dict[str, Value]:
     public = {field.key: field for field in fields if field.visibility == 'public'}
     declared = {p.id: p for p in panels}
@@ -71,12 +86,15 @@ def apply_actions(panels: list[NativePanel], fields: list[StateField], stored: d
             read(objective.field)
             key, value = objective.field, objective.equals
         elif isinstance(change, QuestAction) and isinstance(panel, QuestPanel):
-            if any(read(obj.field) != obj.equals for obj in panel.objectives):
-                raise ValueError('Complete all declared objectives before completing the quest')
             read(panel.status)
             key, value = panel.status, panel.completed
         else:
             raise ValueError('This action is not declared by the current tavern card')
+        # A status can also be another panel's status or objective field.
+        for quest in panels:
+            if _completes(quest, key, value):
+                if any(read(obj.field) != obj.equals for obj in quest.objectives):
+                    raise ValueError(f'Complete all declared objectives before completing the quest: {quest.id}')
         state = update_values(fields, state, [FieldUpdate(key=key, value=value)])
     return state
 
