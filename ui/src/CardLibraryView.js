@@ -71,6 +71,7 @@ export const CardLibraryView = {
     // Card default worldbook & embedded worldbook inspector state
     const defaultWorldbookDraft = ref("");
     const savingDefaultWorldbook = ref(false);
+    const savingCardScriptsDefault = ref(false);
     const embeddedInspectorOpen = ref(false);
     const embeddedBook = ref(null);
     const embeddedLoading = ref(false);
@@ -100,6 +101,7 @@ export const CardLibraryView = {
     );
     const isCharxCard = computed(() => detail.value?.sourceFormat === "charx");
     const cards = computed(() => (Array.isArray(state.value.cards) ? state.value.cards : []));
+    const cardScriptsDefault = computed(() => state.value.cardScriptsDefault !== false);
     const worldbooks = computed(() =>
       Array.isArray(state.value.worldbooks) ? state.value.worldbooks : [],
     );
@@ -304,6 +306,33 @@ export const CardLibraryView = {
           return t("worldbookIssueInvalidEntry", { count });
         default:
           return t("worldbookIssueUnknown", { code, count });
+      }
+    }
+
+    async function saveCardScriptsDefault(nextEnabled) {
+      if (busy.value || savingCardScriptsDefault.value) return;
+      const enabled = Boolean(nextEnabled);
+      savingCardScriptsDefault.value = true;
+      actionError.value = "";
+      try {
+        const nextState = await owner.call("set_card_scripts_default", {
+          enabled,
+        });
+        if (nextState && typeof nextState === "object") {
+          owner.state.value = nextState;
+          owner.status.value = "ready";
+          owner.error.value = "";
+        } else {
+          const refreshed = await owner.refresh();
+          if (!refreshed || owner.status.value !== "ready") {
+            return;
+          }
+        }
+        notify(t("cardScriptsDefaultSavedToast"), "success");
+      } catch (err) {
+        actionError.value = err?.message || String(err);
+      } finally {
+        savingCardScriptsDefault.value = false;
       }
     }
 
@@ -693,6 +722,9 @@ export const CardLibraryView = {
       currentCardDefaultWorldbook,
       defaultWorldbookDraft,
       savingDefaultWorldbook,
+      cardScriptsDefault,
+      savingCardScriptsDefault,
+      saveCardScriptsDefault,
       saveCardDefaultWorldbook,
       embeddedInspectorOpen,
       embeddedBook,
@@ -878,6 +910,28 @@ export const CardLibraryView = {
                 data-testid="kt-rp-import-input"
                 @change="handleFileChange"
               />
+            </div>
+          </div>
+
+          <div
+            class="ktrp-card-box"
+            data-testid="kt-rp-card-scripts-default-section"
+          >
+            <div class="ktrp-row-between">
+              <div>
+                <h4>{{ t('cardScriptsDefaultTitle') }}</h4>
+                <p class="ktrp-muted">{{ t('cardScriptsDefaultHint') }}</p>
+              </div>
+              <label class="ktrp-inline-actions">
+                <input
+                  type="checkbox"
+                  :checked="cardScriptsDefault"
+                  :disabled="busy || savingCardScriptsDefault"
+                  data-testid="kt-rp-card-scripts-default-toggle"
+                  @change="saveCardScriptsDefault($event.target.checked)"
+                />
+                <span>{{ t('cardScriptsDefaultTitle') }}</span>
+              </label>
             </div>
           </div>
 

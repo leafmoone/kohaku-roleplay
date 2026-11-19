@@ -34,6 +34,17 @@ const WORLDBOOK_ISSUE_KEYS = {
   invalid_entry: "worldbookIssueInvalidEntry",
 };
 
+const CARD_SCRIPT_ISSUE_KEYS = {
+  invalid_script: "cardScriptIssueInvalidScript",
+  module_dependency: "cardScriptIssueModuleDependency",
+  dependency_missing: "cardScriptIssueDependencyMissing",
+  dependency_unapproved_transitive: "cardScriptIssueDependencyUnapprovedTransitive",
+  dependency_unsupported: "cardScriptIssueDependencyUnsupported",
+  dependency_limit: "cardScriptIssueDependencyLimit",
+  module_linker_unavailable: "cardScriptIssueModuleLinkerUnavailable",
+  module_link_failed: "cardScriptIssueModuleLinkFailed",
+};
+
 /**
  * Creature-scoped session dock panel for plugin:roleplay.
  * Switches between Persona Attachment, Tavern Play, Novel Reader Projection, and NPC Actor
@@ -108,6 +119,12 @@ export const RoleplayDockPanel = {
     let slotSeq = 0;
     let worldbookMutationSeq = 0;
 
+    // Session card scripts state
+    const scriptBusy = ref(false);
+    const scriptError = ref("");
+    const invokingScriptButtonKey = ref("");
+    let scriptMutationSeq = 0;
+
     const resumingScene = ref(false);
     const resumeError = ref("");
 
@@ -166,6 +183,64 @@ export const RoleplayDockPanel = {
       if (i18nKey) return t(i18nKey, { count });
       return t("worldbookIssueUnknown", { code, count });
     }
+
+    function cardScriptIssueLabel(issueCode) {
+      const code = typeof issueCode === "string" ? issueCode.trim() : "";
+      if (!code) return "";
+      const i18nKey = CARD_SCRIPT_ISSUE_KEYS[code];
+      if (i18nKey) return t(i18nKey);
+      return t("cardScriptIssueUnknown", { issue: code });
+    }
+
+    const sessionCardScripts = computed(() => {
+      const raw = state.value.cardScripts;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+      const entries = Array.isArray(raw.entries)
+        ? raw.entries
+            .filter((item) => item && typeof item === "object" && typeof item.id === "string" && item.id)
+            .map((item) => ({
+              id: item.id,
+              name: typeof item.name === "string" && item.name.trim() ? item.name.trim() : item.id,
+              enabled: Boolean(item.enabled),
+              issue: typeof item.issue === "string" && item.issue ? item.issue : null,
+              module: Boolean(item.module),
+              buttons: Array.isArray(item.buttons)
+                ? item.buttons.filter((btn) => typeof btn === "string" && btn.trim())
+                : [],
+            }))
+        : [];
+      const rawIssues = raw.issues && typeof raw.issues === "object" && !Array.isArray(raw.issues)
+        ? raw.issues
+        : {};
+      const runtimeIssues = Object.entries(rawIssues)
+        .filter(([k, v]) => typeof k === "string" && k && typeof v === "string" && v.trim())
+        .map(([key, message]) => ({
+          key,
+          label:
+            key === "$host"
+              ? t("cardScriptsHostIssueLabel")
+              : entries.find((e) => e.id === key)?.name || key,
+          message: message.trim(),
+        }));
+      const rawInactive =
+        raw.inactiveEvents && typeof raw.inactiveEvents === "object" && !Array.isArray(raw.inactiveEvents)
+          ? raw.inactiveEvents
+          : {};
+      const inactiveEvents = {};
+      for (const [scriptId, evList] of Object.entries(rawInactive)) {
+        if (Array.isArray(evList)) {
+          const valid = evList.filter((ev) => typeof ev === "string" && ev.trim());
+          if (valid.length) inactiveEvents[scriptId] = valid;
+        }
+      }
+      return {
+        entries,
+        canEnable: Boolean(raw.canEnable),
+        enabled: Boolean(raw.enabled),
+        runtimeIssues,
+        inactiveEvents,
+      };
+    });
 
     const sessionWorldbookDiag = computed(() =>
       normalizeWorldbookDiagnostics(state.value.worldbookDiagnostics),
@@ -264,7 +339,11 @@ export const RoleplayDockPanel = {
     // Reset session-scoped worldbook inspector & transient states whenever session/creature/card scope changes
     watch(tavernScopeKey, () => {
       worldbookMutationSeq += 1;
+      scriptMutationSeq += 1;
       worldbookError.value = "";
+      scriptBusy.value = false;
+      scriptError.value = "";
+      invokingScriptButtonKey.value = "";
       resetSlotInspector();
     });
 
@@ -689,6 +768,65 @@ export const RoleplayDockPanel = {
       selectedSlotEntryIndex.value = index;
     }
 
+    async function setSessionCardScripts(enabled) {
+      if (busy.value || scriptBusy.value) return;
+      const scopeSnap = tavernScopeKey.value;
+      const seq = ++scriptMutationSeq;
+      scriptBusy.value = true;
+      scriptError.value = "";
+      actionError.value = "";
+      try {
+        const nextView = await owner.call("set_card_scripts", { enabled: Boolean(enabled) });
+        if (seq !== scriptMutationSeq || tavernScopeKey.value !== scopeSnap) return;
+        if (nextView && typeof nextView === "object") {
+          owner.state.value = nextView;
+        }
+        notify(
+          enabled ? t("cardScriptsEnabledToast") : t("cardScriptsDisabledToast"),
+          enabled ? "success" : "info",
+        );
+      } catch (err) {
+        if (seq === scriptMutationSeq && tavernScopeKey.value === scopeSnap) {
+          scriptError.value = err?.message || String(err);
+        }
+      } finally {
+        if (seq === scriptMutationSeq) {
+          scriptBusy.value = false;
+        }
+      }
+    }
+
+    async function invokeCardScriptButton(scriptId, buttonName) {
+      if (busy.value || scriptBusy.value || !scriptId || !buttonName) return;
+      const scopeSnap = tavernScopeKey.value;
+      const seq = ++scriptMutationSeq;
+      const btnKey = `${scriptId}\u0000${buttonName}`;
+      scriptBusy.value = true;
+      invokingScriptButtonKey.value = btnKey;
+      scriptError.value = "";
+      actionError.value = "";
+      try {
+        const nextView = await owner.call("invoke_script_button", {
+          scriptId,
+          button: buttonName,
+        });
+        if (seq !== scriptMutationSeq || tavernScopeKey.value !== scopeSnap) return;
+        if (nextView && typeof nextView === "object") {
+          owner.state.value = nextView;
+        }
+        notify(t("cardScriptsButtonInvokedToast", { button: buttonName }), "success");
+      } catch (err) {
+        if (seq === scriptMutationSeq && tavernScopeKey.value === scopeSnap) {
+          scriptError.value = err?.message || String(err);
+        }
+      } finally {
+        if (seq === scriptMutationSeq) {
+          scriptBusy.value = false;
+          invokingScriptButtonKey.value = "";
+        }
+      }
+    }
+
     async function resumePendingScene() {
       const pending = novelView.value.pendingScene;
       if (!pending || busy.value || resumingScene.value) return;
@@ -789,6 +927,13 @@ export const RoleplayDockPanel = {
       sessionWorldbookDiag,
       cardLoreDiag,
       worldbookIssueLabel,
+      sessionCardScripts,
+      cardScriptIssueLabel,
+      scriptBusy,
+      scriptError,
+      invokingScriptButtonKey,
+      setSessionCardScripts,
+      invokeCardScriptButton,
       resumingScene,
       resumeError,
       novelView,
@@ -1018,6 +1163,139 @@ export const RoleplayDockPanel = {
             :save-selection="saveMvuSelection"
             :disabled="busy"
           />
+
+          <div
+            v-if="sessionCardScripts"
+            class="ktrp-card-box"
+            data-testid="kt-rp-tavern-scripts"
+          >
+            <div class="ktrp-row-between">
+              <div class="ktrp-box-head">{{ t('cardScriptsSessionTitle') }}</div>
+              <div class="ktrp-inline-actions">
+                <span
+                  class="ktrp-chip"
+                  :class="{ 'ktrp-chip--accent': sessionCardScripts.enabled }"
+                  data-testid="kt-rp-card-scripts-status"
+                >
+                  {{
+                    sessionCardScripts.enabled
+                      ? t('cardScriptsStatusActive')
+                      : t('cardScriptsStatusInactive')
+                  }}
+                </span>
+                <ActionButton
+                  size="sm"
+                  :variant="sessionCardScripts.enabled ? 'danger' : 'primary'"
+                  :disabled="busy || scriptBusy || (!sessionCardScripts.enabled && !sessionCardScripts.canEnable)"
+                  data-testid="kt-rp-card-scripts-toggle-btn"
+                  @click="setSessionCardScripts(!sessionCardScripts.enabled)"
+                >
+                  {{
+                    sessionCardScripts.enabled
+                      ? t('cardScriptsDisableBtn')
+                      : t('cardScriptsEnableBtn')
+                  }}
+                </ActionButton>
+              </div>
+            </div>
+            <p class="ktrp-muted">{{ t('cardScriptsSessionHint') }}</p>
+
+            <div
+              v-if="scriptError"
+              class="ktrp-banner ktrp-banner--error"
+              role="alert"
+              data-testid="kt-rp-card-scripts-error"
+            >
+              <span>{{ scriptError }}</span>
+            </div>
+
+            <div
+              v-if="sessionCardScripts.runtimeIssues.length"
+              class="ktrp-stack"
+              data-testid="kt-rp-card-scripts-runtime-issues"
+            >
+              <span class="ktrp-label">{{ t('cardScriptsRuntimeIssuesTitle') }}</span>
+              <div
+                v-for="rtIssue in sessionCardScripts.runtimeIssues"
+                :key="rtIssue.key"
+                class="ktrp-banner ktrp-banner--error"
+                :data-testid="'kt-rp-card-script-runtime-issue-' + rtIssue.key"
+              >
+                <span><strong>{{ rtIssue.label }}:</strong> {{ rtIssue.message }}</span>
+              </div>
+            </div>
+
+            <div class="ktrp-stack" data-testid="kt-rp-card-scripts-list">
+              <div
+                v-for="script in sessionCardScripts.entries"
+                :key="script.id"
+                class="ktrp-sub-card"
+                :data-testid="'kt-rp-card-script-entry-' + script.id"
+              >
+                <div class="ktrp-row-between">
+                  <strong :data-testid="'kt-rp-card-script-name-' + script.id">
+                    {{ script.name }}
+                  </strong>
+                  <div class="ktrp-chip-row">
+                    <span class="ktrp-chip">
+                      {{
+                        script.enabled
+                          ? t('cardScriptsEntryEnabledBadge')
+                          : t('cardScriptsEntryDisabledBadge')
+                      }}
+                    </span>
+                    <span
+                      v-if="script.issue"
+                      class="ktrp-chip"
+                      :data-testid="'kt-rp-card-script-issue-' + script.id"
+                    >
+                      {{ cardScriptIssueLabel(script.issue) }}
+                    </span>
+                    <span
+                      v-else-if="script.enabled"
+                      class="ktrp-chip ktrp-chip--accent"
+                      :data-testid="'kt-rp-card-script-compatible-' + script.id"
+                    >
+                      {{ t('cardScriptsEntryCompatibleBadge') }}
+                    </span>
+                  </div>
+                </div>
+
+                <p
+                  v-if="sessionCardScripts.inactiveEvents[script.id]"
+                  class="ktrp-muted"
+                  :data-testid="'kt-rp-card-script-inactive-events-' + script.id"
+                >
+                  {{
+                    t('cardScriptsInactiveEventsLabel', {
+                      events: sessionCardScripts.inactiveEvents[script.id].join(', '),
+                    })
+                  }}
+                </p>
+
+                <div
+                  v-if="sessionCardScripts.enabled && script.enabled && !script.issue && script.buttons.length"
+                  class="ktrp-field-block"
+                  :data-testid="'kt-rp-card-script-buttons-' + script.id"
+                >
+                  <span class="ktrp-label">{{ t('cardScriptsButtonsLabel') }}</span>
+                  <div class="ktrp-inline-actions">
+                    <ActionButton
+                      v-for="(btnName, btnIdx) in script.buttons"
+                      :key="btnName"
+                      size="sm"
+                      :disabled="busy || scriptBusy"
+                      :data-testid="'kt-rp-card-script-btn-' + script.id + '-' + btnIdx"
+                      :data-button-name="btnName"
+                      @click="invokeCardScriptButton(script.id, btnName)"
+                    >
+                      {{ btnName }}
+                    </ActionButton>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <CardMediaGallery
             :card-id="state.cardId || ''"
