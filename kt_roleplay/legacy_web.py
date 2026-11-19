@@ -3,17 +3,24 @@
 import json
 import re
 from collections.abc import Callable, Iterator
+from urllib.parse import urlsplit
 
 from kohakuterrarium.modules.output.base import BaseOutputModule
 from kohakuterrarium.modules.output.event import OutputEvent
 from pydantic import BaseModel, ConfigDict, JsonValue
 
+from .card_scripts import CardScript
 from .card_web import WebPanel, _MAX_HTML
 from .mvu import public_values
+from .script_dependencies import script_dependencies
 
 _MARKER = re.compile(r'<[A-Za-z][A-Za-z0-9_-]{0,79}\s*/>')
 _FENCE = re.compile(r'```(?:html)?[ \t]*\r?\n(?P<html>.+?)\r?\n```', re.S | re.I)
 _DOCUMENT = re.compile(r'(?:<!doctype\s+html\s*>\s*)?<html(?:\s|>)', re.I)
+_MVU_STATUS_MARKER = '<StatusPlaceHolderImpl/>'
+_MVU_BETA_CDN_PATH = '/gh/MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js'
+_MVU_BETA_RAW_PATH = '/MagicalAstrogy/MagVarUpdate/beta/artifact/bundle.js'
+_JSDELIVR_HOSTS = frozenset({'cdn.jsdelivr.net', 'testingcf.jsdelivr.net', 'gcore.jsdelivr.net'})
 
 
 class LegacyWebRule(BaseModel):
@@ -60,6 +67,30 @@ def opening_web_rules(extensions: object, openings: list[str]) -> Iterator[Legac
         yield LegacyWebRule(marker=marker, panel=WebPanel(title=name.strip(), html=html))
 
 
+def has_mvu_status_adapter(marker: str, scripts: list[CardScript]) -> bool:
+    if marker != _MVU_STATUS_MARKER:
+        return False
+    for script in script_dependencies([s for s in scripts if s.enabled and s.content]):
+        if script['syntaxError'] or script['truncated']:
+            continue
+        for reference in script['references']:
+            if reference['kind'] != 'https' or not reference['specifier']:
+                continue
+            url = urlsplit(reference['specifier'])
+            if url.query or url.fragment:
+                continue
+            if url.netloc in _JSDELIVR_HOSTS and url.path == _MVU_BETA_CDN_PATH:
+                return True
+            if url.netloc == 'raw.githubusercontent.com' and url.path == _MVU_BETA_RAW_PATH:
+                return True
+    return False
+
+
+def mvu_reply_has_body(text: str) -> bool:
+    # The upstream short-reply guard counts JavaScript UTF-16 code units.
+    return len(text) >= 5 or len(text.encode('utf-16-le', errors='surrogatepass')) >= 10
+
+
 class LegacyReplyCapture(BaseOutputModule):
     """Receive the canonical assistant reply, not streamed, tool, or replay text."""
 
@@ -99,6 +130,7 @@ class LegacyOpeningState(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
     marker: str
     values: dict[str, JsonValue]
+    mvu_status_adapter: bool = False
 
 
 def selected_message_values(values: dict[str, JsonValue], selected: list[str]) -> dict[str, JsonValue]:

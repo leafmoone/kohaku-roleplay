@@ -31,7 +31,8 @@ from .gameplay_pack import GameplayPack, GameplayPackUnavailable, pack_settings,
 from .gameplay import Action, Actions, PlayActions, apply_actions, apply_field_changes
 from .header_summary import MAX_HEADER_PINS, header_summary
 from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, LegacyWebRequest, configured_plugins, request_plugin
-from .legacy_web import LegacyOpeningState, LegacyReplyCapture, LegacyReplyState, legacy_web_message
+from .legacy_web import (LegacyOpeningState, LegacyReplyCapture, LegacyReplyState, has_mvu_status_adapter,
+                         legacy_web_message, mvu_reply_has_body)
 from .novel import Outcome, SceneError, Story
 from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields
 from .state_tool import SetCardState
@@ -306,10 +307,15 @@ class RoleplayPlugin(BasePlugin):
         if agent is None or not agent.is_processing or turn is None or turn == 0:
             return
         record = self._record()
-        marker = ((record or {}).get('legacy_opening_web') or {}).get('marker')
-        if not marker or marker not in text or not record.get('web_panel_ready', True):
+        if not record or not record.get('web_panel_ready', True) or not (opening := record.get('legacy_opening_web')):
+            return
+        marked = opening['marker'] in text
+        if not marked and not opening.get('mvu_status_adapter'):
             return
         play = TavernSession.model_validate(record)
+        if not marked and (not mvu_reply_has_body(text) or not play.mvu or not play.mvu.values
+                           or not approved(play.scripts, play.script_state)):
+            return
         reply = LegacyReplyState(turn=turn, text=text, values=play.mvu.values if play.mvu else {})
         if reply != play.legacy_reply_web:
             self._save(play.model_copy(update={'legacy_reply_web': reply}).model_dump())
@@ -836,7 +842,8 @@ class RoleplayPlugin(BasePlugin):
                     rule = next((row for row in card.legacy_web_rules if row.marker in opening), None)
                     if rule is not None:
                         web_panel = rule.panel
-                        legacy_state = LegacyOpeningState(marker=rule.marker, values={})
+                        legacy_state = LegacyOpeningState(marker=rule.marker, values={},
+                                                          mvu_status_adapter=has_mvu_status_adapter(rule.marker, card.scripts))
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player,
                                      greeting=expand(opening, card.fields.name, choice.player.name, ""),
                                      lore=lore, worldbook=book, worldbookRef=book_ref, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
