@@ -77,9 +77,14 @@ class Play(Arguments):
     enableCardScripts: bool = False
 
 
-def _no_compatible_scripts(scripts: list[CardScript]) -> OwnerArgumentError:
+def _card_scripts_unavailable(scripts: list[CardScript], mvu: MvuInit | None) -> OwnerArgumentError:
     detail = ", ".join(f"{script.id}: {script.issue}" for script in scripts if script.enabled and script.issue)
-    message = "This tavern has no compatible scripts and initialized variables"
+    if not mvu or not mvu.values:
+        message = "Card scripts need non-empty variables from a valid [InitVar] entry"
+    elif detail:
+        message = "No enabled card script can run"
+    else:
+        message = "This card has no enabled compatible scripts"
     return OwnerArgumentError(f"{message} ({detail})" if detail else message)
 
 
@@ -670,7 +675,7 @@ class RoleplayPlugin(BasePlugin):
                     raise OwnerArgumentError(_SCRIPT_CLOCK_UNAVAILABLE)
                 if args["enabled"]:
                     if not play.mvu or not play.mvu.values:
-                        raise _no_compatible_scripts(play.scripts)
+                        raise _card_scripts_unavailable(play.scripts, play.mvu)
                     if not approved(play.scripts, play.script_state) and any(
                             s.enabled and not s.module and (s.issue is None or s.issue in RETRYABLE_MODULE_ISSUES)
                             for s in play.scripts):
@@ -685,7 +690,7 @@ class RoleplayPlugin(BasePlugin):
                     if not any(s.enabled and not s.issue for s in play.scripts):
                         self._save(play.model_dump())
                         self.ui_emit("state", self.ui_state())
-                        raise _no_compatible_scripts(play.scripts)
+                        raise _card_scripts_unavailable(play.scripts, play.mvu)
                 consent = script_fingerprint(play.scripts) if args["enabled"] else None
                 permission = play.script_state.model_copy(update={'approved': consent})
                 if consent != play.script_state.approved:
@@ -825,7 +830,7 @@ class RoleplayPlugin(BasePlugin):
                 if choice.enableCardScripts and not script_host_ok:
                     raise OwnerArgumentError(_SCRIPT_CLOCK_UNAVAILABLE)
                 if choice.enableCardScripts and not script_card_ok:
-                    raise _no_compatible_scripts(scripts)
+                    raise _card_scripts_unavailable(scripts, mvu)
                 enable_scripts = enable_requested and script_host_ok and script_card_ok
                 script_state = SessionScripts(clock="turn", approved=script_fingerprint(scripts) if enable_scripts else None,
                                               button_receipts_current=True)
