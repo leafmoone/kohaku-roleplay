@@ -29,7 +29,20 @@ def _open(directory: Path) -> Iterator[sqlite3.Connection]:
         database.execute("CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, name TEXT NOT NULL, version INTEGER NOT NULL, original BLOB NOT NULL, portrait BLOB, card TEXT NOT NULL)")
         database.execute("CREATE TABLE IF NOT EXISTS worldbooks (id TEXT PRIMARY KEY, name TEXT NOT NULL, original BLOB NOT NULL, entry_count INTEGER NOT NULL, supported_count INTEGER NOT NULL)")
         database.execute("CREATE TABLE IF NOT EXISTS card_worldbooks (card_id TEXT PRIMARY KEY REFERENCES cards(id) ON DELETE CASCADE, worldbook_id TEXT NOT NULL REFERENCES worldbooks(id) ON DELETE CASCADE)")
+        database.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)))")
         yield database
+
+
+def card_scripts_default(directory: Path) -> bool:
+    with _open(directory) as db:
+        row = db.execute("SELECT enabled FROM settings WHERE key=?", ("card_scripts_default",)).fetchone()
+    return row is None or bool(row[0])
+
+
+def set_card_scripts_default(directory: Path, enabled: bool) -> None:
+    with _open(directory) as db:
+        db.execute("INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET enabled=excluded.enabled",
+                   ("card_scripts_default", int(enabled)))
 
 
 def import_card(directory: Path, original: bytes) -> CardSummary:

@@ -11,7 +11,7 @@ from kohakuterrarium.modules.ui_owner import OwnerArgumentError, OwnerForbiddenE
 from .card_editor import CopyRequest, edit_draft, save_copy
 from .cards import MAX_CARD_BYTES, CardError, card_format
 from .charx import MAX_ARCHIVE_BYTES
-from .library import CardNotFound, import_card, list_cards, original_card, remove_card
+from .library import CardNotFound, card_scripts_default, import_card, list_cards, original_card, remove_card, set_card_scripts_default
 from .library_view import card_detail, media_view, portrait_view
 from .portrait_library import PortraitCopy, portrait_draft, save_portraits_copy
 from .runtime import library_dir
@@ -49,12 +49,21 @@ class CardCatalog(UIOwnerMixin):
         books, defaults = await asyncio.to_thread(list_worldbooks, directory)
         return {"cards": await asyncio.to_thread(list_cards, directory), "maxCardBytes": MAX_CARD_BYTES,
                 "maxArchiveBytes": MAX_ARCHIVE_BYTES, "worldbooks": books, "cardWorldbookDefaults": defaults,
-                "maxWorldbookBytes": MAX_WORLDBOOK_BYTES}
+                "maxWorldbookBytes": MAX_WORLDBOOK_BYTES,
+                "cardScriptsDefault": await asyncio.to_thread(card_scripts_default, directory)}
 
     async def ui_call(self, action: str, args: dict[str, object], context: UICallContext) -> object:
         single_user(context)
         directory = library_dir()
         try:
+            if action == "set_card_scripts_default":
+                enabled = args.get("enabled")
+                if set(args) != {"enabled"} or type(enabled) is not bool:
+                    raise OwnerArgumentError("Expected a boolean default for new taverns")
+                await asyncio.to_thread(set_card_scripts_default, directory, enabled)
+                state = await self.ui_state(context)
+                self.ui_emit("state", state)
+                return state
             if action == "preview_worldbook":
                 return await asyncio.to_thread(preview_worldbook, *_worldbook_upload(args))
             if action == "import_worldbook":
