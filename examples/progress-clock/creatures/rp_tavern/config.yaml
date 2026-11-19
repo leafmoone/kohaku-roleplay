@@ -1,0 +1,9 @@
+name: rp_tavern
+version: '1.0'
+system_prompt: You narrate the player's tavern scene and its characters. Respect the bound card and the player's choices. Use the clock tool only for changes that happened in this session.
+input: {type: cli}
+output: {type: stdout, controller_direct: true}
+fork_enabled: false
+plugins:
+  - {name: roleplay, type: package, module: kt_roleplay.runtime, class: RoleplayPlugin, options: {mode: tavern}}
+  - {name: progress-clock, type: package, module: progress_clock, class: ProgressClock}

@@ -25,6 +25,7 @@ from .cards import CardError, CardFields
 from .charx import CardMedia
 from .cast import NovelBinding
 from .errors import SettlementRejected
+from .gameplay_pack import GameplayPack, GameplayPackUnavailable, pack_settings, pack_tools, tavern_creature
 from .gameplay import Action, PlayActions, apply_actions, apply_field_changes
 from .header_summary import MAX_HEADER_PINS, header_summary
 from .novel import Outcome, SceneError, Story
@@ -114,6 +115,7 @@ class TavernSession(Arguments):
     header_pins: list[str] = Field(default_factory=list)
     mvu_legacy: bool = False
     lore_activation: dict[Literal["lore", "worldbook"], dict[str, int]] = Field(default_factory=dict)
+    gameplay_pack: GameplayPack | None = None
     scripts: list[CardScript] = Field(default_factory=list)
     script_state: SessionScripts = Field(default_factory=lambda: SessionScripts(clock="turn"))
 
@@ -300,6 +302,8 @@ class RoleplayPlugin(BasePlugin):
         if self.mode == "tavern":
             record = self._record()
             allowed = {"rp_set_card_state"} if record and record.get("state_fields") else set()
+            if record and record.get('gameplay_pack'):
+                allowed.update(pack_tools(record, context.host_agent))
             if record and (record.get("mvu") or {}).get("values"):
                 allowed.add("rp_update_mvu")
                 if record.get("mvu_legacy"):
@@ -341,6 +345,9 @@ class RoleplayPlugin(BasePlugin):
         if self.mode == "tavern":
             return [SetCardState(self), UpdateMvu(self), ApplyMvuUpdate(self), PlayActions(self), RunCardScript(self)]
         return self.novel.tools(self) if self.novel else []
+
+    def gameplay_settings(self, package: str) -> dict[str, JsonValue] | None:
+        return pack_settings(self._record(), package) if self.mode == 'tavern' else None
 
     def script_record(self) -> tuple[dict, TavernSession]:
         if self.mode != "tavern" or (record := self._record()) is None:
@@ -634,6 +641,13 @@ class RoleplayPlugin(BasePlugin):
                     raise OwnerArgumentError("Wait for the session to become idle before setting its opening")
                 choice = Play.model_validate(args)
                 card = get_card(library_dir(), choice.cardId, with_scripts=True)
+                if pack := card.gameplay_pack:
+                    tavern_creature(pack)
+                    provider = agent.plugins.get_plugin(pack.name) if agent and agent.plugins.is_enabled(pack.name) else None
+                    validate = getattr(provider, 'validate_roleplay_settings', None)
+                    if not callable(validate):
+                        raise OwnerArgumentError(f'Start this card with the {pack.name} gameplay creature')
+                    validate(pack.model_copy(deep=True).settings)
                 greetings = [card.fields.first_mes, *card.fields.alternate_greetings]
                 if choice.greetingIndex >= len(greetings):
                     raise OwnerArgumentError("Opening index is out of range")
@@ -684,7 +698,7 @@ class RoleplayPlugin(BasePlugin):
                                      media=card.media, media_issues=card.media_issues,
                                      scene_media_rules=card.scene_media_rules, native_panels=card.native_panels,
                                      invalid_native_panels=card.invalid_native_panels, mvu=mvu, mvu_legacy=legacy_mvu,
-                                     scripts=scripts, script_state=script_state)
+                                     gameplay_pack=card.gameplay_pack, scripts=scripts, script_state=script_state)
                 self._save(play.model_dump())
                 if enable_scripts:
                     await self._scripts.fire("opening", sequence=0)
@@ -712,7 +726,7 @@ class RoleplayPlugin(BasePlugin):
                 self._save(existing.model_copy(update=Notes.model_validate(args).model_dump()).model_dump())
             else:
                 raise OwnerArgumentError(f"Action {action!r} is not available in the current {self.mode} session")
-        except (ValidationError, CardError, CardNotFound, WorldbookNotFound, CardScriptError, SceneError) as exc:
+        except (ValidationError, CardError, CardNotFound, WorldbookNotFound, CardScriptError, SceneError, GameplayPackUnavailable) as exc:
             raise OwnerArgumentError(f"Invalid roleplay request: {exc}") from exc
         view = self.ui_state()
         self.ui_emit("state", view)

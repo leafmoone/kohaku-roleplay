@@ -11,6 +11,7 @@ from kohakuterrarium.studio.studio import Studio
 from kohakuterrarium.terrarium import LocalTerrariumService, TerrariumService
 
 from .cast import CastMember, cast_recipe
+from .gameplay_pack import GameplayPackUnavailable, tavern_creature
 from .library import CardNotFound, get_card
 from .runtime import Arguments, Play, RoleplayPlugin, library_dir, resolve_tavern_worldbook
 from .worldbook_library import WorldbookNotFound
@@ -48,7 +49,11 @@ async def start_tavern(body: Play, host: StudioDep) -> dict[str, str]:
         book = resolve_tavern_worldbook(body)
     except WorldbookNotFound as exc:
         raise HTTPException(404, "The selected worldbook is no longer in the library") from exc
-    session = await host.sessions.start_creature("@kohaku-roleplay/creatures/rp_agent", name=card.fields.name)
+    try:
+        creature = tavern_creature(card.gameplay_pack)
+    except GameplayPackUnavailable as exc:
+        raise HTTPException(409, str(exc)) from exc
+    session = await host.sessions.start_creature(creature, name=card.fields.name)
     sid = session.session_id
     try:
         entry = host.sessions.find_creature(sid, session.creatures[0]["creature_id"])

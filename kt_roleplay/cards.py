@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from .card_state import StateField, decode_fields
 from .charx import CardMedia, inspect_charx_media, is_charx, open_charx, read_charx_card
 from .errors import CardError
+from .gameplay_pack import GameplayPack
 from .lore import LoreBook
 from .panels import NativePanel, read_panels
 from .portraits import PortraitAsset, PortraitRule, read_portraits
@@ -74,6 +75,7 @@ class ParsedCard(BaseModel):
     native_panels: list[NativePanel] = Field(default_factory=list)
     invalid_native_panels: int = 0
     scripts: list[CardScript] = Field(default_factory=list)
+    gameplay_pack: GameplayPack | None = None
 
     @cached_property
     def lore(self) -> LoreBook | None:
@@ -166,6 +168,10 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
     if data.get("assets") and fmt != "charx":
         warnings.append("V3 assets outside a CHARX archive are retained, not automatically fetched.")
     namespace = extensions.get("kohaku-roleplay", {}) if isinstance(extensions, dict) else {}
+    try:
+        pack = GameplayPack.model_validate(namespace['gameplayPack']) if 'gameplayPack' in namespace else None
+    except ValidationError as exc:
+        raise CardError('Invalid gameplayPack: provide an installed package name, exact x.y.z version and optional settings object') from exc
     portraits = read_portraits(namespace.get("portraits", []), definitions, MAX_CARD_BYTES)
     panels, bad_panels = read_panels(namespace.get("panels", []), definitions)
     cover = next((p for p in portraits if p.field is None), None)
@@ -174,7 +180,7 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
     card = ParsedCard(version=version, fields=fields, book=book, warnings=warnings,
                       portrait=portrait, state_fields=definitions, portraits=portraits, source_format=fmt,
                       native_panels=panels, invalid_native_panels=bad_panels,
-                      scripts=inspect_card_scripts(extensions))
+                      scripts=inspect_card_scripts(extensions), gameplay_pack=pack)
     if book is not None:
         _ = card.lore
     return card

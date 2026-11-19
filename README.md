@@ -88,6 +88,12 @@
 
 引用私有字段、类型不匹配或未知面板声明会跳过并提示。读取已保存的公开字段，不把面板配置或伏笔写回卡片；不改变普通形象和小说的行为，也不替代聊天框的自由输入。现有正文中的原生选项组件继续可用。
 
+### 给其他卡提供独立玩法包
+
+[进度时钟包](examples/progress-clock/kohaku.yaml)是单独安装的 KT 原生包，不是卡片脚本。用普通 KT 安装流程安装 `examples/progress-clock/` 后，从角色库分别导入[档案室](examples/archive-survey.json)和[渡船](examples/ferry-crossing.json)即可开局；两张卡分别配置四格和三格时钟。它们使用同一个工具，但进度按会话保存。导卡不安装包，也不执行包代码；缺包或版本不匹配时仍可保留和导出卡，开局会解释缺什么。原生包拥有宿主插件权限，只安装你信任的包。
+
+卡在 `data.extensions["kohaku-roleplay"].gameplayPack` 声明 `name`、准确 `version`（`x.y.z`）以及可选 JSON `settings`，不能指定模块或工具名。独立包在自己的 `kohaku.yaml` 将 `creatures/rp_tavern` 声明为 `{name: rp_tavern, roleplay_pack: true}`。该 creature 加载 tavern 模式的 `roleplay` 和与包同名的规则插件；规则插件通过 `validate_roleplay_settings(settings)` 检查设置，开局后从 `roleplay.gameplay_settings(包名)` 读取本局副本。工具沿用 KT `contribute_tools`；需要向此酒馆公开的工具名由插件的 `roleplay_tool_names` 给出，前缀为 `rp_pack_<包名，连字符改为下划线>_`。首次约定一张卡只选择一个玩法包，不动态加载代码或自动解决包依赖。
+
 ## 项目文件地图
 
 - `kohaku.yaml`：KT 包清单；`creatures/rp_agent/`：单 agent 酒馆配置与角色行为。

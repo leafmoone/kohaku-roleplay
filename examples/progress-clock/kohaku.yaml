@@ -1,0 +1,7 @@
+name: progress-clock
+version: 1.0.0
+description: A reusable, session-local progress clock for Roleplay taverns.
+creatures:
+  - {name: rp_tavern, roleplay_pack: true}
+plugins:
+  - {name: progress-clock, module: progress_clock, class: ProgressClock}
