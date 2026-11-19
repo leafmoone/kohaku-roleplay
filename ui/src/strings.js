@@ -449,6 +449,28 @@ const EN_FALLBACK = {
   headerSummarySavingBtn: "Saving pins…",
   headerSummarySavedToast: "Saved header summary pins.",
   headerSummaryNoOptions: "No public summary items are available to pin in this session.",
+  cardWebPanelDefaultTitle: "Card web panel",
+  cardWebPanelLegacyReadonlyBadge: "Legacy opening (read-only)",
+  cardWebPanelInteractiveBadge: "Isolated CHARX web panel",
+  cardWebPanelOpenBtn: "Open web panel",
+  cardWebPanelReloadBtn: "Reload",
+  cardWebPanelLoadingBtn: "Loading…",
+  cardWebPanelExpandBtn: "Expand",
+  cardWebPanelCollapseBtn: "Compact",
+  cardWebPanelCloseBtn: "Close",
+  cardWebPanelSnapshotOpeningBtn: "Opening (#0)",
+  cardWebPanelSnapshotLatestBtn: "Latest turn",
+  cardWebPanelSnapshotLatestTurnBtn: "Latest (#{turn})",
+  cardWebPanelLegacyHint:
+    "Sandboxed read-only view of the legacy opening page. External network requests, host storage, and gameplay writes are disabled.",
+  cardWebPanelInteractiveHint:
+    "Sandboxed CHARX web panel with bounded public state and gameplay action bridge. External network requests and host DOM access are blocked.",
+  cardWebIssueEntryUnconfirmed:
+    "This card declares an external opening web page that has not been snapshotted into the local library yet.",
+  cardWebIssueEntryNeedsResources:
+    "This card's opening web page references external network resources or sub-assets and cannot run inside the offline sandbox.",
+  cardWebIssueEntryUnsupported:
+    "This card's opening web page uses unsupported HTML tags or syntax and cannot be mounted.",
 };
 
 function interpolate(template, params = {}) {

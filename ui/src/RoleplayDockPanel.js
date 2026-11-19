@@ -20,6 +20,7 @@ import {
   projectNovelView,
 } from "./helpers.js";
 import { CardMediaGallery } from "./CardMediaGallery.js";
+import { CardWebPanel } from "./CardWebPanel.js";
 import { MvuPanel } from "./MvuPanel.js";
 import { NativePanels } from "./NativePanels.js";
 import { PortraitFrame } from "./PortraitFrame.js";
@@ -55,6 +56,7 @@ export const RoleplayDockPanel = {
   components: {
     ActionButton,
     CardMediaGallery,
+    CardWebPanel,
     MvuPanel,
     NativePanels,
     PortraitFrame,
@@ -175,6 +177,15 @@ export const RoleplayDockPanel = {
     const tavernScopeKey = computed(() =>
       JSON.stringify([session.value?.id, creature.value?.name, state.value.cardId]),
     );
+    const mvuPublicSignature = computed(() => {
+      const selected = state.value.mvu?.selected;
+      if (!Array.isArray(selected)) return "[]";
+      const ids = selected
+        .filter((id) => typeof id === "string" && id)
+        .slice()
+        .sort();
+      return JSON.stringify(ids);
+    });
     const saveMvuSelection = (ids) => owner.call("set_mvu_public", { ids });
     const chooseNativeOption = (panelId, index) =>
       owner.call("choose_panel_option", { panelId, index });
@@ -1053,6 +1064,7 @@ export const RoleplayDockPanel = {
       selectedSlotEntryIndex,
       tavernStateFields,
       tavernScopeKey,
+      mvuPublicSignature,
       saveMvuSelection,
       chooseNativeOption,
       sessionWorldbookDiag,
@@ -1277,6 +1289,18 @@ export const RoleplayDockPanel = {
               </span>
             </div>
           </div>
+
+          <CardWebPanel
+            v-if="state.webPanel || state.webPanelIssue"
+            :key="'web:' + tavernScopeKey + ':' + mvuPublicSignature"
+            :owner="owner"
+            :scope-key="tavernScopeKey"
+            :mvu-public-signature="mvuPublicSignature"
+            :web-panel-meta="state.webPanel || null"
+            :web-panel-issue="state.webPanelIssue || ''"
+            :player-name="state.player?.name || 'Player'"
+            :character-name="state.name || ''"
+          />
 
           <div
             v-if="tavernStateFields.length"

@@ -130,15 +130,17 @@ KT 不安装或启动原版酒馆服务器插件。先在独立宿主上运行�
 | [Office Parser](https://github.com/SillyTavern/SillyTavern-Office-Parser/blob/44ce12e0f3cc9a290513aea5043a3eac6aebf6d6/src/index.ts#L25-L45)（`office`） | `POST parse` 接受 JSON `{data}`（文件 data URL），返回文本。 | 非 JSON 文本不支持；也没有文件解析或上传适配。 |
 | [Discord Rich Presence](https://github.com/SillyTavern/SillyTavern-DiscordRichPresence-Server/blob/61a6c9f83cd6123f412394d3b5071db8c4707610/src/index.ts#L42-L54)（`discord`） | `POST update?name=…` 更新 Discord 状态并返回文本 `OK`，无 `name` 时重置并返回空 `204`。 | 不提供 Discord 集成；不要把空 `204` 可转发误认为整个接口兼容。 |
 
-以上是会话后端接口，浏览器中的旧页面调用仍需接线。没有配置界面、原版插件加载器或任意外部服务转发。
+会话内网页可显式用 `window.ktRoleplay.requestPlugin(method, url, body?)` 请求同一个转发接口，仍要求操作者预配置实际提供方和本局授权；不会拦截原作者的 `fetch`、XHR 或 jQuery 请求，不接受任意外部服务。没有配置界面或原版插件加载器。
 
-### 会话内卡片网页（后端接口）
+### 会话内卡片网页
 
 CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title": "商店", "entry": "panels/shop.html"}`，并在包内提供该 UTF-8 HTML 文件（最多 256 KiB）。首版使用自包含页面，不装载外部资源。导入只读取页面，开局把它保存为本局快照；卡库和会话普通视图只返回 `webPanel.title`。旧库中未缓存声明时，从原件识别后可新开一局，不修改已有会话。原卡删除不影响已有页面快照。
 
-受信任的宿主组件可在本局开场完成、玩家打开面板时调用 `card_web_panel` 取 `{title, html, panelScope}`。组件在读 `card_web_state` 或向 `card_web_gameplay` 提交 `{"actions": [...]}` 时带上同一 `panelScope`，仍由本局 owner 处理；切局误转发或重新挂载前的迟到请求会被拒绝。作用域标记不写存档，恢复后要重新打开面板。背包和任务沿用原生校验，状态及结算回包是 `{fields, panels, mvu}`，不返回会话历史、笔记或未公开变量。原 HTML 不可直接插入 KT 主页面；前端隔离容器未完成。请求已启用的外部插件走上文单独接口；这些后端接口不是整套 Tavern Helper。
+开局后在 `role` Dock 选择打开卡片网页；未打开时不请求或运行作者页面。页面放在独立沙箱中，不进入 KT 主页面 DOM、不共享浏览器存储、不授予直接联网权限。关闭、切局或变更公开 MVU 路径会移除原页面；再次打开才使用届时的数据和权限。原本只读的作者页面仍只读。
 
-旧卡如果用仅显示、仅作用于助理文本的 `regex_scripts`，把开场中的一个字面标记替换为完整围栏 HTML，KT 可识别这类页面；不会运行脚本、通用正则替换或把 HTML 发给模型。显式 CHARX 网页优先。旧卡页面只读，`card_web_panel` 额外返回 `legacyMarker` 及 `legacyOpening`（开场消息编号 `0` 和发布当时的 `data.stat_data`）。若后续一条已完成的助理回复含同一标记，还返回最近一份 `legacyLatest`（编号是本面板内的会话回合号，不是酒馆的任意楼层索引）。对声明了可识别的 MagVarUpdate `beta` 模块与 `<StatusPlaceHolderImpl/>` 页面的新酒馆，若已开启兼容脚本且 MVU 已初始化，则参照[上游状态栏触发规则](https://github.com/MagicalAstrogy/MagVarUpdate/blob/d03b7dc8a6ebf9bd611c7e2dc91f3b35462deebc/src/function/update_variables.ts#L1672-L1768)，完整回复无需由模型输出该标记也可更新页面快照，即使变量未改变。KT 只保存快照和原回复，不把标记加进会话正文、不下载或执行上游模块；其他卡仍要求显式标记。两份快照都只含玩家当前选择公开的路径；继续对话的当前值不会冒充当时值。流式片段、模型工具调用和回放不产生快照。其他历史楼层、`display_data` / `delta_data`、整个酒馆页面或虚拟浏览器 API 不在这个后端切片。
+受信任的宿主组件在玩家打开面板时调用 `card_web_panel` 取 `{title, html, panelScope}`。组件在读 `card_web_state` 或向 `card_web_gameplay` 提交 `{"actions": [...]}` 时带上同一 `panelScope`，仍由本局 owner 处理；切局误转发或重新挂载前的迟到请求会被拒绝。作用域标记不写存档，恢复后要重新打开面板。背包和任务沿用原生校验，状态及结算回包是 `{fields, panels, mvu}`，不返回会话历史、笔记或未公开变量。页面可使用 `window.ktRoleplay.getState()`、`window.ktRoleplay.applyGameplay(actions)` 和上文的 `requestPlugin`；旧开场只读，不接受结算写入或插件 POST。该桥不是完整的 Tavern Helper。
+
+旧卡如果用仅显示、仅作用于助理文本的 `regex_scripts`，把开场中的一个字面标记替换为完整围栏 HTML，KT 可识别这类页面；识别时不运行脚本、不应用其他通用正则替换，也不把 HTML 发给模型。显式 CHARX 网页优先。旧卡页面只读，`card_web_panel` 额外返回 `legacyMarker` 及 `legacyOpening`（开场消息编号 `0` 和发布当时的 `data.stat_data`）。若后续一条已完成的助理回复含同一标记，还返回最近一份 `legacyLatest`（编号是本面板内的会话回合号，不是酒馆的任意楼层索引）。对声明了可识别的 MagVarUpdate `beta` 模块与 `<StatusPlaceHolderImpl/>` 页面的新酒馆，若已开启兼容脚本且 MVU 已初始化，则参照[上游状态栏触发规则](https://github.com/MagicalAstrogy/MagVarUpdate/blob/d03b7dc8a6ebf9bd611c7e2dc91f3b35462deebc/src/function/update_variables.ts#L1672-L1768)，完整回复无需由模型输出该标记也可更新页面快照，即使变量未改变。KT 只保存快照和原回复，不把标记加进会话正文、不下载或执行上游模块；其他卡仍要求显式标记。两份快照都只含玩家当前选择公开的路径；继续对话的当前值不会冒充当时值。流式片段、模型工具调用和回放不产生快照。浏览器只收到玩家选中的开场或最新快照；`getCurrentMessageId()` 和 `getChatMessages(该编号)` 只读该份。缺 `delta_data` 时不伪造变更。其他历史楼层、`display_data` / `delta_data`、整个酒馆页面或通用浏览器 API 不在此兼容范围。
 
 对于用 `$('body').load(...)` 加载外部 HTTPS 网页的旧开场，KT 可识别这一类原作者声明。导入、预览和开局都不执行加载代码、不请求外部 HTML，也不把静态脚本模块的下载许可用于网页。
 
@@ -146,7 +148,7 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 缓存入口后，目录 owner 的 `preview_card_opening_dependencies` 接受 `{"id":"入库卡片 ID"}`，只从已保存副本读取内联脚本的 `import`／`export from` 和 `import()` 引用（最多 32 项）；分别报告其他资源、不可解析入口及列表截断。这是诊断，不确认或下载任何依赖，也不把外部 `<script src>`、图片或样式当成可自动加载的模块。
 
-仅新开局选到含该标记的开场、且没有适用的 CHARX 或卡内页面时，才从本地缓存快照自包含的外链入口。页面和开场照旧只读，随本局存档；后来缓存或删除库卡不改旧局。未确认、需要外部资源、或入口形式暂不支持时，酒馆正常开局，owner 分别报告 `entry_unconfirmed`、`entry_needs_resources` 或 `entry_unsupported`，不提供面板。这里检查的是页面声明的资源和脚本依赖，不替代浏览器隔离，也不保证任意旧网页可运行。此处还没有卡库确认控件或隔离网页实玩支持。
+仅新开局选到含该标记的开场、且没有适用的 CHARX 或卡内页面时，才从本地缓存快照自包含的外链入口。页面和开场照旧只读，随本局存档；后来缓存或删除库卡不改旧局。未确认、需要外部资源、或入口形式暂不支持时，酒馆正常开局，owner 分别报告 `entry_unconfirmed`、`entry_needs_resources` 或 `entry_unsupported`，不提供面板。这里检查的是页面声明的资源和脚本依赖，不替代浏览器隔离，也不保证任意旧网页可运行。外链入口确认目前使用目录 owner 接口，卡库没有确认控件；仍不支持挂载需要额外资源的入口。
 
 ### 酒馆原生面板
 

@@ -410,5 +410,22 @@
   "headerSummarySaveBtn": "保存顶栏固定项",
   "headerSummarySavingBtn": "正在保存…",
   "headerSummarySavedToast": "已保存顶栏摘要固定项。",
-  "headerSummaryNoOptions": "当前会话暂无可固定到顶栏的公开状态项。"
+  "headerSummaryNoOptions": "当前会话暂无可固定到顶栏的公开状态项。",
+  "cardWebPanelDefaultTitle": "角色卡隔离网页",
+  "cardWebPanelLegacyReadonlyBadge": "旧版开场页（只读）",
+  "cardWebPanelInteractiveBadge": "CHARX 隔离网页",
+  "cardWebPanelOpenBtn": "打开隔离网页",
+  "cardWebPanelReloadBtn": "重新加载",
+  "cardWebPanelLoadingBtn": "正在加载…",
+  "cardWebPanelExpandBtn": "展开视图",
+  "cardWebPanelCollapseBtn": "紧凑视图",
+  "cardWebPanelCloseBtn": "关闭网页",
+  "cardWebPanelSnapshotOpeningBtn": "开场快照 (#0)",
+  "cardWebPanelSnapshotLatestBtn": "最新回合",
+  "cardWebPanelSnapshotLatestTurnBtn": "最新回合 (#{turn})",
+  "cardWebPanelLegacyHint": "在离线双层沙箱中只读渲染旧版开场网页，已禁止外网请求、宿主存储访问与玩法写回。",
+  "cardWebPanelInteractiveHint": "在离线双层沙箱中运行 CHARX 网页，仅通过有界桥接读取公开状态或提交合法玩法动作，禁止外网请求与宿主 DOM 访问。",
+  "cardWebIssueEntryUnconfirmed": "此角色卡声明了外部开场网页，但尚未在本地角色卡库中确认下载快照。",
+  "cardWebIssueEntryNeedsResources": "此角色卡的开场网页依赖外部网络资源或子资产，无法在离线沙箱中运行。",
+  "cardWebIssueEntryUnsupported": "此角色卡的开场网页包含不受支持的 HTML 标签或语法，无法挂载。"
 }
