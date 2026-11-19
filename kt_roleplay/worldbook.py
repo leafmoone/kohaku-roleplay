@@ -110,7 +110,28 @@ def _read_entry(item: object, *, standalone: bool) -> LoreEntry:
         raise _SkippedEntry("invalid_entry") from exc
 
 
-def read_worldbook(source: dict[str, object]) -> LoreBook:
+def _entry_preview(index: int, item: object, standalone: bool, entry: LoreEntry | None,
+                   issue: str | None) -> dict[str, object]:
+    raw = item if isinstance(item, dict) else {}
+
+    def text(key: str) -> str:
+        value = raw.get(key)
+        return value if isinstance(value, str) else ""
+
+    def keywords(key: str) -> list[str]:
+        value = raw.get(key)
+        return [s for s in value if isinstance(s, str)] if isinstance(value, list) else []
+
+    return {
+        "index": index, "name": text("name") or text("comment"), "content": text("content"),
+        "keys": keywords("key" if standalone else "keys"),
+        "secondaryKeys": keywords("keysecondary" if standalone else "secondary_keys"),
+        "position": entry.position if entry else None, "issue": issue,
+        "enabled": entry.enabled if entry else not raw.get("disable", False) if standalone else raw.get("enabled") is True,
+    }
+
+
+def read_worldbook(source: dict[str, object], *, preview: list[dict[str, object]] | None = None) -> LoreBook:
     entries = source.get("entries")
     standalone = isinstance(entries, dict)
     if standalone:
@@ -119,11 +140,17 @@ def read_worldbook(source: dict[str, object]) -> LoreBook:
         raise CardError("World info needs an entries list or an entries object keyed by entry ID")
     rows = []
     skipped = Counter()
-    for item in entries:
+    for index, item in enumerate(entries):
+        entry = None
+        issue = None
         try:
-            rows.append(_read_entry(item, standalone=standalone))
+            entry = _read_entry(item, standalone=standalone)
+            rows.append(entry)
         except _SkippedEntry as exc:
-            skipped[str(exc)] += 1
+            issue = str(exc)
+            skipped[issue] += 1
+        if preview is not None:
+            preview.append(_entry_preview(index, item, standalone, entry, issue))
     try:
         return LoreBook.model_validate({
             "entries": rows, "issues": dict(skipped),

@@ -15,6 +15,9 @@ from .library import CardNotFound, import_card, list_cards, original_card, remov
 from .library_view import card_detail, media_view, portrait_view
 from .portrait_library import PortraitCopy, portrait_draft, save_portraits_copy
 from .runtime import library_dir
+from .worldbook_library import (MAX_WORLDBOOK_BYTES, WorldbookNotFound, embedded_worldbook, import_worldbook,
+                                list_worldbooks, original_worldbook, preview_worldbook, remove_worldbook,
+                                set_default_worldbook, worldbook_detail)
 
 
 def single_user(context: UICallContext) -> None:
@@ -29,18 +32,56 @@ def _id(args: dict[str, object]) -> str:
     return key
 
 
+def _worldbook_upload(args: dict[str, object]) -> tuple[bytes, str]:
+    source, name = args.get("data"), args.get("name")
+    if (not isinstance(source, str) or not source.isascii() or len(source) > 4 * ((MAX_WORLDBOOK_BYTES + 2) // 3)
+            or not isinstance(name, str)):
+        raise OwnerArgumentError("Expected a named Base64-encoded JSON worldbook (2 MiB maximum)")
+    return base64.b64decode(source, validate=True), name
+
+
 class CardCatalog(UIOwnerMixin):
     """Serve card metadata and media without sharing any session's experiences."""
 
     async def ui_state(self, context: UICallContext) -> dict[str, object]:
         single_user(context)
-        return {"cards": await asyncio.to_thread(list_cards, library_dir()), "maxCardBytes": MAX_CARD_BYTES,
-                "maxArchiveBytes": MAX_ARCHIVE_BYTES}
+        directory = library_dir()
+        books, defaults = await asyncio.to_thread(list_worldbooks, directory)
+        return {"cards": await asyncio.to_thread(list_cards, directory), "maxCardBytes": MAX_CARD_BYTES,
+                "maxArchiveBytes": MAX_ARCHIVE_BYTES, "worldbooks": books, "cardWorldbookDefaults": defaults,
+                "maxWorldbookBytes": MAX_WORLDBOOK_BYTES}
 
     async def ui_call(self, action: str, args: dict[str, object], context: UICallContext) -> object:
         single_user(context)
         directory = library_dir()
         try:
+            if action == "preview_worldbook":
+                return await asyncio.to_thread(preview_worldbook, *_worldbook_upload(args))
+            if action == "import_worldbook":
+                book = await asyncio.to_thread(import_worldbook, directory, *_worldbook_upload(args))
+                self.ui_emit("state", await self.ui_state(context))
+                return book
+            if action == "worldbook_detail":
+                return await asyncio.to_thread(worldbook_detail, directory, _id(args))
+            if action == "embedded_worldbook":
+                return await asyncio.to_thread(embedded_worldbook, directory, _id(args))
+            if action == "export_worldbook":
+                ref, raw = await asyncio.to_thread(original_worldbook, directory, _id(args))
+                return {"data": base64.b64encode(raw).decode("ascii"), "format": "json", "name": ref["name"]}
+            if action == "remove_worldbook":
+                await asyncio.to_thread(remove_worldbook, directory, _id(args))
+                state = await self.ui_state(context)
+                self.ui_emit("state", state)
+                return state
+            if action == "set_default_worldbook":
+                card_id, book_id = args.get("cardId"), args.get("bookId")
+                if (not isinstance(card_id, str) or not card_id or "bookId" not in args
+                        or (book_id is not None and (not isinstance(book_id, str) or not book_id))):
+                    raise OwnerArgumentError("Expected a card id and a book id or null")
+                await asyncio.to_thread(set_default_worldbook, directory, card_id, book_id)
+                state = await self.ui_state(context)
+                self.ui_emit("state", state)
+                return state
             if action == "import":
                 source = args.get("data")
                 if not isinstance(source, str) or not source.isascii() or len(source) > 4 * ((MAX_ARCHIVE_BYTES + 2) // 3):
@@ -83,6 +124,6 @@ class CardCatalog(UIOwnerMixin):
         except ValidationError as exc:
             issue = exc.errors(include_input=False)[0]
             raise OwnerArgumentError(f"Invalid card edit at {issue['loc']}: {issue['msg']}") from exc
-        except (CardError, CardNotFound, binascii.Error) as exc:
+        except (CardError, CardNotFound, WorldbookNotFound, binascii.Error) as exc:
             raise OwnerArgumentError(f"Card {action} failed: {exc}") from exc
         raise OwnerArgumentError(f"Unknown roleplay library action: {action!r}")

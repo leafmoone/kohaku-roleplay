@@ -39,6 +39,7 @@ from .mvu_tool import ApplyMvuUpdate, UpdateMvu
 from .panels import ChoicePanel, InventoryPanel, NativePanel, QuestPanel, public_panels
 from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
 from .worldbook import read_worldbook
+from .worldbook_library import WorldbookNotFound, WorldbookReference, default_worldbook, snapshot_detail, worldbook_for_play
 from .scene_tools import ingest_report
 from .recovery import resume_scene
 
@@ -56,6 +57,7 @@ class Play(Arguments):
     cardId: str
     player: Player
     greetingIndex: int = Field(ge=0)
+    worldbookId: str | None = Field(default=None, min_length=1)
 
 
 class Notes(Arguments):
@@ -84,6 +86,7 @@ class TavernSession(Arguments):
     values: dict[str, Value] = Field(default_factory=dict)
     lore: LoreBook | None
     worldbook: LoreBook | None = None
+    worldbookRef: WorldbookReference | None = None
     notes: str
     media: list[CardMedia] = Field(default_factory=list)
     media_issues: dict[str, int] = Field(default_factory=dict)
@@ -386,6 +389,7 @@ class RoleplayPlugin(BasePlugin):
                 "player": play.player.model_dump(), "greeting": play.greeting, "greetingIndex": play.greetingIndex,
                 "openingSent": play.openingSent, "hasPortrait": play.hasPortrait, "notes": play.notes,
                 "worldbookEntries": len(play.worldbook.entries) if play.worldbook else None,
+                "worldbookRef": play.worldbookRef,
                 "worldbookDiagnostics": play.worldbook.diagnostics() if play.worldbook else None,
                 "cardLoreDiagnostics": play.lore.diagnostics() if play.lore else None,
                 "lore": self.binding.get_state("loreView") if self.binding else None,
@@ -409,7 +413,7 @@ class RoleplayPlugin(BasePlugin):
                            "values": public_values(play.mvu.values, play.mvu_public)}
         return view
 
-    async def ui_call(self, action: str, args: dict[str, object], context) -> dict[str, object]:
+    async def ui_call(self, action: str, args: dict[str, object], context) -> dict[str, object] | None:
         if context is not None and context.multi_user:
             raise OwnerForbiddenError("Roleplay currently supports single-user KT hosts only")
         try:
@@ -421,6 +425,15 @@ class RoleplayPlugin(BasePlugin):
                 return self.ui_state()
             if action == "cards" and self.mode in ("persona", "tavern"):
                 return cards_view(library_dir())
+            if action == "worldbook_slot_detail" and self.mode == "tavern" and (record := self._record()) is not None:
+                slot = args.get("slot")
+                if set(args) != {"slot"} or slot not in ("embedded", "attached"):
+                    raise OwnerArgumentError("Choose the embedded or attached worldbook")
+                play = TavernSession.model_validate(record)
+                if slot == "embedded":
+                    return snapshot_detail(play.card.name, play.lore) if play.lore is not None else None
+                name = play.worldbookRef["name"] if play.worldbookRef else ""
+                return snapshot_detail(name, play.worldbook) if play.worldbook is not None else None
             if action == "set_mvu_public" and self.mode == "tavern" and (record := self._record()) is not None:
                 selection = MvuSelection.model_validate(args).ids
                 play = TavernSession.model_validate(record)
@@ -482,6 +495,8 @@ class RoleplayPlugin(BasePlugin):
                 greetings = [card.fields.first_mes, *card.fields.alternate_greetings]
                 if choice.greetingIndex >= len(greetings):
                     raise OwnerArgumentError("Opening index is out of range")
+                book_id = choice.worldbookId if "worldbookId" in choice.model_fields_set else default_worldbook(library_dir(), choice.cardId)
+                book_ref, book = worldbook_for_play(library_dir(), book_id) if book_id is not None else (None, None)
                 lore = card.lore
                 mvu = inspect_initializers(card.book)
                 if mvu is not None and lore is not None:
@@ -507,7 +522,7 @@ class RoleplayPlugin(BasePlugin):
                             mvu = mvu.model_copy(update={"issues": {**mvu.issues, "invalid_opening_update": 1}})
                 play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player,
                                      greeting=expand(opening, card.fields.name, choice.player.name, ""),
-                                     lore=lore, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
+                                     lore=lore, worldbook=book, worldbookRef=book_ref, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
                                      portrait_rules=rules_for(card.portraits), state_fields=card.state_fields,
                                      media=card.media, media_issues=card.media_issues,
                                      scene_media_rules=card.scene_media_rules, native_panels=card.native_panels,
@@ -517,20 +532,27 @@ class RoleplayPlugin(BasePlugin):
                     await self.publish_opening(play.greeting)
                     latest = TavernSession.model_validate(self._record())
                     self._save(latest.model_copy(update={"openingSent": True}).model_dump())
-            elif action == "set_worldbook" and self.mode == "tavern" and self._record() is not None:
-                if "book" not in args or (args["book"] is not None and not isinstance(args["book"], dict)):
-                    raise OwnerArgumentError("Expected a world-info object or null to remove the book")
-                existing = TavernSession.model_validate(self._record())
-                book = read_worldbook(args["book"]) if args["book"] is not None else None
+            elif action in ("set_worldbook", "bind_library_worldbook") and self.mode == "tavern" and (record := self._record()) is not None:
+                book_ref = None
+                if action == "set_worldbook":
+                    if set(args) != {"book"} or (args["book"] is not None and not isinstance(args["book"], dict)):
+                        raise OwnerArgumentError("Expected a world-info object or null to remove the book")
+                    book = read_worldbook(args["book"]) if args["book"] is not None else None
+                else:
+                    book_id = args.get("bookId")
+                    if set(args) != {"bookId"} or (book_id is not None and (not isinstance(book_id, str) or not book_id)):
+                        raise OwnerArgumentError("Expected a library book id or null to remove the book")
+                    book_ref, book = worldbook_for_play(library_dir(), book_id) if book_id is not None else (None, None)
+                existing = TavernSession.model_validate(record)
                 timers = {kind: starts for kind, starts in existing.lore_activation.items() if kind != "worldbook"}
-                self._save(existing.model_copy(update={"worldbook": book, "lore_activation": timers}).model_dump())
+                self._save(existing.model_copy(update={"worldbook": book, "worldbookRef": book_ref, "lore_activation": timers}).model_dump())
                 self.binding.set_state("loreView", None)
             elif action == "set_notes" and self.mode == "tavern" and self._record() is not None:
                 existing = TavernSession.model_validate(self._record())
                 self._save(existing.model_copy(update=Notes.model_validate(args).model_dump()).model_dump())
             else:
                 raise OwnerArgumentError(f"Action {action!r} is not available in the current {self.mode} session")
-        except (ValidationError, CardError, CardNotFound, SceneError) as exc:
+        except (ValidationError, CardError, CardNotFound, WorldbookNotFound, SceneError) as exc:
             raise OwnerArgumentError(f"Invalid roleplay request: {exc}") from exc
         view = self.ui_state()
         self.ui_emit("state", view)

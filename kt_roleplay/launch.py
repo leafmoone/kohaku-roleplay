@@ -50,7 +50,7 @@ async def start_tavern(body: Play, host: StudioDep) -> dict[str, str]:
         plugin = entry.agent.plugins.get_plugin("roleplay")
         if not isinstance(plugin, RoleplayPlugin) or plugin.mode != "tavern":
             raise OwnerArgumentError("The selected creature did not load the tavern plugin")
-        await plugin.ui_call("start_tavern", body.model_dump(), None)
+        await plugin.ui_call("start_tavern", body.model_dump(exclude_unset=True), None)
         return {"sessionId": sid, "creatureId": entry.creature_id}
     except Exception:
         await host.sessions.end(sid)

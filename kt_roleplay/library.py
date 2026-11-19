@@ -25,7 +25,10 @@ class CardNotFound(KeyError):
 def _open(directory: Path) -> Iterator[sqlite3.Connection]:
     directory.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(directory / "cards.sqlite3")) as database, database:
+        database.execute("PRAGMA foreign_keys = ON")
         database.execute("CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, name TEXT NOT NULL, version INTEGER NOT NULL, original BLOB NOT NULL, portrait BLOB, card TEXT NOT NULL)")
+        database.execute("CREATE TABLE IF NOT EXISTS worldbooks (id TEXT PRIMARY KEY, name TEXT NOT NULL, original BLOB NOT NULL, entry_count INTEGER NOT NULL, supported_count INTEGER NOT NULL)")
+        database.execute("CREATE TABLE IF NOT EXISTS card_worldbooks (card_id TEXT PRIMARY KEY REFERENCES cards(id) ON DELETE CASCADE, worldbook_id TEXT NOT NULL REFERENCES worldbooks(id) ON DELETE CASCADE)")
         yield database
 
 
