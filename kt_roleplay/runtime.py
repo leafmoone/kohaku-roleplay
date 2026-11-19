@@ -32,6 +32,7 @@ from .library_view import card_detail, cards_view, media_summary, media_view, po
 from .library import CardNotFound, get_card
 from .lore import LoreBook, active_entries
 from .lore_regex import MatchBudget
+from .lore_timing import LoreTiming
 from .mvu import MvuChange, MvuInit, apply_changes, inspect_initializers, is_initializer, public_options, public_values
 from .mvu_legacy import apply_literal_update, split_opening
 from .mvu_tool import ApplyMvuUpdate, UpdateMvu
@@ -92,6 +93,7 @@ class TavernSession(Arguments):
     mvu: MvuInit | None = None
     mvu_public: list[str] = Field(default_factory=list)
     mvu_legacy: bool = False
+    lore_activation: dict[Literal["lore", "worldbook"], dict[str, int]] = Field(default_factory=dict)
 
 
 def library_dir() -> Path:
@@ -520,7 +522,8 @@ class RoleplayPlugin(BasePlugin):
                     raise OwnerArgumentError("Expected a world-info object or null to remove the book")
                 existing = TavernSession.model_validate(self._record())
                 book = read_worldbook(args["book"]) if args["book"] is not None else None
-                self._save(existing.model_copy(update={"worldbook": book}).model_dump())
+                timers = {kind: starts for kind, starts in existing.lore_activation.items() if kind != "worldbook"}
+                self._save(existing.model_copy(update={"worldbook": book, "lore_activation": timers}).model_dump())
                 self.binding.set_state("loreView", None)
             elif action == "set_notes" and self.mode == "tavern" and self._record() is not None:
                 existing = TavernSession.model_validate(self._record())
@@ -575,9 +578,11 @@ class RoleplayPlugin(BasePlugin):
         else:
             play = TavernSession.model_validate(record)
             history = [_text(m) for m in messages if m.get("role") in ("user", "assistant")]
-            books = [book for book in (play.lore, play.worldbook) if book is not None]
+            sources = {kind: book for kind, book in (("lore", play.lore), ("worldbook", play.worldbook)) if book is not None}
+            books = list(sources.values())
+            timers = {kind for kind, book in sources.items() if any(e.sticky_messages or e.cooldown_messages for e in book.entries)}
             chat_count = None
-            if any(entry.delay_messages for book in books for entry in book.entries):
+            if timers or any(entry.delay_messages for book in books for entry in book.entries):
                 host = self.binding.host_agent if self.binding else None
                 if host and host.controller:
                     chat_count = sum(
@@ -593,11 +598,19 @@ class RoleplayPlugin(BasePlugin):
 
             regex_budget = MatchBudget()
             outlets = tavern_outlets(play.card)
-            for book in books:
+            activation = dict(play.lore_activation)
+            for kind, book in sources.items():
+                timing = LoreTiming(chat_count, activation.get(kind, {})) if kind in timers and chat_count is not None else None
                 chosen = active_entries(book, history, lore_cost, remaining, chat_messages=chat_count,
-                                        regex_budget=regex_budget, outlets=outlets)
+                                        regex_budget=regex_budget, outlets=outlets, timing=timing)
                 entries.extend(chosen)
                 remaining -= sum(lore_cost(e.content) for e in chosen)
+                if timing is not None and timing.next:
+                    activation[kind] = timing.next
+                elif timing is not None:
+                    activation.pop(kind, None)
+            if activation != play.lore_activation:
+                self._save(play.model_copy(update={"lore_activation": activation}).model_dump())
             content = story_context(play.card, play.player, entries, play.notes)
             messages = insert_depth_lore(messages, entries, play.card, play.player)
             if play.state_fields:

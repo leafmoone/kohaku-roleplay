@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .lore_regex import MatchBudget, is_regex_key
+from .lore_timing import LoreTiming
 
 
 SecondaryLogic = Literal["and_any", "not_all", "not_any", "and_all"]
@@ -41,6 +42,8 @@ class LoreEntry(BaseModel):
     group_weight: int = Field(default=100, ge=1, le=10_000)
     group_scoring: bool | None = None
     delay_messages: int = Field(default=0, ge=0)
+    sticky_messages: int = Field(default=0, ge=0)
+    cooldown_messages: int = Field(default=0, ge=0)
     outlet_name: str = Field(default="", max_length=120, pattern=r"^[^{}\r\n]*$")
 
     def matches(self, text: str) -> bool:
@@ -114,7 +117,7 @@ def _weighted_winner(group: list[tuple[int, LoreEntry]]) -> int:
 
 def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str], int], allowance: int,
                    *, chat_messages: int | None = None, regex_budget: MatchBudget | None = None,
-                   outlets: frozenset[str] = frozenset()) -> list[LoreEntry]:
+                   outlets: frozenset[str] = frozenset(), timing: LoreTiming | None = None) -> list[LoreEntry]:
     if regex_budget is None:
         regex_budget = MatchBudget()
     budget = min(book.token_budget, allowance)
@@ -127,6 +130,8 @@ def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str],
     accepted_groups = set()
     ordered = sorted(enumerate(book.entries), key=lambda row: -row[1].priority)
     memberships = {index: set(entry.group.split(',')) if entry.group else set() for index, entry in ordered}
+    effects = {index: timing.status(index, entry.sticky_messages, entry.cooldown_messages) for index, entry in ordered
+               if timing is not None and entry.enabled and (entry.sticky_messages or entry.cooldown_messages)}
     # Bound the number of scans even when an imported book contains a long chain.
     for level in range(8 if book.recursive_scanning else 1):
         context = "\n".join(recursive_text)
@@ -138,6 +143,15 @@ def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str],
             if (index in selected or index in blocked or memberships[index] & accepted_groups
                     or entry.delay_messages > message_count
                     or (entry.position == "outlet" and entry.outlet_name not in outlets)):
+                continue
+            effect = effects.get(index)
+            if effect == "cooldown":
+                continue
+            if effect == "active":
+                scores[index] = 0
+                candidates.append((index, entry))
+                for name in sorted(memberships[index]):
+                    groups.setdefault(name, []).append((index, entry))
                 continue
             if (level and entry.exclude_recursion) or (not level and entry.delay_until_recursion):
                 continue
@@ -162,10 +176,14 @@ def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str],
         for items in groups.values():
             # Scoring applies to entries opting in (or inheriting it from the book).
             high = max(scores[index] for index, _ in items)
-            excluded.update(index for index, entry in items
-                            if (book.group_scoring if entry.group_scoring is None else entry.group_scoring) and scores[index] < high)
+            excluded.update(index for index, entry in items if effects.get(index) != "active"
+                            and (book.group_scoring if entry.group_scoring is None else entry.group_scoring) and scores[index] < high)
         winners = set()
         reserved = set()
+        for index, _ in candidates:
+            if effects.get(index) == "active" and not memberships[index] & reserved:
+                winners.add(index)
+                reserved.update(memberships[index])
         # Resolve all explicit priorities before an ordinary draw can claim a shared group.
         overrides = sorted((row for row in candidates if row[0] not in excluded and row[1].group and row[1].group_override),
                            key=lambda row: (-row[1].insertion_order, row[0]))
@@ -181,12 +199,12 @@ def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str],
                 winner = _weighted_winner(eligible)
                 winners.add(winner)
                 reserved.update(memberships[winner])
-        for index, entry in candidates:
+        for index, entry in sorted(candidates, key=lambda row: effects.get(row[0]) != "active"):
             if entry.group and index not in winners:
                 blocked.add(index)
                 continue
             # Match ST's group selection before trigger chance; never re-roll a failed entry in recursion.
-            if entry.probability < 100 and (entry.probability == 0 or random() * 100 >= entry.probability):
+            if effects.get(index) != "active" and entry.probability < 100 and (entry.probability == 0 or random() * 100 >= entry.probability):
                 blocked.add(index)
                 continue
             size = cost(entry.content)
@@ -195,6 +213,8 @@ def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str],
                 selected.add(index)
                 accepted_groups.update(memberships[index])
                 budget -= size
+                if timing is not None:
+                    timing.activate(index, entry.sticky_messages, entry.cooldown_messages)
                 if not entry.prevent_recursion and entry.content:
                     added.append(entry.content)
         if not added or not budget:

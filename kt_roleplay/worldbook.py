@@ -16,7 +16,7 @@ _POSITIONS: dict[int, LorePosition] = {
 _LOGIC: dict[int, SecondaryLogic] = {0: "and_any", 1: "not_all", 2: "not_any", 3: "and_all"}
 _SCRIPT_CONTENT = re.compile(r"<%|<\s*(?:script|iframe)\b", re.IGNORECASE)
 _UNSUPPORTED_TRIGGERS = (
-    "sticky", "cooldown", "vectorized", "ignoreBudget", "ignore_budget",
+    "vectorized", "ignoreBudget", "ignore_budget",
     "characterFilter", "character_filter", "automationId", "automation_id", "triggers",
     "matchCharacterDepthPrompt", "matchCharacterDescription", "matchCharacterPersonality",
     "matchCreatorNotes", "matchPersonaDescription", "matchScenario",
@@ -103,6 +103,8 @@ def _read_entry(item: object, *, standalone: bool) -> LoreEntry:
             "group_weight": fields.get("groupWeight", fields.get("group_weight", 100)) if group else 100,
             "group_scoring": fields.get("useGroupScoring", fields.get("use_group_scoring")),
             "delay_messages": fields.get("delay") if fields.get("delay") is not None else 0,
+            "sticky_messages": fields.get("sticky") if fields.get("sticky") is not None else 0,
+            "cooldown_messages": fields.get("cooldown") if fields.get("cooldown") is not None else 0,
         })
     except ValidationError as exc:
         raise _SkippedEntry("invalid_entry") from exc
