@@ -146,7 +146,9 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 可信宿主组件可用 `card_web_message_anchor` 传入本局 `panelScope` 和 `legacyLatest.message_id`，查询本局当前分支的已完成旧网页回复。仅支持宿主提供按 agent 限量读取的 `recent_agent_events`，且持久 `processing_end` 明确标记成功的版本。成功返回 `{anchor: {turn, branchId, eventId, roundStartEventId}}`，用真实持久事件而非正文或回合号对齐宿主；正在生成、回复已过期、旧存档缺分支或未在最近 128 条本 agent 事件内确认完成时，返回 `{anchor: null}`。原版 KT 2.2.2 不提供该能力，旧快照照常显示。这是宿主侧只读接口，不传给作者 iframe，不开放聊天记录、草稿或 DOM 写入。
 
-实验性 `legacyMessageSlot: "mes-text-v1"` 只在新局明确启用开场模块、且所选远程开场实际从已确认的资源成功离线链接时可用。完整助理回复含唯一且非空的 `<roleplay_options>…</roleplay_options>` 时，可信 owner 可用 `card_web_message_slot({panelScope, locator})` 取该行的一份已批准网页和消息快照。`locator` 必须按上式精确匹配当前成功分支的全部四个字段；没有可确认的当前锚点或定位已过期时返回 `{slot: null}`，参数缺失或作用域错误则拒绝请求。scope、分支和两个物理事件 ID 不应进入作者框；快照里的 `message_id` 只是兼容层的回合号，用于作者代码访问这一份消息。另已开启 `enableOpeningMvuRead` 时才带玩家选中的公开变量。这里只交付读取接口，不挂载消息行、不触发作者脚本或发送选项，也不开放真实宿主 DOM。
+实验性 `legacyMessageSlot: "mes-text-v1"` 只在新局明确启用开场模块、且所选远程开场实际从已确认的资源成功离线链接时可用。完整助理回复含唯一且非空的 `<roleplay_options>…</roleplay_options>` 时，可信 owner 可用 `card_web_message_slot({panelScope, locator})` 取该行的一份已批准网页和消息快照。`locator` 必须按上式精确匹配当前成功分支的全部四个字段；没有可确认的当前锚点或定位已过期时返回 `{slot: null}`，参数缺失或作用域错误则拒绝请求。scope、分支和两个物理事件 ID 不应进入作者框；快照里的 `message_id` 只是兼容层的回合号，用于作者代码访问这一份消息。另已开启 `enableOpeningMvuRead` 时才带玩家选中的公开变量。这里的读取接口不挂载消息行、不触发作者脚本，也不开放真实宿主 DOM。
+
+可信 owner 的 `card_web_message_option({panelScope, locator, optionIndex})` 可为当前消息核对一条选项并返回待展示的纯文本 `{draft: {label, text}}`。只认该成功回复中合法选项块的本地零基索引（最多八项，每行 `名称: 内容` 或 `名称：内容`）；识别 `「…」`／`${…}` 仅去除外层字符，不求值。过期行返回 `{draft: null}`，非法索引或调用方传来的任意文本拒绝。调用不会写草稿、发消息、推进回合或结算；宿主不得把展示候选文本说成已发送。
 
 对于用 `$('body').load(...)` 加载外部 HTTPS 网页的旧开场，KT 可识别这一类原作者声明。导入、预览和开局都不执行加载代码、不请求外部 HTML，也不把静态脚本模块的下载许可用于网页。
 

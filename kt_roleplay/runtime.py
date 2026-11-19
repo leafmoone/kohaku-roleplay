@@ -34,7 +34,7 @@ from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, L
 from .legacy_web import (LEGACY_MESSAGE_EVENT_LIMIT, LEGACY_MESSAGE_SLOT, LegacyMessageAnchor, LegacyMessageLocator,
                          LegacyOpeningState, LegacyReplyCapture, LegacyReplyState, OpeningCounterGrant, OpeningCounterWrite,
                          completed_legacy_message_anchor, has_legacy_message_slot, has_mvu_status_adapter, legacy_web_message,
-                         mvu_reply_has_body, selected_message_values)
+                         legacy_slot_options, mvu_reply_has_body, selected_message_values)
 from .novel import Outcome, SceneError, Story
 from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields
 from .state_tool import SetCardState
@@ -125,6 +125,10 @@ class MvuSelection(Arguments):
 class LegacyMessageSlotRequest(Arguments):
     panelScope: str = Field(min_length=1, max_length=256)
     locator: LegacyMessageLocator
+
+
+class LegacyMessageOptionRequest(LegacyMessageSlotRequest):
+    optionIndex: int = Field(ge=0, lt=8)
 
 
 class PanelSelection(Arguments):
@@ -386,26 +390,41 @@ class RoleplayPlugin(BasePlugin):
         events = await run(recent, binding.agent_name, limit=LEGACY_MESSAGE_EVENT_LIMIT)
         return completed_legacy_message_anchor(reply, events) if still_current() else None
 
-    async def _legacy_message_slot(self, request: LegacyMessageSlotRequest) -> dict:
+    async def _resolve_message_slot(self, request: LegacyMessageSlotRequest) -> tuple[TavernSession, LegacyReplyState] | None:
         if request.panelScope != self._web_panel_scope:
             raise OwnerArgumentError('The message slot session changed')
         record = self._record()
         play = TavernSession.model_validate(record) if record is not None else None
         if not play or not play.web_panel or not play.web_panel_ready or not play.legacy_opening_web:
-            return {'slot': None}
+            return None
         legacy, reply = play.legacy_opening_web, play.legacy_reply_web
         if not legacy.message_slot_enabled or reply is None or not has_legacy_message_slot(reply.text):
-            return {'slot': None}
+            return None
         locator = request.locator
         if (reply.turn, reply.branch) != (locator.turn, locator.branchId):
-            return {'slot': None}
+            return None
         if await self._web_message_anchor(play, locator.turn) != locator.model_dump() or self._record() != record:
+            return None
+        return play, reply
+
+    async def _legacy_message_slot(self, request: LegacyMessageSlotRequest) -> dict:
+        if (resolved := await self._resolve_message_slot(request)) is None:
             return {'slot': None}
+        play, reply = resolved
         # Only the compatibility message_id (the tavern turn) goes into the
         # author frame. The scope, branch and two physical event IDs stay with the owner.
-        selected = play.mvu_public if legacy.mvu_read_enabled else []
+        selected = play.mvu_public if play.legacy_opening_web.mvu_read_enabled else []
         return {'slot': LEGACY_MESSAGE_SLOT, **play.web_panel.model_dump(),
                 'message': legacy_web_message(reply.turn, reply.text, reply.values, selected)}
+
+    async def _legacy_message_option(self, request: LegacyMessageOptionRequest) -> dict:
+        if (resolved := await self._resolve_message_slot(request)) is None:
+            return {'draft': None}
+        _, reply = resolved
+        options = legacy_slot_options(reply.text)
+        if request.optionIndex >= len(options):
+            raise OwnerArgumentError('Choose a listed option from the current message')
+        return {'draft': options[request.optionIndex]}
 
     async def on_unload(self) -> None:
         if self._legacy_reply_capture is not None:
@@ -767,6 +786,8 @@ class RoleplayPlugin(BasePlugin):
                 return cards_view(library_dir())
             if action == 'card_web_message_slot' and self.mode == 'tavern':
                 return await self._legacy_message_slot(LegacyMessageSlotRequest.model_validate(args))
+            if action == 'card_web_message_option' and self.mode == 'tavern':
+                return await self._legacy_message_option(LegacyMessageOptionRequest.model_validate(args))
             if action in ('card_web_panel', 'card_web_state', 'card_web_gameplay', 'card_web_plugin_request',
                           'card_web_message_anchor', 'card_web_mvu_counter') and self.mode == 'tavern':
                 record = self._record()

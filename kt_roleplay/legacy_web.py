@@ -197,12 +197,47 @@ class LegacyMessageLocator(BaseModel):
         return self
 
 
-def has_legacy_message_slot(text: str) -> bool:
+def _legacy_slot_block(text: str) -> str | None:
     # The public adapter targets an explicit author options block, never generic prose.
     prefix, start, tail = text.partition('<roleplay_options>')
     content, end, suffix = tail.partition('</roleplay_options>')
-    return bool(start and end and content.strip() and '<roleplay_options>' not in content + suffix
-                and '</roleplay_options>' not in prefix + suffix)
+    if (not start or not end or '<roleplay_options>' in content or '<roleplay_options>' in suffix
+            or '</roleplay_options>' in prefix or '</roleplay_options>' in suffix):
+        return None
+    return content.strip() or None
+
+
+def has_legacy_message_slot(text: str) -> bool:
+    return _legacy_slot_block(text) is not None
+
+
+def legacy_slot_options(text: str) -> list[dict[str, str]]:
+    block = _legacy_slot_block(text)
+    if block is None:
+        return []
+    lines = block.splitlines()
+    if lines[0].startswith('```'):
+        if lines[-1] != '```' or len(lines) < 3:
+            return []
+        lines = lines[1:-1]
+    options: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for line in lines:
+        if not line.strip():
+            continue
+        parts = re.split(r'[:：]', line, maxsplit=1)
+        if len(parts) != 2 or len(options) >= 8:
+            return []
+        label, draft = (part.strip() for part in parts)
+        if draft.startswith('${') and draft.endswith('}'):
+            draft = draft[2:-1].strip()
+        elif draft.startswith('「') and draft.endswith('」'):
+            draft = draft[1:-1].strip()
+        if not 0 < len(label) <= 80 or label in seen or not 0 < len(draft) <= 1000:
+            return []
+        seen.add(label)
+        options.append({'label': label, 'text': draft})
+    return options
 
 
 def completed_legacy_message_anchor(reply: LegacyReplyState, events: list[dict]) -> LegacyMessageAnchor | None:
