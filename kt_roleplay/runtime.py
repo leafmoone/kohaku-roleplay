@@ -764,7 +764,14 @@ class RoleplayPlugin(BasePlugin):
                 if agent is not None and agent.is_processing:
                     raise OwnerArgumentError("Wait for the session to become idle before setting its opening")
                 choice = Play.model_validate(args)
-                card = get_card(library_dir(), choice.cardId, with_scripts=True)
+                scope = self._web_panel_scope
+
+                def check_opening_target() -> None:
+                    if scope != self._web_panel_scope or self._record() is not None or (agent is not None and agent.is_processing):
+                        raise OwnerArgumentError('The session changed before its opening could be set')
+
+                card = await to_thread(get_card, library_dir(), choice.cardId, with_scripts=True)
+                check_opening_target()
                 if pack := card.gameplay_pack:
                     tavern_creature(pack)
                     provider = agent.plugins.get_plugin(pack.name) if agent and agent.plugins.is_enabled(pack.name) else None
@@ -803,8 +810,7 @@ class RoleplayPlugin(BasePlugin):
                                     and card_scripts_default(library_dir()))
                 if enable_requested and script_host_ok and mvu and mvu.values:
                     scripts = await to_thread(link_card_scripts, library_dir(), choice.cardId, scripts)
-                    if self._record() is not None or (agent is not None and agent.is_processing):
-                        raise OwnerArgumentError("The session changed before its opening could be set")
+                    check_opening_target()
                 script_card_ok = bool(mvu and mvu.values and any(s.enabled and not s.issue for s in scripts))
                 if choice.enableCardScripts and not script_host_ok:
                     raise OwnerArgumentError(_SCRIPT_CLOCK_UNAVAILABLE)
@@ -824,8 +830,7 @@ class RoleplayPlugin(BasePlugin):
                         mvu = mvu.model_copy(update={'values': values})
                     except (ValueError, RecursionError):
                         mvu = mvu.model_copy(update={'issues': {**mvu.issues, 'invalid_opening_update': 1}})
-                    if self._record() is not None or (agent is not None and agent.is_processing):
-                        raise OwnerArgumentError('The session changed before its opening could be set')
+                    check_opening_target()
                 web_panel, legacy_state = card.web_panel, None
                 if web_panel is None:
                     rule = next((row for row in card.legacy_web_rules if row.marker in opening), None)

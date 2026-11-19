@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from typing import TypedDict
 from uuid import uuid4
 
-from .cards import ParsedCard, card_format, parse_card
+from .cards import ParsedCard, card_format, parse_card, read_card_scripts
 
 
 class CardSummary(TypedDict):
@@ -69,7 +69,9 @@ def get_card(directory: Path, key: str, *, with_scripts: bool = False) -> Parsed
         missing = {'scripts', 'web_panel', 'legacy_web_rules'} - card.model_fields_set
         if any('buttons_enabled' not in script.model_fields_set for script in card.scripts):
             missing.add('scripts')
-        if missing:
+        if missing == {'scripts'}:
+            card = card.model_copy(update={'scripts': read_card_scripts(original_card(directory, key))})
+        elif missing:
             # Recover new projections from older imports without changing their bytes or library rows.
             original = parse_card(original_card(directory, key))
             card = card.model_copy(update={field: getattr(original, field) for field in missing})

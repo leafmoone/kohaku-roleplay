@@ -87,7 +87,7 @@ class ParsedCard(BaseModel):
         return read_worldbook(self.book) if self.book is not None else None
 
 
-def _png_payload(raw: bytes) -> tuple[bytes, bytes]:
+def _png_payload(raw: bytes, *, with_portrait: bool = True) -> tuple[bytes, bytes | None]:
     try:
         with Image.open(BytesIO(raw), formats=("PNG",)) as probe:
             if probe.width * probe.height > 16_000_000:
@@ -100,6 +100,8 @@ def _png_payload(raw: bytes) -> tuple[bytes, bytes]:
             if not encoded:
                 raise CardError("PNG has no character card metadata (ccv3 or chara)")
             payload = base64.b64decode(encoded, validate=True)
+            if not with_portrait:
+                return payload, None
             image.thumbnail((480, 640))
             portrait = image.convert("RGBA")
             portrait.info.clear()
@@ -130,6 +132,20 @@ def card_document(payload: bytes) -> tuple[Literal[1, 2, 3], dict, dict]:
     if not isinstance(data, dict):
         raise CardError("Card data must be an object")
     return version, envelope, data
+
+
+def read_card_scripts(raw: bytes) -> list[CardScript]:
+    """Read the script projection of a previously imported original without rebuilding media."""
+    fmt = card_format(raw)
+    if fmt == 'charx':
+        with open_charx(raw) as (archive, members):
+            payload = read_charx_card(archive, members)
+    elif fmt == 'png':
+        payload, _ = _png_payload(raw, with_portrait=False)
+    else:
+        payload = raw
+    _, _, data = card_document(payload)
+    return inspect_card_scripts(data.get('extensions'))
 
 
 def parse_card(raw: bytes) -> ParsedCard:
