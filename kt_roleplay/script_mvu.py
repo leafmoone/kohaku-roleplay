@@ -60,8 +60,7 @@ def execute_update(payload: dict) -> dict:
                 if name == _ENDED:
                     detail['forwardDisplay'] = number < len(listeners[name])
                 call(name, json.dumps(state, allow_nan=False), json.dumps(detail, allow_nan=False))
-                # Both state and the optional transient display/command projection cross here.
-                result = read_result(context, deadline, limit=144 * 1024)
+                result = read_result(context, deadline)
                 if result.get('status') != 'ok':
                     raise VmFailure('script_error')
                 state = validated_script_values(state, result['values'])

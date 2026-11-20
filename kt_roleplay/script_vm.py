@@ -5,9 +5,8 @@ import sys
 from time import perf_counter
 
 _MAX_SCHEMA_INPUT = 768 * 1024
-_MAX_RESULT = 64 * 1024
-# Canonical MVU, one derived string and the response envelope, all UTF-8.
-OPENING_SCHEMA_RESULT_BYTES = _MAX_RESULT + 4 * 1024
+# Bound the specialized opening-schema result separately from ordinary state snapshots.
+OPENING_SCHEMA_RESULT_BYTES = 68 * 1024
 # QuickJS may spell each number less compactly than the Python wire encoder.
 _MAX_SCHEMA_INTERMEDIATE_BYTES = 128 * 1024
 
@@ -192,10 +191,10 @@ def load_context(payload, deadline):
     return context
 
 
-def read_result(context, deadline, limit=_MAX_RESULT):
+def read_result(context, deadline):
     drain(context, deadline)
     result = context.eval('__kt_card_worker.result();')
-    if not isinstance(result, str) or len(result.encode('utf-8')) > limit:
+    if not isinstance(result, str):
         raise VmFailure('script_limit')
     return json.loads(result)
 

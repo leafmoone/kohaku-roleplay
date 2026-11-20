@@ -47,8 +47,7 @@ def _worker_result(data: dict, *, mvu: bool = False, schema: bool = False) -> di
         argv = [sys.executable, '-I', '-B', str(worker)] + (['mvu'] if mvu else ['schema'] if schema else [])
         process = subprocess.run(argv, cwd=worker.parent, env=env,
                                  input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3.0 if mvu else 2.0)
-        output_limit = OPENING_SCHEMA_RESULT_BYTES if schema else (256 if mvu else 64) * 1024
-        if process.returncode or len(process.stdout) > output_limit:
+        if process.returncode or (schema and len(process.stdout) > OPENING_SCHEMA_RESULT_BYTES):
             raise CardScriptError("Card script worker stopped without a result")
         result = json.loads(process.stdout)
     except subprocess.TimeoutExpired as exc:
