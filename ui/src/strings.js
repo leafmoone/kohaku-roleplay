@@ -505,6 +505,10 @@ const EN_FALLBACK = {
   miniPanelNoPublicSummary: "No public summary variables or panels projected yet.",
   miniPanelInactiveHint: "No active tavern or novel gameplay session. Open Role to configure or start a session.",
   messageSlotPreviewBadge: "Option preview (not sent)",
+  playWindowMoveLabel: "Drag window",
+  playWindowResizeLabel: "Resize window",
+  playWindowExpandBtn: "Expand window",
+  playWindowRestoreBtn: "Restore window",
 };
 
 function interpolate(template, params = {}) {

@@ -9,6 +9,7 @@ import {
 
 import { CardWebPanel } from "./CardWebPanel.js";
 import { normalizeStateFields, projectNovelView } from "./helpers.js";
+import { usePlayWindow } from "./playWindow.js";
 import { useRoleplayText } from "./strings.js";
 
 const MAX_FALLBACK_SUMMARY_ITEMS = 8;
@@ -259,6 +260,15 @@ export const RoleplayMiniPanel = {
     const session = useSession();
     const creature = useCreature();
     const t = useRoleplayText();
+
+    const rootEl = ref(null);
+    const {
+      isPhone: playWindowIsPhone,
+      isExpanded: playWindowExpanded,
+      toggleWindowExpand,
+      startMove: startPlayWindowMove,
+      startResize: startPlayWindowResize,
+    } = usePlayWindow(rootEl);
 
     const summaryExpanded = ref(false);
 
@@ -556,6 +566,12 @@ export const RoleplayMiniPanel = {
     return {
       owner,
       t,
+      rootEl,
+      playWindowIsPhone,
+      playWindowExpanded,
+      toggleWindowExpand,
+      startPlayWindowMove,
+      startPlayWindowResize,
       state,
       mode,
       active,
@@ -584,7 +600,47 @@ export const RoleplayMiniPanel = {
     };
   },
   template: `
-    <div class="ktrp-mini-panel" data-testid="kt-rp-mini-panel">
+    <div
+      ref="rootEl"
+      class="ktrp-mini-panel"
+      :data-window-expanded="String(playWindowExpanded)"
+      data-testid="kt-rp-mini-panel"
+    >
+      <div class="ktrp-play-window-bar" data-testid="kt-rp-mini-head">
+        <button
+          v-if="!playWindowIsPhone"
+          type="button"
+          class="ktrp-play-move-handle"
+          :title="t('playWindowMoveLabel')"
+          :aria-label="t('playWindowMoveLabel')"
+          data-testid="kt-rp-play-move-handle"
+          @pointerdown="startPlayWindowMove"
+        >
+          <span class="ktrp-play-move-grip" aria-hidden="true">⋮⋮</span>
+          <strong
+            v-if="isActiveTavern"
+            class="ktrp-mini-char-name"
+            data-testid="kt-rp-mini-char-name"
+          >{{ state.name }}</strong>
+          <span v-else>{{ t('playWindowMoveLabel') }}</span>
+        </button>
+        <strong
+          v-else-if="isActiveTavern"
+          class="ktrp-mini-char-name"
+          data-testid="kt-rp-mini-char-name"
+        >{{ state.name }}</strong>
+        <span v-else class="ktrp-muted" />
+        <ActionButton
+          size="sm"
+          variant="ghost"
+          :aria-expanded="String(playWindowExpanded)"
+          data-testid="kt-rp-play-window-toggle"
+          @click="toggleWindowExpand"
+        >
+          {{ playWindowExpanded ? t('playWindowRestoreBtn') : t('playWindowExpandBtn') }}
+        </ActionButton>
+      </div>
+
       <div
         v-if="owner.status.value === 'error' || owner.status.value === 'absent'"
         class="ktrp-banner ktrp-banner--error"
@@ -605,12 +661,6 @@ export const RoleplayMiniPanel = {
       </p>
 
       <template v-else-if="isActiveTavern">
-        <div class="ktrp-mini-head" data-testid="kt-rp-mini-head">
-          <div class="ktrp-mini-title-row">
-            <strong class="ktrp-mini-char-name" data-testid="kt-rp-mini-char-name">{{ state.name }}</strong>
-          </div>
-        </div>
-
         <div
           v-if="summaryItems.length"
           class="ktrp-mini-section"
@@ -822,6 +872,16 @@ export const RoleplayMiniPanel = {
           <p class="ktrp-muted">{{ t('miniPanelInactiveHint') }}</p>
         </div>
       </template>
+
+      <button
+        v-if="!playWindowIsPhone"
+        type="button"
+        class="ktrp-play-resize-handle"
+        :title="t('playWindowResizeLabel')"
+        :aria-label="t('playWindowResizeLabel')"
+        data-testid="kt-rp-play-resize-handle"
+        @pointerdown="startPlayWindowResize"
+      />
     </div>
   `,
 };

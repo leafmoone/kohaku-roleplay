@@ -970,6 +970,7 @@ div.absolute:has(> div > section[data-test="v2-widget-ext:kohaku-roleplay/gamepl
 }
 
 section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"] {
+  position: relative;
   height: auto !important;
   min-height: 0 !important;
   max-height: min(38rem, calc(100vh - 7.5rem));
@@ -980,7 +981,53 @@ section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"] > header button.i-ca
   display: none !important;
 }
 
+section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"][data-ktrp-custom-geom="true"] .ktrp-mini-panel {
+  height: 100%;
+  max-height: none;
+}
+
+section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"][data-ktrp-expanded="true"] .ktrp-mini-panel .ktrp-web-panel-stage {
+  height: clamp(18rem, 48vh, 32rem);
+}
+
+section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"][data-ktrp-expanded="true"] .ktrp-mini-panel .ktrp-web-panel-stage.is-expanded {
+  height: clamp(24rem, 62vh, 42rem);
+}
+
+section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"][data-ktrp-interacting="true"],
+section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"][data-ktrp-interacting="true"] * {
+  user-select: none !important;
+}
+
+section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"][data-ktrp-interacting="true"] iframe {
+  pointer-events: none !important;
+}
+
+[data-test="phone-widget-ext:kohaku-roleplay/gameplay"]:not([data-ktrp-expanded="true"]) > section {
+  height: 55dvh !important;
+  max-height: 55dvh !important;
+}
+
+[data-test="phone-widget-ext:kohaku-roleplay/gameplay"][data-ktrp-expanded="true"] > section {
+  height: 92dvh !important;
+  max-height: 92dvh !important;
+}
+
+[data-test="phone-widget-ext:kohaku-roleplay/gameplay"] .ktrp-mini-panel {
+  height: 100%;
+  max-height: none;
+}
+
+[data-test="phone-widget-ext:kohaku-roleplay/gameplay"][data-ktrp-expanded="true"] .ktrp-mini-panel .ktrp-web-panel-stage {
+  height: 22rem;
+}
+
+[data-test="phone-widget-ext:kohaku-roleplay/gameplay"][data-ktrp-expanded="true"] .ktrp-mini-panel .ktrp-web-panel-stage.is-expanded {
+  height: 30rem;
+}
+
 .ktrp-mini-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -989,6 +1036,7 @@ section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"] > header button.i-ca
   overflow-y: auto;
   color: var(--color-text);
   font-size: var(--kt-fs-xs, 0.8125rem);
+  box-sizing: border-box;
 }
 
 .ktrp-mini-panel .ktrp-web-panel-stage {
@@ -997,6 +1045,72 @@ section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"] > header button.i-ca
 
 .ktrp-mini-panel .ktrp-web-panel-stage.is-expanded {
   height: 24rem;
+}
+
+.ktrp-play-window-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.ktrp-play-move-handle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.15rem 0.35rem;
+  border: 1px dashed var(--color-border);
+  border-radius: 0.35rem;
+  background: var(--color-surface-alt);
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--kt-fs-2xs, 0.72rem);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.ktrp-play-move-handle:active {
+  cursor: grabbing;
+}
+
+.ktrp-play-move-grip {
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+.ktrp-play-resize-handle {
+  position: sticky;
+  bottom: 0;
+  align-self: flex-end;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-top: auto;
+  margin-right: -0.35rem;
+  margin-bottom: -0.25rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: nwse-resize;
+  touch-action: none;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.ktrp-play-resize-handle::after {
+  content: "";
+  display: block;
+  width: 0.65rem;
+  height: 0.65rem;
+  margin: 0.25rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  opacity: 0.7;
 }
 
 .ktrp-mini-head {
