@@ -1,10 +1,10 @@
 """One explicitly approved schema-derived string for the legacy opening snapshot."""
 
 from pathlib import Path
-from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from .author_opening import OpeningSchemaGrant
 from .card_scripts import CardScript
 from .module_library import module_sources
 from .module_linker import ModuleLinkError, _bundle
@@ -40,24 +40,12 @@ export function parseRegistered(input) {
 '''
 
 
-class OpeningSchemaGrant(BaseModel):
-    model_config = ConfigDict(strict=True, extra='forbid')
-    profile: Literal['mvu-zod-derived-v1']
-    scriptId: str = Field(min_length=1, max_length=120)
-    outputPath: list[str] = Field(min_length=2, max_length=16)
-
-    @model_validator(mode='after')
-    def _path(self) -> 'OpeningSchemaGrant':
-        if any(not part or len(part) > 160 or part in ('__proto__', 'constructor', 'prototype') for part in self.outputPath):
-            raise ValueError('Choose a bounded new derived field within an existing variable object')
-        return self
-
-
 class OpeningSchemaSnapshot(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
     grant: OpeningSchemaGrant
     code: str = Field(min_length=1, max_length=_MAX_BUNDLE)
     value: str = Field(min_length=1, max_length=1024)
+    input_ids: list[str] | None = None  # None keeps legacy API snapshots on the full state.
 
 
 def _one_https_dependency(source: str) -> str:

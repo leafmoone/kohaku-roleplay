@@ -10,6 +10,7 @@ from typing import Literal
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from .author_opening import AuthorOpeningGameplay
 from .card_state import StateField, decode_fields
 from .card_web import WebPanel, read_web_panel
 from .charx import CardMedia, inspect_charx_media, is_charx, open_charx, read_charx_card
@@ -86,6 +87,7 @@ class ParsedCard(BaseModel):
     web_panel: WebPanel | None = None
     legacy_web_rules: list[LegacyWebRule] = Field(default_factory=list)
     legacy_remote_opening: LegacyRemoteOpening | None = None
+    opening_gameplay: AuthorOpeningGameplay | None = None
 
     @cached_property
     def lore(self) -> LoreBook | None:
@@ -208,11 +210,24 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
         portrait = base64.b64decode(cover.data)
     openings = [fields.first_mes, *fields.alternate_greetings]
     legacy_web, remote_opening = opening_web_rules(extensions, openings, warnings)
+    opening_gameplay = None
+    if 'openingGameplay' in namespace:
+        try:
+            opening_gameplay = AuthorOpeningGameplay.model_validate(namespace['openingGameplay'])
+            if opening_gameplay.greetingIndex >= len(openings):
+                raise ValueError('The declared greeting does not exist')
+            _, authored_page = opening_web_rules(extensions, [openings[opening_gameplay.greetingIndex]], warnings)
+            if authored_page is None or any(rule.marker in openings[opening_gameplay.greetingIndex] for rule in legacy_web):
+                raise ValueError('No recognized remote page for the selected opening')
+            remote_opening = authored_page
+        except ValueError:
+            opening_gameplay = None
+            warnings.append('Opening gameplay declaration is invalid; normal text and supported card content can still be used.')
     card = ParsedCard(version=version, fields=fields, book=book, warnings=warnings,
                       portrait=portrait, state_fields=definitions, portraits=portraits, source_format=fmt,
                       native_panels=panels, invalid_native_panels=bad_panels,
                       scripts=inspect_card_scripts(extensions), gameplay_pack=pack, legacy_web_rules=legacy_web,
-                      legacy_remote_opening=remote_opening)
+                      legacy_remote_opening=remote_opening, opening_gameplay=opening_gameplay)
     if book is not None:
         _ = card.lore
     return card

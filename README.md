@@ -179,6 +179,8 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 作者框只在当前选定快照确实有已公开数据时提供 `waitGlobalInitialized('Mvu')` 和 `getVariables({type: 'message', message_id: …})`。前者报告 KT 的只读子集就绪；后者返回一份 `{stat_data}` 副本，只接受选中的消息编号、`-1`、`'latest'` 或省略 `message_id`（都指这份快照，不会改选其他楼层）。撤回公开会关闭旧页面，重新打开只能读取仍获准的数据。
 
+卡作者可在 `data.extensions["kohaku-roleplay"].openingGameplay` 放 `{ "greetingIndex": 0, "publicPaths": [["进度"]], "counter": {"path": ["进度"], "minimum": 0, "maximum": 10} }`，为一个已有可离线链接网页的开场声明公开 MVU 路径和可选单步操作。普通开局自动采用声明，不需要玩家填写路径、单独公开变量或再启用。可选的 `schema` 使用下文相同的 `profile`、`scriptId`、`outputPath`；它只在全部输入由作者列为公开时运行所选结构脚本，不同时运行其他兼容脚本。资源缺失或声明无法生效时仍可文本开局，查看 `webPanelIssue`／`openingGameplayIssue`。只影响新开的这张卡；不反推原有脚本的权限，不改旧档。
+
 可信宿主还可在新局通过 `openingMvuCounter: {path: ["计数"], minimum: 0, maximum: 100}` 授予已初始化的一个整数计数器（需同时允许上述网页读取，并公开该路径）。这是 `card_web_mvu_counter` 的宿主管理接口：只接受本局 `panelScope`、开场 `messageId: 0`、当前 `revision` 和 `expected`，以及范围内单步 `value`。首个正式回合开始后或撤回公开后不能再写；成功回包是已保存的新 revision 和公开快照。它复用已获准的本局 MVU 结算，不执行未批准的作者脚本，也不提供任意路径或整棵变量树写入。只有取得该授权且选中开场的作者框才提供 `updateVariablesWith(fn, {type: 'message'})`。`fn` 必须同步，只拿到当前公开数据的副本；桥只提取获准整数的单步变化，忽略其他字段，不变时不提交。界面更新以宿主的成功回执为准。无授权、选其他消息或撤回公开后，不开放此写入。
 
 实验性 `openingMvuSchema: {profile: "mvu-zod-derived-v1", scriptId: "<原声明的脚本 ID>", outputPath: ["角色", "$阶段"]}` 只用于上述开场计数，需要显式 `enableCardScripts: false`。先在卡库确认该启用脚本唯一声明的编译模块，开局再选定脚本和**一个**授权派生的字符串路径。离线链接只兼容该编译模块对 `mvu_zod.js` 的精确已识别注册入口；不运行上游 helper 或其事件。使用本包锁定的 Zod/Lodash，隔离运行原模块的 schema；若未注册、资源缺失、不能生成该字符串，或 schema 还要改别的规范变量，拒绝本次操作，不部分保存。派生字符串和操作结果都可能依赖任一输入，所以只有同一开场快照的所有 schema 输入都已显式公开（包括计数器）时，才下发派生并允许网页计数写入。它不是通用变量写入目标。已接受的计数、派生和版本同档保存，读档不重下载。不自动启用其他作者脚本、端点提示或卡片更新器。
