@@ -84,16 +84,19 @@ def get_card(directory: Path, key: str, *, with_scripts: bool = False) -> Parsed
     if row is None:
         raise CardNotFound(key)
     card = ParsedCard.model_validate_json(row[0])
+    missing = set()
     if with_scripts:
         missing = {'scripts', 'web_panel', 'legacy_web_rules'} - card.model_fields_set
         if any('buttons_enabled' not in script.model_fields_set for script in card.scripts):
             missing.add('scripts')
-        if missing == {'scripts'}:
-            card = card.model_copy(update={'scripts': read_card_scripts(original_card(directory, key))})
-        elif missing:
-            # Recover new projections from older imports without changing their bytes or library rows.
-            original = parse_card(original_card(directory, key))
-            card = card.model_copy(update={field: getattr(original, field) for field in missing})
+    if 'legacy_remote_opening' not in card.model_fields_set:
+        missing.add('legacy_remote_opening')
+    if missing == {'scripts'}:
+        card = card.model_copy(update={'scripts': read_card_scripts(original_card(directory, key))})
+    elif missing:
+        # Recover new projections from older imports without changing their bytes or library rows.
+        original = parse_card(original_card(directory, key))
+        card = card.model_copy(update={field: getattr(original, field) for field in missing})
     return card.model_copy(update={"portrait": row[1], "source_format": card.source_format or card_format(row[2])})
 
 

@@ -23,6 +23,11 @@ from .scene_media import read_scene_media
 from .worldbook import read_worldbook
 from .card_scripts import CardScript, inspect_card_scripts
 
+CARD_EXTENSION_NOTICE = 'Original card extensions are preserved. Supported card scripts can run when enabled for the session.'
+OLD_EXTENSION_NOTICES = frozenset({
+    'Card extensions are retained in the original; script compatibility is opt-in.',
+    'Card extensions are retained in the original; external scripts are not executed.',
+})
 MAX_CARD_BYTES = 12 * 1024 * 1024
 PNG_HEADER = b"\x89PNG\r\n\x1a\n"
 CardFormat = Literal["png", "json", "charx"]
@@ -186,7 +191,7 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
     extensions = data.get("extensions")
     definitions = decode_fields(extensions)
     if extensions and (not isinstance(extensions, dict) or set(extensions) - {"kohaku-roleplay"}):
-        warnings.append("Card extensions are retained in the original; script compatibility is opt-in.")
+        warnings.append(CARD_EXTENSION_NOTICE)
     if data.get("assets") and fmt != "charx":
         warnings.append("V3 assets outside a CHARX archive are retained, not automatically fetched.")
     namespace = extensions.get("kohaku-roleplay", {}) if isinstance(extensions, dict) else {}

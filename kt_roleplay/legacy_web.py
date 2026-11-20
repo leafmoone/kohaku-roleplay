@@ -24,7 +24,8 @@ _REMOTE_BODY_LOAD = re.compile(
     r"""<body>\s*<script>\s*\$\(\s*(?P<target>['"])body(?P=target)\s*\)\.load\(\s*"""
     r"""(?P<source>['"])(?P<url>https://[^\s'"<>\\]+)(?P=source)\s*\)\s*(?:;\s*)?</script>\s*</body>"""
 )
-_REMOTE_PAGE_WARNING = 'A legacy opening page loads external HTML. KT retains the card but does not load this page.'
+OLD_REMOTE_PAGE_WARNING = 'A legacy opening page loads external HTML. KT retains the card but does not load this page.'
+UNSUPPORTED_REMOTE_PAGE_WARNING = 'The card declares an external opening page whose URL or title KT cannot use.'
 _MVU_STATUS_MARKER = '<StatusPlaceHolderImpl/>'
 _MVU_BETA_CDN_PATH = '/gh/MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js'
 _MVU_BETA_RAW_PATH = '/MagicalAstrogy/MagVarUpdate/beta/artifact/bundle.js'
@@ -88,12 +89,12 @@ def opening_web_rules(extensions: object, openings: list[str], warnings: list[st
         html = match['html']
         if not _DOCUMENT.match(html.lstrip()) or not html.rstrip().lower().endswith('</html>'):
             if remote is None and (url := _remote_body_loader_url(html)) is not None:
-                if _REMOTE_PAGE_WARNING not in warnings:
-                    warnings.append(_REMOTE_PAGE_WARNING)
                 try:
                     opening_html_target(url)
                     name.encode('utf-8')
                 except (CardError, UnicodeEncodeError):
+                    if UNSUPPORTED_REMOTE_PAGE_WARNING not in warnings:
+                        warnings.append(UNSUPPORTED_REMOTE_PAGE_WARNING)
                     continue
                 remote = LegacyRemoteOpening(marker=marker, title=name.strip(), url=url)
             continue

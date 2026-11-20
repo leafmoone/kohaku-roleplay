@@ -7,7 +7,7 @@ from typing import Literal, TypedDict
 from urllib.parse import urljoin, urlsplit
 
 from .card_web import WebPanel, _MAX_HTML
-from .cards import ParsedCard
+from .cards import ParsedCard, parse_card
 from .errors import CardError
 from .legacy_web import LegacyRemoteOpening
 from .library import CardNotFound, _open, _open_readonly, get_card
@@ -524,7 +524,11 @@ def opening_module_plan(directory: Path, card_id: str) -> OpeningModulePlan:
         card = db.execute('SELECT card FROM cards WHERE id=?', (card_id,)).fetchone() if 'cards' in tables else None
         if card is None:
             raise CardNotFound(card_id)
-        declared = ParsedCard.model_validate_json(card[0]).legacy_remote_opening
+        parsed = ParsedCard.model_validate_json(card[0])
+        if 'legacy_remote_opening' not in parsed.model_fields_set:
+            raw, = db.execute('SELECT original FROM cards WHERE id=?', (card_id,)).fetchone()
+            parsed = parse_card(raw)
+        declared = parsed.legacy_remote_opening
         if declared is None:
             raise CardError('This card has no declared external opening page')
         entry = db.execute('SELECT source FROM card_opening_pages WHERE card_id=? AND url=?',

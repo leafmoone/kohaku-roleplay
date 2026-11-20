@@ -3,8 +3,10 @@
 import base64
 from pathlib import Path
 
+from .cards import CARD_EXTENSION_NOTICE, OLD_EXTENSION_NOTICES
 from .charx import CardMedia, read_charx_image
 from .errors import CardError
+from .legacy_web import OLD_REMOTE_PAGE_WARNING, UNSUPPORTED_REMOTE_PAGE_WARNING
 from .library import get_card, list_cards, original_card
 from .module_library import saved_modules
 from .opening_page_library import opening_page_snapshot
@@ -23,7 +25,13 @@ def card_detail(directory: Path, key: str) -> dict:
         diagnostics = book.diagnostics()
         summary = {"entryCount": diagnostics["totalEntries"], "scanDepth": book.scan_depth,
                    "tokenBudget": book.token_budget, "diagnostics": diagnostics}
-    return {"id": key, "version": card.version, "fields": card.fields.model_dump(), "warnings": card.warnings,
+    # Translate notices saved by earlier versions without touching the original card or library row.
+    warnings = list(dict.fromkeys(
+        CARD_EXTENSION_NOTICE if notice in OLD_EXTENSION_NOTICES else
+        UNSUPPORTED_REMOTE_PAGE_WARNING if notice == OLD_REMOTE_PAGE_WARNING else notice
+        for notice in card.warnings if notice != OLD_REMOTE_PAGE_WARNING or card.legacy_remote_opening is None
+    ))
+    return {"id": key, "version": card.version, "fields": card.fields.model_dump(), "warnings": warnings,
             "gameplayPack": card.gameplay_pack.model_dump(exclude={'settings'}) if card.gameplay_pack else None,
             'webPanel': {'title': card.web_panel.title} if card.web_panel else None,
             **({'legacyOpeningPanels': [{'title': rule.panel.title, 'marker': rule.marker} for rule in card.legacy_web_rules]}
