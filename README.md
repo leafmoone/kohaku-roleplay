@@ -202,6 +202,12 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 引用私有字段、类型不匹配或未知面板声明会跳过并提示。读取已保存的公开字段，不把面板配置或伏笔写回卡片；不改变普通形象和小说的行为，也不替代聊天框的自由输入。现有正文中的原生选项组件继续可用。
 
+### 酒馆扩展与内嵌玩法包诊断
+
+角色库的 `preview_card_dependencies`、`detail` 和 `prepare_card_assets` 会在 `tavernArtifacts` 列出内嵌的 GameLogic Pack（格式 `1.0`/`1.1`）及 StatusMenu Pack（格式 `1.0`）。它按公开的 registry 和条目标签检查版本、必需资源是否存在及是否重复，不按卡名识别，不执行源码。存在声明但没有可用运行器时返回 `needs_host_adapter`；重复下载普通脚本不会打开这类菜单。资源准备仍会继续缓存其它可用依赖。
+
+目录 owner 的 `preview_tavern_extension({manifest, entry?})` 可只读检查 [SillyTavern UI 扩展](https://docs.sillytavern.app/for-contributors/writing-extensions/) 的 `manifest.json` 对象和可选 JS 入口文本。结果包含 `declaredRequirements`、可静态识别的导入引用和语法诊断。`hostApiUsage: 'not_inspected'` 表示未确认代码实际用到哪些宿主接口；不下载、安装或注册扩展。
+
 ### 给其他卡提供独立玩法包
 
 [进度时钟包](examples/progress-clock/kohaku.yaml)是单独安装的 KT 原生包，不是卡片脚本。用普通 KT 安装流程安装 `examples/progress-clock/` 后，从角色库分别导入[档案室](examples/archive-survey.json)和[渡船](examples/ferry-crossing.json)即可开局；两张卡分别配置四格和三格时钟。它们使用同一个工具，但进度按会话保存。导卡不安装包，也不执行包代码；缺包或版本不匹配时仍可保留和导出卡，开局会解释缺什么。原生包拥有宿主插件权限，只安装你信任的包。

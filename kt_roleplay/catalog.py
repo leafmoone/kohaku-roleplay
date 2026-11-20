@@ -21,6 +21,8 @@ from .opening_page_library import (opening_module_dependencies, opening_module_p
 from .portrait_library import PortraitCopy, portrait_draft, save_portraits_copy
 from .runtime import library_dir
 from .script_dependencies import script_dependencies
+from .tavern_artifacts import inspect_tavern_artifacts
+from .tavern_extension_manifest import inspect_tavern_extension
 from .worldbook_library import (MAX_WORLDBOOK_BYTES, WorldbookNotFound, embedded_worldbook, import_worldbook,
                                 list_worldbooks, original_worldbook, preview_worldbook, remove_worldbook,
                                 set_default_worldbook, worldbook_detail)
@@ -56,6 +58,7 @@ def _card_upload(args: dict[str, object]) -> bytes:
 def _preview_card_dependencies(args: dict[str, object]) -> dict:
     card = parse_card(_card_upload(args))
     return {"name": card.fields.name, "scripts": script_dependencies(card.scripts),
+            "tavernArtifacts": inspect_tavern_artifacts(card.book),
             **({"remoteOpeningPage": page.model_dump()} if (page := card.legacy_remote_opening) else {})}
 
 
@@ -110,6 +113,10 @@ class CardCatalog(UIOwnerMixin):
                 state = await self.ui_state(context)
                 self.ui_emit("state", state)
                 return state
+            if action == 'preview_tavern_extension':
+                if 'manifest' not in args or set(args) - {'manifest', 'entry'}:
+                    raise OwnerArgumentError('Provide a SillyTavern manifest and, optionally, its JavaScript entry')
+                return await asyncio.to_thread(inspect_tavern_extension, args['manifest'], args.get('entry'))
             if action == "preview_card_dependencies":
                 if set(args) != {"data"}:
                     raise OwnerArgumentError("Expected only the card file for dependency preview")

@@ -8,6 +8,7 @@ from .library import get_card, original_card
 from .module_library import module_sources, save_discovered_module, saved_modules
 from .module_linker import RETRYABLE_MODULE_ISSUES, ModuleLinkError, _virtual_graph
 from .opening_page_library import opening_module_plan, opening_page_snapshot, prepare_opening_assets
+from .tavern_artifacts import artifact_issue, inspect_tavern_artifacts
 
 
 def prepare_card_assets(directory: Path, card_id: str) -> dict:
@@ -47,7 +48,11 @@ def prepare_card_assets(directory: Path, card_id: str) -> dict:
                     url, lambda: save_discovered_module(directory, card_id, url), 'script'))
             except (CardError, ModuleLinkError) as exc:
                 issues.append({'kind': 'script', 'id': script.id, 'message': str(exc)})
+    artifacts = inspect_tavern_artifacts(card.book)
+    issues.extend({'kind': 'runtime', 'id': item['id'] or item['kind'], 'message': artifact_issue(item)}
+                  for item in artifacts)
     return {'modules': saved_modules(directory, card_id),
+            'tavernArtifacts': artifacts,
             'openingPage': opening_page_snapshot(directory, card_id) if page else None,
             'openingPlan': opening_module_plan(directory, card_id) if page else None,
             'issues': issues}

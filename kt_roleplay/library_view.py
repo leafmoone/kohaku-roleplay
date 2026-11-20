@@ -11,6 +11,7 @@ from .library import get_card, list_cards, original_card
 from .module_library import saved_modules
 from .opening_page_library import opening_page_snapshot
 from .script_dependencies import script_dependencies
+from .tavern_artifacts import inspect_tavern_artifacts
 
 
 def cards_view(directory: Path) -> dict:
@@ -34,6 +35,7 @@ def card_detail(directory: Path, key: str) -> dict:
     return {"id": key, "version": card.version, "fields": card.fields.model_dump(), "warnings": warnings,
             "gameplayPack": card.gameplay_pack.model_dump(exclude={'settings'}) if card.gameplay_pack else None,
             'webPanel': {'title': card.web_panel.title} if card.web_panel else None,
+            'tavernArtifacts': inspect_tavern_artifacts(card.book),
             **({'legacyOpeningPanels': [{'title': rule.panel.title, 'marker': rule.marker} for rule in card.legacy_web_rules]}
                if card.legacy_web_rules else {}),
             **({'remoteOpeningPage': {**page.model_dump(), 'snapshot': opening_page_snapshot(directory, key)}}
