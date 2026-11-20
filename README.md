@@ -151,7 +151,7 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 可信 owner 的 `card_web_message_option({panelScope, locator, optionIndex})` 可为当前消息核对一条选项并返回待展示的纯文本 `{draft: {label, text}}`。只认该成功回复中合法选项块的本地零基索引（最多八项，每行 `名称: 内容` 或 `名称：内容`）；识别 `「…」`／`${…}` 仅去除外层字符，不求值。过期行返回 `{draft: null}`，非法索引或调用方传来的任意文本拒绝。调用不会写草稿、发消息、推进回合或结算；宿主不得把展示候选文本说成已发送。
 
-对于用 `$('body').load(...)` 加载外部 HTTPS 网页的旧开场，KT 可识别这一类原作者声明。导入、预览和开局都不执行加载代码或请求外部 HTML。目录 owner 的 `prepare_card_assets({id})` 一次准备这张卡已启用的兼容脚本与开场页所需的静态资源；依据源码遍历可识别的静态依赖，不运行任何脚本。回执分别列出 `modules`、`openingPage`、`openingPlan` 和 `issues`。已保存的完整 URL 原样复用；个别下载失败时仍保存其他可用依赖，只需重试缺失项。保留原有单项接口供诊断和旧客户端使用。
+对于用 `$('body').load(...)` 加载外部 HTTPS 网页的旧开场，KT 可识别这一类原作者声明。卡库的「准备卡片资源」可以在导入时使用，也可以在选中已入库的卡后使用。它调用 `prepare_card_assets({id})` 一次准备兼容开场页及卡片启用脚本的静态依赖，不运行脚本；只预览、直接入库或直接开局不会触发下载。回执分别列出 `modules`、`openingPage`、`openingPlan` 和 `issues`。已保存的完整 URL 原样复用；个别下载失败时仍保存其他可用依赖，重试在同一卡片补缺，不会重复导入。原有单项接口留给诊断和旧客户端。
 
 目录 owner 的 `preview_card_dependencies` 可列出一个符合条件的 `remoteOpeningPage`（`title`、`marker`、`url`），不会下载。只有单独明确确认，才可通过 `confirm_card_opening_page` 传入已入库的 `id` 和完全一致的 `url`，取得 `{openingPage: {url, size}}`。来源限公网 HTTPS 443，路径不得含 `.`／`..` 路径段，不跟重定向；响应限无压缩的 UTF-8 `text/html`，最多 256 KiB。副本按卡保存，详情的 `remoteOpeningPage.snapshot` 可检查是否保存；再次确认已保存的入口直接返回同一份副本。确认不改原卡，不下载页面引用的其他资源，也不会运行网页。此前已入库但缺这份元数据的原件需重新导入。
 
@@ -163,7 +163,7 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 `preview_card_opening_module_plan` 只接收卡片 `id`，返回 `{url, status, saved, pending}`。其中 `saved` 列出本卡已保存模块的地址和字节数，`pending` 列出当前可逐项确认的 `{url, parentUrl}`；入口直接依赖的 `parentUrl` 为 `null`（确认时省略该字段）。只有父模块已保存，才列出它声明的待确认子模块。`status` 区分入口未缓存、自包含、缺模块、静态图已完整、额外资源不支持、入口或声明不支持。预览不请求、不离线链接、不运行代码；`static_graph_complete` 不等于网页一定可打开或作者玩法已适配。
 
-仅新开局选到含该标记的开场、且没有适用的 CHARX 或卡内页面时，才从本地缓存快照自包含的外链入口。页面和开场照旧只读，随本局存档；后来缓存或删除库卡不改旧局。未确认、需要外部资源、或入口形式暂不支持时，酒馆正常开局，owner 分别报告 `entry_unconfirmed`、`entry_needs_resources` 或 `entry_unsupported`，不提供面板。这里检查的是页面声明的资源和脚本依赖，不替代浏览器隔离，也不保证任意旧网页可运行。卡库选中有此声明的卡片后，在「外部开场网页」区分别确认 HTML 和每个待确认模块；子模块会标明父地址。可跳过，不影响文本开局。确认成功但清单刷新失败时，「重试」只重新读取清单，不再提交下载。
+仅新开局选到含该标记的开场、且没有适用的 CHARX 或卡内页面时，才从本地缓存快照自包含的外链入口。页面和开场照旧只读，随本局存档；后来缓存或删除库卡不改旧局。未确认、需要外部资源、或入口形式暂不支持时，酒馆正常开局，owner 分别报告 `entry_unconfirmed`、`entry_needs_resources` 或 `entry_unsupported`，不提供面板。这里检查的是页面声明的资源和脚本依赖，不替代浏览器隔离，也不保证任意旧网页可运行。选中的卡有可准备的资源时，卡库会显示一键准备入口及下载诊断；可跳过准备，直接文本开局。已经准备过的资源不需要在开局时再次勾选。
 
 新局默认使用本卡已缓存且完整的静态开场模块图，不需要为同一份本地内容再勾选一次。接口仍可传 `enableOpeningModules: false` 显式关闭；该默认与兼容卡脚本的设置无关。该方式只支持一个可识别的内联模块脚本，不支持图片、样式表或动态模块等额外资源；已安装 Node.js 和包内 Rolldown 时，KT 离线链接模块，将结果作为本局只读网页快照，玩家仍要在 Dock 中显式打开才运行。依赖未齐、入口不支持或无法链接时保留正常文本开场，不回填旧局。原开场 HTML 和模块缓存仍按原字节保存。
 

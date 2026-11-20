@@ -101,6 +101,23 @@ function collectEligibleHttpsUrls(normalizedScripts) {
   return urls;
 }
 
+function normalizeAssetIssues(rawIssues) {
+  if (!Array.isArray(rawIssues)) return [];
+  return rawIssues
+    .filter(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        typeof item.message === "string" &&
+        item.message.trim(),
+    )
+    .map((item) => ({
+      kind: typeof item.kind === "string" ? item.kind : "asset",
+      id: typeof item.id === "string" ? item.id : "",
+      message: item.message.trim(),
+    }));
+}
+
 export const CardLibraryView = {
   name: "RoleplayCardLibraryView",
   components: {
@@ -147,24 +164,20 @@ export const CardLibraryView = {
     const selectedEmbeddedEntryIndex = ref(null);
     let embeddedSeq = 0;
 
-    // Pre-import & existing card script module dependency confirmation state
+    // Pre-import & existing card asset preparation state
     const pendingImportDeps = ref(null);
-    const pendingImportSelectedUrls = ref([]);
     const pendingImportedCardRefresh = ref(null);
-    const detailSelectedModuleUrls = ref([]);
-    const confirmingDetailModules = ref(false);
-    const detailModulesError = ref("");
+    const preparingDetailAssets = ref(false);
+    const detailAssetsError = ref("");
+    const detailAssetIssues = ref([]);
     let importPreviewSeq = 0;
-    let detailModulesSeq = 0;
+    let detailAssetsSeq = 0;
 
-    // External opening page & opening module plan approval state (per-card)
+    // External opening page & opening module plan diagnostics state (per-card)
     const openingPlan = ref(null);
     const openingPlanLoading = ref(false);
     const openingPlanError = ref("");
-    const openingConfirmBusyKey = ref("");
-    const openingConfirmError = ref("");
     let openingPlanSeq = 0;
-    let openingConfirmSeq = 0;
 
     // Studio quick-launch state (used in tab mode)
     const tavernLaunchPlayer = ref("Player");
@@ -172,7 +185,6 @@ export const CardLibraryView = {
     const tavernLaunchGreetingIndex = ref(0);
     const tavernLaunchWorldbookMode = ref("__default__");
     const tavernLaunchScriptsMode = ref("__default__");
-    const tavernLaunchEnableOpeningModules = ref(false);
     const novelCastIds = ref([]);
     const novelTitle = ref("");
     const launchedSession = ref(null);
@@ -263,6 +275,11 @@ export const CardLibraryView = {
     const pendingEligibleHttpsUrls = computed(() =>
       collectEligibleHttpsUrls(pendingImportDeps.value?.scripts || []),
     );
+    const pendingHasPreparableAssets = computed(
+      () =>
+        pendingEligibleHttpsUrls.value.length > 0 ||
+        Boolean(pendingImportDeps.value?.remoteOpeningPage?.url),
+    );
     const detailRemoteOpeningPage = computed(() => {
       const currentId = selectedId.value;
       if (!currentId || !detail.value || detail.value.id !== currentId) {
@@ -289,6 +306,11 @@ export const CardLibraryView = {
         snapshot: snap,
       };
     });
+    const detailHasPreparableAssets = computed(
+      () =>
+        detailEligibleHttpsUrls.value.length > 0 ||
+        Boolean(detailRemoteOpeningPage.value),
+    );
     const filteredCards = computed(() => {
       const q = query.value.trim().toLowerCase();
       if (!q) return cards.value;
@@ -342,13 +364,11 @@ export const CardLibraryView = {
 
     watch(selectedId, () => {
       embeddedSeq += 1;
-      detailModulesSeq += 1;
+      detailAssetsSeq += 1;
       openingPlanSeq += 1;
-      openingConfirmSeq += 1;
       tavernLaunchGreetingIndex.value = 0;
       tavernLaunchWorldbookMode.value = "__default__";
       tavernLaunchScriptsMode.value = "__default__";
-      tavernLaunchEnableOpeningModules.value = false;
       editingCopy.value = false;
       editingPortraits.value = false;
       expandedDetails.value = {};
@@ -360,14 +380,12 @@ export const CardLibraryView = {
       embeddedEntryQuery.value = "";
       embeddedEntryFilter.value = "all";
       selectedEmbeddedEntryIndex.value = null;
-      confirmingDetailModules.value = false;
-      detailSelectedModuleUrls.value = [];
-      detailModulesError.value = "";
+      preparingDetailAssets.value = false;
+      detailAssetsError.value = "";
+      detailAssetIssues.value = [];
       openingPlan.value = null;
       openingPlanLoading.value = false;
       openingPlanError.value = "";
-      openingConfirmBusyKey.value = "";
-      openingConfirmError.value = "";
     });
 
     watch(
@@ -634,108 +652,66 @@ export const CardLibraryView = {
       }
     }
 
-    async function confirmRemoteOpeningEntryPage() {
-      const cardId = selectedId.value;
-      const remotePage = detail.value?.id === cardId ? detailRemoteOpeningPage.value : null;
-      if (!cardId || !remotePage || busy.value || openingConfirmBusyKey.value) return;
-      const url = remotePage.url;
-      const seq = ++openingConfirmSeq;
-      openingConfirmBusyKey.value = `entry:${url}`;
-      openingConfirmError.value = "";
-      actionError.value = "";
-      try {
-        const res = await owner.call("confirm_card_opening_page", {
-          id: cardId,
-          url,
-        });
-        if (seq !== openingConfirmSeq || selectedId.value !== cardId || detail.value?.id !== cardId) {
-          return;
-        }
-        const snap = res?.openingPage;
-        const resolvedSnap = {
-          url: snap && typeof snap.url === "string" && snap.url ? snap.url : url,
-          size: Number(snap?.size) || 0,
-        };
-        detail.value = {
+    function applyPreparedAssetsToDetail(cardId, res) {
+      const savedList = Array.isArray(res?.modules) ? res.modules : [];
+      if (detail.value && detail.value.id === cardId) {
+        const nextDetail = {
           ...detail.value,
-          remoteOpeningPage: {
-            ...detail.value.remoteOpeningPage,
-            snapshot: resolvedSnap,
-          },
+          scriptModules: savedList,
         };
-        await loadOpeningModulePlan(cardId);
-      } catch (err) {
-        if (seq === openingConfirmSeq && selectedId.value === cardId && detail.value?.id === cardId) {
-          openingConfirmError.value = err?.message || String(err);
+        if (nextDetail.remoteOpeningPage && res?.openingPage) {
+          nextDetail.remoteOpeningPage = {
+            ...nextDetail.remoteOpeningPage,
+            snapshot: {
+              url:
+                typeof res.openingPage.url === "string" && res.openingPage.url
+                  ? res.openingPage.url
+                  : nextDetail.remoteOpeningPage.url,
+              size: Number(res.openingPage.size) || 0,
+            },
+          };
         }
-      } finally {
-        if (seq === openingConfirmSeq) {
-          openingConfirmBusyKey.value = "";
+        detail.value = nextDetail;
+      }
+      if (selectedId.value === cardId) {
+        if (res?.openingPlan) {
+          openingPlan.value = normalizeOpeningPlan(
+            res.openingPlan,
+            detail.value?.remoteOpeningPage?.url || "",
+          );
+          openingPlanError.value = "";
+        } else if (detail.value?.id === cardId && detail.value?.remoteOpeningPage?.url) {
+          void loadOpeningModulePlan(cardId);
         }
       }
     }
 
-    async function confirmPendingOpeningModule(pendingItem) {
-      const cardId = selectedId.value;
-      const remotePage = detail.value?.id === cardId ? detailRemoteOpeningPage.value : null;
-      if (
-        !cardId ||
-        !remotePage ||
-        !pendingItem ||
-        typeof pendingItem.url !== "string" ||
-        !pendingItem.url ||
-        busy.value ||
-        openingConfirmBusyKey.value
-      ) {
-        return;
-      }
-      const url = pendingItem.url;
-      const parentUrl =
-        typeof pendingItem.parentUrl === "string" && pendingItem.parentUrl
-          ? pendingItem.parentUrl
-          : null;
-      const seq = ++openingConfirmSeq;
-      openingConfirmBusyKey.value = `module:${url}`;
-      openingConfirmError.value = "";
+    async function prepareDetailCardAssets() {
+      const card = selectedCard.value;
+      if (!card || busy.value || preparingDetailAssets.value) return;
+      const targetCardId = card.id;
+      const seq = ++detailAssetsSeq;
+      preparingDetailAssets.value = true;
+      detailAssetsError.value = "";
       actionError.value = "";
       try {
-        // Strictly omit parentUrl when parentUrl is null
-        const args = parentUrl !== null ? { id: cardId, url, parentUrl } : { id: cardId, url };
-        const res = await owner.call("confirm_card_opening_module", args);
-        if (seq !== openingConfirmSeq || selectedId.value !== cardId || detail.value?.id !== cardId) {
-          return;
+        const res = await owner.call("prepare_card_assets", {
+          id: targetCardId,
+        });
+        if (seq !== detailAssetsSeq || selectedId.value !== targetCardId) return;
+        applyPreparedAssetsToDetail(targetCardId, res);
+        const issues = normalizeAssetIssues(res?.issues);
+        detailAssetIssues.value = issues;
+        if (!issues.length) {
+          notify(t("cardAssetsPreparedToast"), "success");
         }
-        // Optimistically update the local plan so if preview_card_opening_module_plan fails,
-        // the confirmed module is already moved to `saved` and Retry only refreshes the plan.
-        if (openingPlan.value) {
-          const snap = res?.openingModule;
-          const savedEntry = {
-            url: snap && typeof snap.url === "string" && snap.url ? snap.url : url,
-            size: Number(snap?.size) || 0,
-          };
-          const prevSaved = Array.isArray(openingPlan.value.saved)
-            ? openingPlan.value.saved
-            : [];
-          const nextSaved = prevSaved.some((m) => m.url === savedEntry.url)
-            ? prevSaved.map((m) => (m.url === savedEntry.url ? savedEntry : m))
-            : [...prevSaved, savedEntry];
-          const nextPending = Array.isArray(openingPlan.value.pending)
-            ? openingPlan.value.pending.filter((p) => p.url !== url)
-            : [];
-          openingPlan.value = {
-            ...openingPlan.value,
-            saved: nextSaved,
-            pending: nextPending,
-          };
-        }
-        await loadOpeningModulePlan(cardId);
       } catch (err) {
-        if (seq === openingConfirmSeq && selectedId.value === cardId && detail.value?.id === cardId) {
-          openingConfirmError.value = err?.message || String(err);
+        if (seq === detailAssetsSeq && selectedId.value === targetCardId) {
+          detailAssetsError.value = err?.message || String(err);
         }
       } finally {
-        if (seq === openingConfirmSeq) {
-          openingConfirmBusyKey.value = "";
+        if (seq === detailAssetsSeq) {
+          preparingDetailAssets.value = false;
         }
       }
     }
@@ -759,15 +735,6 @@ export const CardLibraryView = {
           const result = await owner.call("detail", { id });
           if (!stale && seq === detailSeq) {
             detail.value = result || null;
-            const normDeps = normalizeScriptDependencies(result?.scriptDependencies);
-            const eligible = collectEligibleHttpsUrls(normDeps);
-            const savedSet = new Set(
-              Array.isArray(result?.scriptModules)
-                ? result.scriptModules.map((m) => m?.url).filter(Boolean)
-                : [],
-            );
-            const unsavedEligible = eligible.filter((u) => !savedSet.has(u));
-            detailSelectedModuleUrls.value = unsavedEligible.length ? unsavedEligible : eligible;
             if (result?.remoteOpeningPage && typeof result.remoteOpeningPage.url === "string") {
               void loadOpeningModulePlan(id);
             } else {
@@ -890,7 +857,6 @@ export const CardLibraryView = {
 
       const seq = ++importPreviewSeq;
       pendingImportDeps.value = null;
-      pendingImportSelectedUrls.value = [];
       pendingImportedCardRefresh.value = null;
       actionError.value = "";
       const check = validateCardFile(file, maxCardBytes.value, maxArchiveBytes.value);
@@ -910,19 +876,36 @@ export const CardLibraryView = {
         const preview = await owner.call("preview_card_dependencies", { data: base64 });
         if (seq !== importPreviewSeq) return;
         const scripts = normalizeScriptDependencies(preview?.scripts);
+        const remoteOpeningPage =
+          preview?.remoteOpeningPage &&
+          typeof preview.remoteOpeningPage === "object" &&
+          typeof preview.remoteOpeningPage.url === "string" &&
+          preview.remoteOpeningPage.url
+            ? {
+                title:
+                  typeof preview.remoteOpeningPage.title === "string"
+                    ? preview.remoteOpeningPage.title.trim()
+                    : "",
+                marker:
+                  typeof preview.remoteOpeningPage.marker === "string"
+                    ? preview.remoteOpeningPage.marker
+                    : "",
+                url: preview.remoteOpeningPage.url,
+              }
+            : null;
         const resolvedName =
           typeof preview?.name === "string" && preview.name.trim()
             ? preview.name.trim()
             : file.name;
-        if (scripts.length > 0) {
-          const eligibleUrls = collectEligibleHttpsUrls(scripts);
-          pendingImportSelectedUrls.value = [...eligibleUrls];
+        if (scripts.length > 0 || remoteOpeningPage) {
           pendingImportDeps.value = {
             data: base64,
             name: resolvedName,
             scripts,
+            remoteOpeningPage,
             importedId: "",
             downloadError: "",
+            issues: [],
             refreshFailed: false,
           };
           return;
@@ -953,20 +936,6 @@ export const CardLibraryView = {
       }
     }
 
-    function togglePendingModuleUrl(url) {
-      if (!url || busy.value) return;
-      if (!pendingEligibleHttpsUrls.value.includes(url)) return;
-      const list = [...pendingImportSelectedUrls.value];
-      const idx = list.indexOf(url);
-      if (idx >= 0) {
-        list.splice(idx, 1);
-        pendingImportSelectedUrls.value = list;
-      } else {
-        list.push(url);
-        pendingImportSelectedUrls.value = list;
-      }
-    }
-
     function cancelPendingImport() {
       if (busy.value) return;
       importPreviewSeq += 1;
@@ -978,17 +947,17 @@ export const CardLibraryView = {
         };
       }
       pendingImportDeps.value = null;
-      pendingImportSelectedUrls.value = [];
       actionError.value = "";
     }
 
-    async function completePendingImport(withSelectedModules) {
+    async function completePendingImport(withPrepareAssets) {
       const pending = pendingImportDeps.value;
       if (!pending || busy.value) return;
       const seq = ++importPreviewSeq;
       busy.value = true;
       actionError.value = "";
       pending.downloadError = "";
+      pending.issues = [];
       try {
         let cardId = pending.importedId;
         if (!cardId) {
@@ -1017,25 +986,21 @@ export const CardLibraryView = {
             }
           }
         }
-        const urls = withSelectedModules
-          ? pendingImportSelectedUrls.value.filter((u) =>
-              pendingEligibleHttpsUrls.value.includes(u),
-            )
-          : [];
-        if (urls.length > 0 && cardId) {
+        if (withPrepareAssets && pendingHasPreparableAssets.value && cardId) {
           try {
-            const res = await owner.call("confirm_card_modules", {
+            const res = await owner.call("prepare_card_assets", {
               id: cardId,
-              urls,
             });
-            const savedList = Array.isArray(res?.modules) ? res.modules : [];
-            if (detail.value && detail.value.id === cardId) {
-              detail.value = {
-                ...detail.value,
-                scriptModules: savedList,
-              };
+            applyPreparedAssetsToDetail(cardId, res);
+            const issues = normalizeAssetIssues(res?.issues);
+            if (issues.length > 0) {
+              pending.issues = issues;
+              if (selectedId.value === cardId) {
+                detailAssetIssues.value = issues;
+              }
+              return;
             }
-            notify(t("cardDepsModulesSavedToast", { count: savedList.length }), "success");
+            notify(t("cardAssetsPreparedToast"), "success");
           } catch (dlErr) {
             pending.downloadError = dlErr?.message || String(dlErr);
             return;
@@ -1045,63 +1010,11 @@ export const CardLibraryView = {
           pendingImportedCardRefresh.value = { id: cardId, name: pending.name };
         }
         pendingImportDeps.value = null;
-        pendingImportSelectedUrls.value = [];
       } catch (err) {
         actionError.value = err?.message || String(err);
       } finally {
         if (seq === importPreviewSeq) {
           busy.value = false;
-        }
-      }
-    }
-
-    function toggleDetailModuleUrl(url) {
-      if (!url || busy.value || confirmingDetailModules.value) return;
-      if (!detailEligibleHttpsUrls.value.includes(url)) return;
-      const list = [...detailSelectedModuleUrls.value];
-      const idx = list.indexOf(url);
-      if (idx >= 0) {
-        list.splice(idx, 1);
-        detailSelectedModuleUrls.value = list;
-      } else {
-        list.push(url);
-        detailSelectedModuleUrls.value = list;
-      }
-    }
-
-    async function confirmDetailCardModules() {
-      const card = selectedCard.value;
-      if (!card || busy.value || confirmingDetailModules.value) return;
-      const targetCardId = card.id;
-      const urls = detailSelectedModuleUrls.value.filter((u) =>
-        detailEligibleHttpsUrls.value.includes(u),
-      );
-      if (!urls.length) return;
-      const seq = ++detailModulesSeq;
-      confirmingDetailModules.value = true;
-      detailModulesError.value = "";
-      actionError.value = "";
-      try {
-        const res = await owner.call("confirm_card_modules", {
-          id: targetCardId,
-          urls,
-        });
-        if (seq !== detailModulesSeq || selectedId.value !== targetCardId) return;
-        const savedList = Array.isArray(res?.modules) ? res.modules : [];
-        if (detail.value && detail.value.id === targetCardId) {
-          detail.value = {
-            ...detail.value,
-            scriptModules: savedList,
-          };
-        }
-        notify(t("cardDepsModulesSavedToast", { count: savedList.length }), "success");
-      } catch (err) {
-        if (seq === detailModulesSeq && selectedId.value === targetCardId) {
-          detailModulesError.value = err?.message || String(err);
-        }
-      } finally {
-        if (seq === detailModulesSeq) {
-          confirmingDetailModules.value = false;
         }
       }
     }
@@ -1165,22 +1078,8 @@ export const CardLibraryView = {
         } else if (tavernLaunchScriptsMode.value === "off") {
           payload.enableCardScripts = false;
         }
-        const remoteOpening = detailRemoteOpeningPage.value;
-        if (
-          tavernLaunchEnableOpeningModules.value &&
-          !detailLoading.value &&
-          detail.value?.id === card.id &&
-          remoteOpening &&
-          remoteOpening.cardId === card.id &&
-          detail.value?.remoteOpeningPage?.url === remoteOpening.url
-        ) {
-          payload.enableOpeningModules = true;
-        }
         const resp = await kt.api.post("taverns", payload);
         const data = resp?.data || resp || {};
-        // Reset explicit per-tavern opt-in back to false after a successful launch
-        // (left untouched on failure so the user can retry the same launch).
-        tavernLaunchEnableOpeningModules.value = false;
         launchedSession.value = {
           kind: "tavern",
           sessionId: data.sessionId || "",
@@ -1311,31 +1210,26 @@ export const CardLibraryView = {
       selectEmbeddedEntry,
       worldbookIssueLabel,
       pendingImportDeps,
-      pendingImportSelectedUrls,
       pendingEligibleHttpsUrls,
+      pendingHasPreparableAssets,
       pendingImportedCardRefresh,
-      togglePendingModuleUrl,
       cancelPendingImport,
       completePendingImport,
       detailScriptDependencies,
       detailSavedModules,
       detailSavedModuleMap,
       detailEligibleHttpsUrls,
-      detailSelectedModuleUrls,
-      confirmingDetailModules,
-      detailModulesError,
-      toggleDetailModuleUrl,
-      confirmDetailCardModules,
+      detailHasPreparableAssets,
+      preparingDetailAssets,
+      detailAssetsError,
+      detailAssetIssues,
+      prepareDetailCardAssets,
       detailRemoteOpeningPage,
       openingPlan,
       openingPlanLoading,
       openingPlanError,
-      openingConfirmBusyKey,
-      openingConfirmError,
       openingPlanStatusLabel,
       loadOpeningModulePlan,
-      confirmRemoteOpeningEntryPage,
-      confirmPendingOpeningModule,
       detail,
       detailLoading,
       detailError,
@@ -1371,7 +1265,6 @@ export const CardLibraryView = {
       tavernLaunchGreetingIndex,
       tavernLaunchWorldbookMode,
       tavernLaunchScriptsMode,
-      tavernLaunchEnableOpeningModules,
       novelCastIds,
       novelCastLimit: NOVEL_CAST_LIMIT,
       novelCastAtLimit,
@@ -1535,7 +1428,53 @@ export const CardLibraryView = {
           </span>
         </div>
 
-        <div class="ktrp-stack" data-testid="kt-rp-card-deps-preview-scripts">
+        <div
+          v-if="pendingImportDeps.issues?.length"
+          class="ktrp-field-block"
+          role="alert"
+          data-testid="kt-rp-card-deps-preview-issues"
+        >
+          <span class="ktrp-label">
+            {{ t('cardAssetsIssuesTitle', { count: pendingImportDeps.issues.length }) }}
+          </span>
+          <div class="ktrp-stack">
+            <div
+              v-for="(issue, iIdx) in pendingImportDeps.issues"
+              :key="iIdx"
+              class="ktrp-banner ktrp-banner--error"
+              :data-testid="'kt-rp-card-deps-preview-issue-' + iIdx"
+              :data-issue-kind="issue.kind"
+            >
+              <span>
+                <strong v-if="issue.id">{{ issue.id }}: </strong>{{ issue.message }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div
+          v-if="pendingImportDeps.remoteOpeningPage"
+          class="ktrp-sub-card"
+          data-testid="kt-rp-card-deps-preview-opening"
+        >
+          <div class="ktrp-row-between">
+            <strong>
+              {{ pendingImportDeps.remoteOpeningPage.title || t('openingPlanEntryDefaultTitle') }}
+            </strong>
+            <span v-if="pendingImportDeps.remoteOpeningPage.marker" class="ktrp-chip">
+              {{ pendingImportDeps.remoteOpeningPage.marker }}
+            </span>
+          </div>
+          <code class="ktrp-pre" style="word-break: break-all;">{{
+            pendingImportDeps.remoteOpeningPage.url
+          }}</code>
+        </div>
+
+        <div
+          v-if="pendingImportDeps.scripts.length"
+          class="ktrp-stack"
+          data-testid="kt-rp-card-deps-preview-scripts"
+        >
           <div
             v-for="script in pendingImportDeps.scripts"
             :key="script.scriptId"
@@ -1582,22 +1521,13 @@ export const CardLibraryView = {
               class="ktrp-stack"
               :data-testid="'kt-rp-card-deps-preview-refs-' + script.scriptId"
             >
-              <label
+              <div
                 v-for="(refItem, rIdx) in script.references"
                 :key="rIdx"
                 class="ktrp-row-between"
                 :data-testid="'kt-rp-card-deps-preview-ref-' + script.scriptId + '-' + rIdx"
               >
                 <div class="ktrp-inline-actions" style="min-width: 0; flex: 1;">
-                  <input
-                    v-if="refItem.selectable"
-                    type="checkbox"
-                    :checked="pendingImportSelectedUrls.includes(refItem.specifier)"
-                    :disabled="busy"
-                    :data-testid="'kt-rp-card-deps-preview-check-' + script.scriptId + '-' + rIdx"
-                    :data-url="refItem.specifier"
-                    @change="togglePendingModuleUrl(refItem.specifier)"
-                  />
                   <code class="ktrp-pre" style="word-break: break-all;">{{
                     refItem.specifier || t('cardDepsRefUnspecified')
                   }}</code>
@@ -1617,30 +1547,30 @@ export const CardLibraryView = {
                         : t('cardDepsRefKindUnsupported')
                   }}
                 </span>
-              </label>
+              </div>
             </div>
           </div>
         </div>
 
         <div class="ktrp-inline-actions" data-testid="kt-rp-card-deps-preview-actions">
           <ActionButton
-            v-if="pendingEligibleHttpsUrls.length > 0"
+            v-if="pendingHasPreparableAssets"
             variant="primary"
             size="sm"
-            :disabled="busy || !pendingImportSelectedUrls.length"
+            :disabled="busy"
             data-testid="kt-rp-card-deps-confirm-import-btn"
             @click="completePendingImport(true)"
           >
             {{
-              pendingImportDeps.importedId
-                ? t('cardDepsRetryConfirmModulesBtn', { count: pendingImportSelectedUrls.length })
-                : t('cardDepsImportConfirmModulesBtn', { count: pendingImportSelectedUrls.length })
+              busy
+                ? t('cardAssetsPreparingBtn')
+                : t('cardAssetsPrepareBtn')
             }}
           </ActionButton>
           <ActionButton
             v-if="!pendingImportDeps.importedId"
             size="sm"
-            :variant="pendingEligibleHttpsUrls.length > 0 ? 'ghost' : 'primary'"
+            :variant="pendingHasPreparableAssets ? 'ghost' : 'primary'"
             :disabled="busy"
             data-testid="kt-rp-card-deps-import-without-modules-btn"
             @click="completePendingImport(false)"
@@ -2251,6 +2181,67 @@ export const CardLibraryView = {
                 </div>
               </div>
 
+              <!-- One-Click Card Assets Preparation & Diagnostics -->
+              <div
+                v-if="detailScriptDependencies.length || detailSavedModules.length || detailRemoteOpeningPage"
+                class="ktrp-card-box"
+                data-testid="kt-rp-card-assets-box"
+              >
+                <div class="ktrp-row-between">
+                  <div>
+                    <h4 data-testid="kt-rp-card-assets-title">{{ t('cardAssetsSectionTitle') }}</h4>
+                    <p class="ktrp-muted">{{ t('cardAssetsSectionHint') }}</p>
+                  </div>
+                  <ActionButton
+                    v-if="detailHasPreparableAssets"
+                    variant="primary"
+                    size="sm"
+                    :disabled="busy || preparingDetailAssets || openingPlanLoading"
+                    data-testid="kt-rp-card-prepare-assets-btn"
+                    @click="prepareDetailCardAssets"
+                  >
+                    {{
+                      preparingDetailAssets
+                        ? t('cardAssetsPreparingBtn')
+                        : t('cardAssetsPrepareBtn')
+                    }}
+                  </ActionButton>
+                </div>
+
+                <div
+                  v-if="detailAssetsError"
+                  class="ktrp-banner ktrp-banner--error"
+                  role="alert"
+                  data-testid="kt-rp-card-assets-error"
+                >
+                  <span>{{ detailAssetsError }}</span>
+                </div>
+
+                <div
+                  v-if="detailAssetIssues.length"
+                  class="ktrp-field-block"
+                  role="alert"
+                  data-testid="kt-rp-card-assets-issues"
+                >
+                  <span class="ktrp-label">
+                    {{ t('cardAssetsIssuesTitle', { count: detailAssetIssues.length }) }}
+                  </span>
+                  <div class="ktrp-stack">
+                    <div
+                      v-for="(issue, iIdx) in detailAssetIssues"
+                      :key="iIdx"
+                      class="ktrp-banner ktrp-banner--error"
+                      :data-testid="'kt-rp-card-assets-issue-' + iIdx"
+                      :data-issue-kind="issue.kind"
+                    >
+                      <span>
+                        <strong v-if="issue.id">{{ issue.id }}: </strong>{{ issue.message }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <!-- Card Script Module Dependencies & Saved Offline Snapshots -->
               <div
                 v-if="detailScriptDependencies.length || detailSavedModules.length"
@@ -2262,15 +2253,6 @@ export const CardLibraryView = {
                     <h4>{{ t('cardDepsDetailTitle') }}</h4>
                     <p class="ktrp-muted">{{ t('cardDepsDetailHint') }}</p>
                   </div>
-                </div>
-
-                <div
-                  v-if="detailModulesError"
-                  class="ktrp-banner ktrp-banner--error"
-                  role="alert"
-                  data-testid="kt-rp-card-script-deps-error"
-                >
-                  <span>{{ detailModulesError }}</span>
                 </div>
 
                 <div class="ktrp-field-block" data-testid="kt-rp-card-saved-modules">
@@ -2347,22 +2329,13 @@ export const CardLibraryView = {
                       class="ktrp-stack"
                       :data-testid="'kt-rp-card-script-dep-refs-' + script.scriptId"
                     >
-                      <label
+                      <div
                         v-for="(refItem, rIdx) in script.references"
                         :key="rIdx"
                         class="ktrp-row-between"
                         :data-testid="'kt-rp-card-script-dep-ref-' + script.scriptId + '-' + rIdx"
                       >
                         <div class="ktrp-inline-actions" style="min-width: 0; flex: 1;">
-                          <input
-                            v-if="refItem.selectable"
-                            type="checkbox"
-                            :checked="detailSelectedModuleUrls.includes(refItem.specifier)"
-                            :disabled="busy || confirmingDetailModules"
-                            :data-testid="'kt-rp-card-script-dep-check-' + script.scriptId + '-' + rIdx"
-                            :data-url="refItem.specifier"
-                            @change="toggleDetailModuleUrl(refItem.specifier)"
-                          />
                           <code class="ktrp-pre" style="word-break: break-all;">{{
                             refItem.specifier || t('cardDepsRefUnspecified')
                           }}</code>
@@ -2386,28 +2359,13 @@ export const CardLibraryView = {
                                 : t('cardDepsRefKindUnsupported')
                           }}
                         </span>
-                      </label>
+                      </div>
                     </div>
                   </div>
                 </div>
-
-                <div
-                  v-if="detailEligibleHttpsUrls.length > 0"
-                  class="ktrp-row-end"
-                >
-                  <ActionButton
-                    variant="primary"
-                    size="sm"
-                    :disabled="busy || confirmingDetailModules || !detailSelectedModuleUrls.length"
-                    data-testid="kt-rp-card-script-deps-confirm-btn"
-                    @click="confirmDetailCardModules"
-                  >
-                    {{ t('cardDepsConfirmSelectedBtn', { count: detailSelectedModuleUrls.length }) }}
-                  </ActionButton>
-                </div>
               </div>
 
-              <!-- Declared External Opening Page & Module Approval Plan (only shown when detail.remoteOpeningPage exists) -->
+              <!-- Declared External Opening Page & Module Plan (only shown when detail.remoteOpeningPage exists) -->
               <div
                 v-if="detailRemoteOpeningPage"
                 class="ktrp-card-box"
@@ -2438,7 +2396,7 @@ export const CardLibraryView = {
                   <ActionButton
                     size="sm"
                     variant="ghost"
-                    :disabled="busy || openingPlanLoading || Boolean(openingConfirmBusyKey)"
+                    :disabled="busy || openingPlanLoading || preparingDetailAssets"
                     data-testid="kt-rp-card-opening-plan-refresh-btn"
                     @click="loadOpeningModulePlan(selectedId)"
                   >
@@ -2461,15 +2419,6 @@ export const CardLibraryView = {
                   >
                     {{ t('retry') }}
                   </ActionButton>
-                </div>
-
-                <div
-                  v-if="openingConfirmError"
-                  class="ktrp-banner ktrp-banner--error"
-                  role="alert"
-                  data-testid="kt-rp-card-opening-confirm-error"
-                >
-                  <span>{{ openingConfirmError }}</span>
                 </div>
 
                 <!-- Step 1: Declared external opening page HTML entry -->
@@ -2505,28 +2454,6 @@ export const CardLibraryView = {
                     style="word-break: break-all;"
                     data-testid="kt-rp-card-opening-entry-url"
                   >{{ detailRemoteOpeningPage.url }}</code>
-                  <div
-                    v-if="
-                      !detailRemoteOpeningPage.snapshot &&
-                      openingPlan &&
-                      openingPlan.status === 'entry_unconfirmed'
-                    "
-                    class="ktrp-row-end"
-                  >
-                    <ActionButton
-                      size="sm"
-                      variant="primary"
-                      :disabled="busy || openingPlanLoading || Boolean(openingConfirmBusyKey)"
-                      data-testid="kt-rp-card-opening-entry-confirm-btn"
-                      @click="confirmRemoteOpeningEntryPage"
-                    >
-                      {{
-                        openingConfirmBusyKey === 'entry:' + detailRemoteOpeningPage.url
-                          ? t('openingPlanConfirmingBtn')
-                          : t('openingPlanEntryConfirmBtn')
-                      }}
-                    </ActionButton>
-                  </div>
                 </div>
 
                 <p
@@ -2592,7 +2519,7 @@ export const CardLibraryView = {
                     </p>
                   </div>
 
-                  <!-- Pending opening page modules (each confirmed individually) -->
+                  <!-- Pending opening page modules -->
                   <div
                     v-if="openingPlan.pending.length"
                     class="ktrp-field-block"
@@ -2629,21 +2556,6 @@ export const CardLibraryView = {
                         >
                           {{ t('openingPlanPendingFromEntry') }}
                         </p>
-                        <div class="ktrp-row-end">
-                          <ActionButton
-                            size="sm"
-                            variant="primary"
-                            :disabled="busy || openingPlanLoading || Boolean(openingConfirmBusyKey)"
-                            :data-testid="'kt-rp-card-opening-pending-confirm-btn-' + pIdx"
-                            @click="confirmPendingOpeningModule(item)"
-                          >
-                            {{
-                              openingConfirmBusyKey === 'module:' + item.url
-                                ? t('openingPlanConfirmingBtn')
-                                : t('openingPlanConfirmModuleBtn')
-                            }}
-                          </ActionButton>
-                        </div>
                       </div>
                     </div>
                   </div>
@@ -2876,22 +2788,13 @@ export const CardLibraryView = {
                       <option value="off">{{ t('sessionScriptsExplicitOff') }}</option>
                     </select>
                   </div>
-                  <div
+                  <p
                     v-if="detailRemoteOpeningPage"
-                    class="ktrp-field-block"
-                    data-testid="kt-rp-studio-opening-modules-field"
+                    class="ktrp-muted"
+                    data-testid="kt-rp-studio-opening-modules-note"
                   >
-                    <label class="ktrp-inline-actions">
-                      <input
-                        v-model="tavernLaunchEnableOpeningModules"
-                        type="checkbox"
-                        :disabled="busy"
-                        data-testid="kt-rp-studio-opening-modules-toggle"
-                      />
-                      <span>{{ t('studioLaunchOpeningModulesLabel') }}</span>
-                    </label>
-                    <p class="ktrp-muted">{{ t('studioLaunchOpeningModulesHint') }}</p>
-                  </div>
+                    {{ t('studioLaunchCachedOpeningAutoHint') }}
+                  </p>
                   <div class="ktrp-row-end">
                     <ActionButton
                       variant="primary"

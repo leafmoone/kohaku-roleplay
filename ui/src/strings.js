@@ -439,6 +439,15 @@ const EN_FALLBACK = {
   cardDepsRefUnspecified: "(non-literal or dynamic specifier)",
   cardDepsNoteExternalMvuZod:
     "Uses external mvu_zod registerMvuSchema helper (runtime schema validation notice).",
+  cardAssetsIssuesTitle: "Asset preparation diagnostics ({count})",
+  cardAssetsPrepareBtn: "Prepare card assets",
+  cardAssetsPreparedToast: "Card assets prepared.",
+  cardAssetsPreparingBtn: "Preparing assets…",
+  cardAssetsSectionHint:
+    "Prepare declared static HTTPS script modules and external opening page dependencies in one step. Previously saved snapshots are reused without re-downloading.",
+  cardAssetsSectionTitle: "Card assets & offline dependencies",
+  studioLaunchCachedOpeningAutoHint:
+    "Cached opening web pages and static modules are linked automatically when starting a new tavern; missing dependencies are reported as diagnostics.",
   headerSummaryTitle: "Mini panel summary pins",
   headerSummaryHint:
     "Select up to {max} public state fields, native panels, or MVU variables to pin at the top of this mini panel.",

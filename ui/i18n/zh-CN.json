@@ -457,5 +457,12 @@
   "openingPlanPendingFromEntry": "由已保存的开场 HTML 入口直接导入",
   "openingPlanPendingFromParent": "由已保存的父模块导入：{parentUrl}",
   "studioLaunchOpeningModulesLabel": "在此新酒馆会话中启用已缓存的开场网页模块",
-  "studioLaunchOpeningModulesHint": "仅限新局显式勾选（默认关闭，不继承脚本默认开关）。启用后将本地已缓存的开场模块离线链接至开场页，不会自动打开网页。"
+  "studioLaunchOpeningModulesHint": "仅限新局显式勾选（默认关闭，不继承脚本默认开关）。启用后将本地已缓存的开场模块离线链接至开场页，不会自动打开网页。",
+  "cardAssetsIssuesTitle": "资源准备诊断 ({count})",
+  "cardAssetsPrepareBtn": "准备卡片资源",
+  "cardAssetsPreparedToast": "已完成卡片资源准备。",
+  "cardAssetsPreparingBtn": "正在准备资源…",
+  "cardAssetsSectionHint": "一键准备此卡声明的启用脚本静态 HTTPS 模块与外部开场网页及静态子依赖；本地已存快照自动复用不重复下载。",
+  "cardAssetsSectionTitle": "卡片资源与离线依赖准备",
+  "studioLaunchCachedOpeningAutoHint": "已缓存的开场网页与静态模块会在新酒馆开局时随卡自动离线链接使用；若缺少依赖将明确给出诊断提示。"
 }

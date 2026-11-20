@@ -457,5 +457,12 @@
   "openingPlanPendingFromEntry": "Imported directly by the saved opening HTML entry",
   "openingPlanPendingFromParent": "Imported by saved parent module: {parentUrl}",
   "studioLaunchOpeningModulesLabel": "Allow cached opening page modules in this new tavern",
-  "studioLaunchOpeningModulesHint": "Explicit per-tavern opt-in (off by default). Links locally cached opening modules into the opening page without enabling card scripts or automatically opening the web panel."
+  "studioLaunchOpeningModulesHint": "Explicit per-tavern opt-in (off by default). Links locally cached opening modules into the opening page without enabling card scripts or automatically opening the web panel.",
+  "cardAssetsIssuesTitle": "Asset preparation diagnostics ({count})",
+  "cardAssetsPrepareBtn": "Prepare card assets",
+  "cardAssetsPreparedToast": "Card assets prepared.",
+  "cardAssetsPreparingBtn": "Preparing assets…",
+  "cardAssetsSectionHint": "Prepare declared static HTTPS script modules and external opening page dependencies in one step. Previously saved snapshots are reused without re-downloading.",
+  "cardAssetsSectionTitle": "Card assets & offline dependencies",
+  "studioLaunchCachedOpeningAutoHint": "Cached opening web pages and static modules are linked automatically when starting a new tavern; missing dependencies are reported as diagnostics."
 }
