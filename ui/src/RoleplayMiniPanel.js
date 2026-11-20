@@ -7,6 +7,7 @@ import {
   useSession,
 } from "@kohakuterrarium/ui-sdk";
 
+import { CardWebPanel } from "./CardWebPanel.js";
 import { normalizeStateFields, projectNovelView } from "./helpers.js";
 import { useRoleplayText } from "./strings.js";
 
@@ -79,6 +80,69 @@ function formatCompactValue(item, t) {
   return str.length > 48 ? `${str.slice(0, 45)}…` : str;
 }
 
+function formatFullValue(item, t) {
+  if (!item || typeof item !== "object") return "";
+  const type = item.type;
+  if (type === "meter") {
+    const { min, max, value } = clampMeter(item);
+    return `${item.value ?? value}/${max} (${min}..${max})`;
+  }
+  if (type === "inventory") {
+    const list = Array.isArray(item.items) ? item.items : [];
+    if (!list.length) return t("nativeInventoryEmpty");
+    return list
+      .map((entry) =>
+        t("nativeInventoryItem", {
+          label: entry?.label || "",
+          quantity: entry?.quantity ?? 1,
+        }),
+      )
+      .join("\n");
+  }
+  if (type === "quest") {
+    const done = Boolean(item.completed);
+    const status = typeof item.status === "string" ? item.status.trim() : "";
+    const badge = t(done ? "nativeCompleted" : "nativeNotCompleted");
+    const head = status ? `${status} (${badge})` : badge;
+    const objectives = Array.isArray(item.objectives)
+      ? item.objectives.filter((obj) => obj && typeof obj === "object" && obj.label)
+      : [];
+    if (!objectives.length) return head;
+    const objLines = objectives.map((obj) => {
+      const objBadge = t(obj.done ? "nativeCompleted" : "nativeNotCompleted");
+      return `${obj.label} (${objBadge})`;
+    });
+    return [head, ...objLines].join("\n");
+  }
+  if (type === "list") {
+    const arr = Array.isArray(item.value) ? item.value.map((v) => String(v ?? "")) : [];
+    if (!arr.length) return t("stateFieldEmpty");
+    return arr.join("\n");
+  }
+  if (type === "number") {
+    const hasMin = typeof item.min === "number" && Number.isFinite(item.min);
+    const hasMax = typeof item.max === "number" && Number.isFinite(item.max);
+    if (hasMin && hasMax) return `${item.value}/${item.max} (${item.min}..${item.max})`;
+    if (hasMin) return `${item.value} (>= ${item.min})`;
+    if (hasMax) return `${item.value} (<= ${item.max})`;
+    return String(item.value ?? "");
+  }
+  if (type === "mvu") {
+    const val = item.value;
+    if (val !== null && typeof val === "object") {
+      try {
+        return JSON.stringify(val, null, 2);
+      } catch {
+        return String(val);
+      }
+    }
+    return String(val ?? "");
+  }
+  const str = String(item.value ?? "");
+  if (!str.trim()) return t("stateFieldEmpty");
+  return str;
+}
+
 function projectSummaryRow(item, t) {
   const hasMeter =
     item.type === "meter" ||
@@ -87,9 +151,18 @@ function projectSummaryRow(item, t) {
       typeof item.max === "number" &&
       item.max > item.min);
   let meterPercent = 0;
+  let meterMin = 0;
+  let meterMax = 100;
+  let meterValue = 0;
   if (hasMeter) {
-    const { min, max, value } = clampMeter(item);
-    meterPercent = max > min ? Math.round(((value - min) / (max - min)) * 100) : 0;
+    const clamped = clampMeter(item);
+    meterMin = clamped.min;
+    meterMax = clamped.max;
+    meterValue = clamped.value;
+    meterPercent =
+      meterMax > meterMin
+        ? Math.round(((meterValue - meterMin) / (meterMax - meterMin)) * 100)
+        : 0;
   }
   return {
     id: item.id,
@@ -98,6 +171,9 @@ function projectSummaryRow(item, t) {
     displayValue: formatCompactValue(item, t),
     hasMeter,
     meterPercent,
+    meterMin,
+    meterMax,
+    meterValue,
   };
 }
 
@@ -176,12 +252,15 @@ export const RoleplayMiniPanel = {
   name: "RoleplayMiniPanel",
   components: {
     ActionButton,
+    CardWebPanel,
   },
   setup() {
     const owner = useOwner();
     const session = useSession();
     const creature = useCreature();
     const t = useRoleplayText();
+
+    const summaryExpanded = ref(false);
 
     const scriptBusy = ref(false);
     const scriptError = ref("");
@@ -220,6 +299,15 @@ export const RoleplayMiniPanel = {
     const tavernScopeKey = computed(() =>
       JSON.stringify([session.value?.id || "", creature.value?.name || "", state.value.cardId || ""]),
     );
+    const mvuPublicSignature = computed(() => {
+      const selected = state.value.mvu?.selected;
+      if (!Array.isArray(selected)) return "[]";
+      const ids = selected
+        .filter((id) => typeof id === "string" && id)
+        .slice()
+        .sort();
+      return JSON.stringify(ids);
+    });
     const novelView = computed(() => projectNovelView(state.value));
 
     const modeBadgeLabel = computed(() => {
@@ -236,7 +324,7 @@ export const RoleplayMiniPanel = {
       return "fallback";
     });
 
-    const summaryItems = computed(() => {
+    const rawSummaryItems = computed(() => {
       if (!isActiveTavern.value) return [];
       const pinnedItems = state.value.headerSummary?.items;
       const maxPins =
@@ -244,19 +332,29 @@ export const RoleplayMiniPanel = {
         state.value.headerSummary.maxPins > 0
           ? state.value.headerSummary.maxPins
           : MAX_FALLBACK_SUMMARY_ITEMS;
-      const rawList =
-        Array.isArray(pinnedItems) && pinnedItems.length > 0
-          ? pinnedItems.filter(
-              (item) =>
-                item &&
-                typeof item === "object" &&
-                typeof item.id === "string" &&
-                item.id &&
-                typeof item.label === "string" &&
-                item.label,
-            )
-          : buildPublicFallbackItems(state.value, maxPins);
-      return rawList.map((item) => projectSummaryRow(item, t));
+      return Array.isArray(pinnedItems) && pinnedItems.length > 0
+        ? pinnedItems.filter(
+            (item) =>
+              item &&
+              typeof item === "object" &&
+              typeof item.id === "string" &&
+              item.id &&
+              typeof item.label === "string" &&
+              item.label,
+          )
+        : buildPublicFallbackItems(state.value, maxPins);
+    });
+
+    const summaryItems = computed(() =>
+      rawSummaryItems.value.map((item) => projectSummaryRow(item, t)),
+    );
+
+    const expandedSummaryItems = computed(() => {
+      if (!summaryExpanded.value) return [];
+      return rawSummaryItems.value.map((raw, idx) => ({
+        ...summaryItems.value[idx],
+        fullValue: formatFullValue(raw, t),
+      }));
     });
 
     const runnableScriptButtonGroups = computed(() => {
@@ -319,18 +417,21 @@ export const RoleplayMiniPanel = {
       () => {
         focusEpoch += 1;
         owner.state.value = null;
+        summaryExpanded.value = false;
         clearActionFeedback();
       },
       { flush: "sync" },
     );
 
     watch(tavernScopeKey, () => {
+      summaryExpanded.value = false;
       clearActionFeedback();
     });
 
     onUnmounted(() => {
       unmounted = true;
       focusEpoch += 1;
+      summaryExpanded.value = false;
       clearActionFeedback();
     });
 
@@ -455,6 +556,10 @@ export const RoleplayMiniPanel = {
       return `kt-rp-mini-summary-item-${encodeURIComponent(id)}`;
     }
 
+    function detailTestId(id) {
+      return `kt-rp-mini-summary-detail-${encodeURIComponent(id)}`;
+    }
+
     return {
       owner,
       t,
@@ -463,9 +568,13 @@ export const RoleplayMiniPanel = {
       modeBadgeLabel,
       active,
       isActiveTavern,
+      tavernScopeKey,
+      mvuPublicSignature,
       novelView,
       summaryMode,
       summaryItems,
+      expandedSummaryItems,
+      summaryExpanded,
       runnableScriptButtonGroups,
       nativeChoicePanels,
       scriptBusy,
@@ -479,6 +588,7 @@ export const RoleplayMiniPanel = {
       chooseNativeOption,
       resumePendingScene,
       itemTestId,
+      detailTestId,
     };
   },
   template: `
@@ -517,8 +627,21 @@ export const RoleplayMiniPanel = {
           v-if="summaryItems.length"
           class="ktrp-mini-section"
           :data-summary-source="summaryMode"
+          :data-summary-expanded="String(summaryExpanded)"
           data-testid="kt-rp-mini-summary"
         >
+          <div class="ktrp-row-between">
+            <span class="ktrp-label">{{ t('cardStateTitle') }}</span>
+            <ActionButton
+              size="sm"
+              variant="ghost"
+              :aria-expanded="String(summaryExpanded)"
+              data-testid="kt-rp-mini-summary-toggle-btn"
+              @click="summaryExpanded = !summaryExpanded"
+            >
+              {{ summaryExpanded ? t('collapseFieldBtn') : t('expandFieldBtn') }}
+            </ActionButton>
+          </div>
           <div class="ktrp-header-summary">
             <div
               v-for="item in summaryItems"
@@ -546,6 +669,45 @@ export const RoleplayMiniPanel = {
               </span>
             </div>
           </div>
+          <div
+            v-if="summaryExpanded"
+            class="ktrp-state-list ktrp-state-list--compact"
+            data-testid="kt-rp-mini-summary-details"
+          >
+            <div
+              v-for="item in expandedSummaryItems"
+              :key="item.id"
+              class="ktrp-state-item"
+              :data-summary-type="item.type"
+              :data-testid="detailTestId(item.id)"
+            >
+              <div class="ktrp-state-head">
+                <span class="ktrp-state-label" :data-testid="detailTestId(item.id) + '-label'">
+                  {{ item.label }}
+                </span>
+                <span v-if="item.hasMeter" class="ktrp-state-num-wrap">
+                  <strong class="ktrp-state-num">{{ item.displayValue }}</strong>
+                  <span class="ktrp-state-bounds">({{ item.meterMin }}..{{ item.meterMax }})</span>
+                </span>
+              </div>
+              <div
+                v-if="item.hasMeter"
+                class="ktrp-state-meter"
+                role="progressbar"
+                :aria-label="item.label"
+                :aria-valuemin="item.meterMin"
+                :aria-valuemax="item.meterMax"
+                :aria-valuenow="item.meterValue"
+              >
+                <div class="ktrp-state-meter-fill" :style="{ width: item.meterPercent + '%' }" />
+              </div>
+              <p
+                class="ktrp-state-text ktrp-pre"
+                :data-testid="detailTestId(item.id) + '-value'"
+                v-text="item.fullValue"
+              ></p>
+            </div>
+          </div>
         </div>
         <p
           v-else
@@ -554,6 +716,17 @@ export const RoleplayMiniPanel = {
         >
           {{ t('miniPanelNoPublicSummary') }}
         </p>
+
+        <CardWebPanel
+          v-if="state.webPanel"
+          :key="'mini-web:' + tavernScopeKey + ':' + mvuPublicSignature"
+          :owner="owner"
+          :scope-key="tavernScopeKey"
+          :mvu-public-signature="mvuPublicSignature"
+          :web-panel-meta="state.webPanel"
+          :player-name="state.player?.name || 'Player'"
+          :character-name="state.name || ''"
+        />
 
         <div
           v-if="runnableScriptButtonGroups.length"

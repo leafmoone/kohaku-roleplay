@@ -972,8 +972,8 @@ div.absolute:has(> div > section[data-test="v2-widget-ext:kohaku-roleplay/gamepl
 section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"] {
   height: auto !important;
   min-height: 0 !important;
-  max-height: min(17rem, calc(100vh - 11rem));
-  width: 20.5rem;
+  max-height: min(38rem, calc(100vh - 7.5rem));
+  width: min(26rem, calc(100vw - 2rem));
 }
 
 section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"] > header button.i-carbon-side-panel-open {
@@ -985,10 +985,18 @@ section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"] > header button.i-ca
   flex-direction: column;
   gap: 0.5rem;
   padding: 0.65rem 0.75rem;
-  max-height: min(14.5rem, calc(100vh - 13.5rem));
+  max-height: min(35.5rem, calc(100vh - 10rem));
   overflow-y: auto;
   color: var(--color-text);
   font-size: var(--kt-fs-xs, 0.8125rem);
+}
+
+.ktrp-mini-panel .ktrp-web-panel-stage {
+  height: 15rem;
+}
+
+.ktrp-mini-panel .ktrp-web-panel-stage.is-expanded {
+  height: 24rem;
 }
 
 .ktrp-mini-head {
