@@ -4,7 +4,7 @@ import json
 import sys
 from time import perf_counter
 
-_MAX_INPUT = 128 * 1024
+_MAX_SCHEMA_INPUT = 768 * 1024
 _MAX_RESULT = 64 * 1024
 # Canonical MVU, one derived string and the response envelope, all UTF-8.
 OPENING_SCHEMA_RESULT_BYTES = _MAX_RESULT + 4 * 1024
@@ -233,9 +233,9 @@ def main() -> None:
     try:
         mvu = sys.argv[1:] == ['mvu']
         schema = sys.argv[1:] == ['schema']
-        limit = (2 * 1024 * 1024 if mvu else 768 * 1024 if schema else _MAX_INPUT)
-        raw = sys.stdin.buffer.read(limit + 1)
-        if len(raw) > limit:
+        # This pipe is written by the trusted host, after it resolves the card's approved code.
+        raw = sys.stdin.buffer.read(_MAX_SCHEMA_INPUT + 1) if schema else sys.stdin.buffer.read()
+        if schema and len(raw) > _MAX_SCHEMA_INPUT:
             result = {'status': 'script_limit'}
         elif mvu:
             # -I excludes the script's directory. Import the trusted package, not card or session paths.

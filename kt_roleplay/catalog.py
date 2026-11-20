@@ -14,7 +14,7 @@ from .charx import MAX_ARCHIVE_BYTES
 from .library import (CardNotFound, card_scripts_default, import_card, list_cards,
                       original_card, remove_card, set_card_scripts_default)
 from .library_view import card_detail, media_view, portrait_view
-from .module_library import MAX_CARD_MODULES, snapshot_modules
+from .module_library import snapshot_modules
 from .opening_page_library import (opening_module_dependencies, opening_module_plan,
                                    opening_page_dependencies, snapshot_opening_module, snapshot_opening_page)
 from .portrait_library import PortraitCopy, portrait_draft, save_portraits_copy
@@ -115,9 +115,9 @@ class CardCatalog(UIOwnerMixin):
                 return await asyncio.to_thread(_preview_card_dependencies, args)
             if action == "confirm_card_modules":
                 urls = args.get("urls")
-                if (set(args) != {"id", "urls"} or not isinstance(urls, list) or len(urls) > MAX_CARD_MODULES
+                if (set(args) != {"id", "urls"} or not isinstance(urls, list) or not urls
                         or not all(isinstance(url, str) and 0 < len(url) <= 2048 for url in urls)):
-                    raise OwnerArgumentError("Confirm the card and up to six literal HTTPS module sources")
+                    raise OwnerArgumentError("Confirm the card and its literal HTTPS module sources")
                 modules = await asyncio.to_thread(snapshot_modules, directory, _id(args), urls)
                 return {"modules": modules}
             if action == "confirm_card_opening_page":

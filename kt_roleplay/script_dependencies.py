@@ -9,7 +9,6 @@ from tree_sitter_javascript import language
 from .card_scripts import CardScript
 
 _JS = Language(language())
-_MAX_REFERENCES = 32
 _ReferenceKind = Literal["https", "relative", "unsupported"]
 
 
@@ -78,8 +77,6 @@ def _references(root: Node, source: bytes, *, top_level_only: bool = False) -> t
         key = (ref, dynamic)
         if key in seen:
             continue
-        if len(references) == _MAX_REFERENCES:
-            return references, True
         seen.add(key)
         references.append(ModuleReference(specifier=ref, kind=_kind(ref, dynamic), dynamic=dynamic))
     return references, False

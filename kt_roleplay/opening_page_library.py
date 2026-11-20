@@ -11,7 +11,8 @@ from .cards import ParsedCard
 from .errors import CardError
 from .legacy_web import LegacyRemoteOpening
 from .library import CardNotFound, _open, _open_readonly, get_card
-from .module_download import _module_target, download_module, download_opening_html
+from .module_download import _module_target, download_opening_html
+from .module_library import confirmed_module_bytes, module_snapshot_locks
 from .module_linker import ModuleLinkError, _bundle
 from .script_dependencies import ModuleReference, scan_modules
 
@@ -22,7 +23,6 @@ CALLBACK_RUNTIME = 'tavern-page-callbacks-v1'
 _LODASH_RUNTIME = 'vue-3.5.22-lodash-4.18.1'
 _ZOD_RUNTIME = 'vue-3.5.22-lodash-4.18.1-zod-4.6.7'
 _LODASH_BYTES = 96 * 1024
-_ZOD_BYTES = 128 * 1024
 _CALLBACK_PRELUDE = '''
 function reportAndThrow(error) {
     console.error(error);
@@ -66,8 +66,6 @@ _JS_TYPES = {
     'text/x-ecmascript', 'text/x-javascript',
 }
 _MAX_PAGE_REFERENCES = 32
-_MAX_OPENING_MODULES = 16
-_MAX_OPENING_MODULE_BYTES = 4 * 1024 * 1024
 _DNS_LABEL = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?')
 _MODULE_PATH = re.compile(r"(?:[A-Za-z0-9._~!$&()*+,;=:@/-]|%[0-9A-Fa-f]{2})*")
 _MODULE_QUERY = re.compile(r"(?:[A-Za-z0-9._~!$&()*+,;=:@/?-]|%[0-9A-Fa-f]{2})*")
@@ -197,7 +195,7 @@ class _OpeningModuleDeclarations(HTMLParser):
             self.script = None
             self.urls.update(ref['specifier'] for ref in references
                              if ref['kind'] == 'https' and ref['specifier'] is not None)
-            self.valid = not (invalid or truncated or len(self.urls) > _MAX_PAGE_REFERENCES)
+            self.valid = not (invalid or truncated)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag not in self._void:
@@ -311,7 +309,7 @@ class PendingOpeningModule(TypedDict):
 class OpeningModulePlan(TypedDict):
     url: str
     status: Literal['entry_unconfirmed', 'self_contained', 'modules_missing', 'static_graph_complete',
-                    'other_resources', 'unsupported', 'module_limit']
+                    'other_resources', 'unsupported']
     saved: list[OpeningPageSnapshot]
     pending: list[PendingOpeningModule]
 
@@ -418,8 +416,6 @@ def _opening_module_graph(entry: str, saved: dict[str, bytes], *,
                     if pending is None:
                         raise ModuleLinkError('dependency_missing')
                     pending.setdefault(url, parent)
-                    if len(pending) + len(saved) > _MAX_OPENING_MODULES:
-                        raise ModuleLinkError('dependency_limit')
                     continue
                 indexes[url] = len(sources)
                 urls.append(url)
@@ -467,7 +463,7 @@ def _opening_module_body(html: str) -> tuple[int, int, str] | None:
         raise ModuleLinkError('dependency_unsupported') from exc
     if availability.other_resources:
         raise ModuleLinkError('other_resources')
-    if availability.unsupported or availability.truncated or availability.inline:
+    if availability.unsupported or availability.inline:
         raise ModuleLinkError('dependency_unsupported')
     if not availability.needs_resources:
         return None
@@ -504,13 +500,7 @@ def _cached_linked_opening_panel(directory: Path, card_id: str, title: str, html
         if body is None:
             return None, 'entry_unsupported'
         start, end, code = body
-        # Only the generated artifact grows for installed runtime assets;
-        # raw HTML and cache budgets do not change.
-        extra = _LODASH_BYTES if runtime in (_LODASH_RUNTIME, _ZOD_RUNTIME, CALLBACK_RUNTIME) else 0
-        if runtime in (_ZOD_RUNTIME, CALLBACK_RUNTIME):
-            extra += _ZOD_BYTES
-        html_room = _MAX_HTML + extra - len((html[:start] + html[end:]).encode('utf-8'))
-        linked = _bundle(*_opening_module_graph(code, saved, runtime=runtime), max_output_bytes=html_room)
+        linked = _bundle(*_opening_module_graph(code, saved, runtime=runtime))
     except ModuleLinkError as exc:
         needs = str(exc) in ('dependency_missing', 'other_resources')
         return None, 'entry_needs_resources' if needs else 'entry_unsupported'
@@ -552,13 +542,9 @@ def opening_module_plan(directory: Path, card_id: str) -> OpeningModulePlan:
             plan['status'] = 'self_contained'
             return plan
         _opening_module_graph(body[2], saved, pending=pending)
-        if pending and sum(map(len, saved.values())) + len(pending) > _MAX_OPENING_MODULE_BYTES:
-            raise ModuleLinkError('dependency_limit')
     except (UnicodeError, ModuleLinkError) as exc:
         if str(exc) == 'other_resources':
             plan['status'] = 'other_resources'
-        elif str(exc) == 'dependency_limit':
-            plan['status'] = 'module_limit'
         else:
             plan['status'] = 'unsupported'
         return plan
@@ -588,11 +574,6 @@ def _saved_opening_modules(db: Connection, card_id: str) -> dict[str, int]:
     return dict(db.execute('SELECT url,length(source) FROM card_opening_modules WHERE card_id=?', (card_id,)))
 
 
-def _check_opening_module_size(saved: dict[str, int], new_bytes: int) -> None:
-    if len(saved) >= _MAX_OPENING_MODULES or sum(saved.values()) + new_bytes > _MAX_OPENING_MODULE_BYTES:
-        raise CardError('A saved opening page may keep at most sixteen modules or 4 MiB')
-
-
 def snapshot_opening_module(directory: Path, card_id: str, url: str, *, parent_url: str | None = None) -> OpeningPageSnapshot:
     """Save one confirmed static edge from the entry or an already confirmed parent."""
     entry_url, entry = _saved_opening_entry(directory, card_id)
@@ -611,24 +592,23 @@ def snapshot_opening_module(directory: Path, card_id: str, url: str, *, parent_u
             raise CardError('Confirm one exact static import declared by the saved parent opening module')
     if not _exact_opening_module_target(url):
         raise CardError('Opening module sources must use an unambiguous HTTPS host and request path')
-    with _open(directory) as db:
-        saved = _saved_opening_modules(db, card_id)
-    if url in saved:
-        return OpeningPageSnapshot(url=url, size=saved[url])
-    _check_opening_module_size(saved, 1)  # The downloader rejects empty modules.
-    source = download_module(url)
-    with _open(directory) as db:
-        db.execute('BEGIN IMMEDIATE')
-        if db.execute('SELECT 1 FROM card_opening_pages WHERE card_id=? AND url=?', (card_id, entry_url)).fetchone() is None:
-            raise CardError('The saved opening page changed before the module was stored')
-        saved = _saved_opening_modules(db, card_id)
-        if parent_url is not None and parent_url not in saved:
-            raise CardError('The parent opening module changed before its dependency was stored')
+    with module_snapshot_locks(directory, [url]):
+        with _open(directory) as db:
+            saved = _saved_opening_modules(db, card_id)
         if url in saved:
             return OpeningPageSnapshot(url=url, size=saved[url])
-        _check_opening_module_size(saved, len(source))
-        db.execute('INSERT INTO card_opening_modules(card_id,url,source) VALUES (?,?,?)', (card_id, url, source))
-    return OpeningPageSnapshot(url=url, size=len(source))
+        source = confirmed_module_bytes(directory, url)
+        with _open(directory) as db:
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute('SELECT 1 FROM card_opening_pages WHERE card_id=? AND url=?', (card_id, entry_url)).fetchone() is None:
+                raise CardError('The saved opening page changed before the module was stored')
+            saved = _saved_opening_modules(db, card_id)
+            if parent_url is not None and parent_url not in saved:
+                raise CardError('The parent opening module changed before its dependency was stored')
+            if url in saved:
+                return OpeningPageSnapshot(url=url, size=saved[url])
+            db.execute('INSERT INTO card_opening_modules(card_id,url,source) VALUES (?,?,?)', (card_id, url, source))
+        return OpeningPageSnapshot(url=url, size=len(source))
 
 
 def opening_page_snapshot(directory: Path, card_id: str) -> OpeningPageSnapshot | None:

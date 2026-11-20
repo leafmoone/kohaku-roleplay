@@ -9,7 +9,6 @@ from urllib.parse import quote, urlsplit
 
 from .errors import CardError
 
-MAX_MODULE_BYTES = 1024 * 1024
 _DOWNLOAD_SECONDS = 6
 _PLAIN_MEDIA = frozenset({"application/javascript", "application/ecmascript", "text/javascript",
                           "text/ecmascript", "text/plain"})
@@ -74,7 +73,7 @@ def _public_ip(hostname: str, kind: str) -> str:
 
 
 def _download_text(hostname: str, resource: str, *, kind: str, accept: str, media_types: frozenset[str],
-                   max_bytes: int, size_label: str, format_label: str) -> bytes:
+                   format_label: str, max_bytes: int | None = None, size_label: str = "") -> bytes:
     connection = _ModuleConnection(hostname, _public_ip(hostname, kind.capitalize()))
     started = monotonic()
     try:
@@ -88,12 +87,12 @@ def _download_text(hostname: str, resource: str, *, kind: str, accept: str, medi
             if encoding != "identity" or media not in media_types:
                 raise CardError(f"The {kind} response must be uncompressed {format_label}")
             expected_size = response.length
-            if expected_size is not None and expected_size > max_bytes:
+            if max_bytes is not None and expected_size is not None and expected_size > max_bytes:
                 raise CardError(f"The {kind} exceeded the {size_label} download limit")
             content = bytearray()
             while chunk := response.read1(65536):
                 content += chunk
-                if len(content) > max_bytes:
+                if max_bytes is not None and len(content) > max_bytes:
                     raise CardError(f"The {kind} exceeded the {size_label} download limit")
                 if monotonic() - started >= _DOWNLOAD_SECONDS:
                     raise CardError(f"The {kind} download timed out")
@@ -114,8 +113,7 @@ def _download_text(hostname: str, resource: str, *, kind: str, accept: str, medi
 
 def download_module(url: str) -> bytes:
     return _download_text(*_module_target(url), kind="module", accept="text/javascript, application/javascript, text/plain",
-                          media_types=_PLAIN_MEDIA, max_bytes=MAX_MODULE_BYTES, size_label="1 MiB",
-                          format_label="JavaScript or plain text")
+                          media_types=_PLAIN_MEDIA, format_label="JavaScript or plain text")
 
 
 def download_opening_html(url: str, max_bytes: int) -> bytes:

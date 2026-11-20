@@ -155,7 +155,7 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 缓存入口后，目录 owner 的 `preview_card_opening_dependencies` 接受 `{"id":"入库卡片 ID"}`，只从已保存副本读取内联脚本的 `import`／`export from` 和 `import()` 引用（最多 32 项）；分别报告其他资源、不可解析入口及列表截断。这是诊断，不确认或下载任何依赖，也不把外部 `<script src>`、图片或样式当成可自动加载的模块。
 
-要保存已缓存入口直接声明的某个静态 HTTPS 模块，分别调用 `confirm_card_opening_module`，传入该卡的 `id` 和准确的一个 `url`，成功返回 `{openingModule: {url, size}}`。只接受可明确识别的根、`head` 或 `body` 直接内联 `<script type="module">` 的顶层静态声明。诊断列出的普通脚本、惰性模板、动态或相对导入不能据此下载；不接受 import map 或无法确认结构的入口。模块地址限无歧义的 ASCII DNS 主机和可原样发出的路径／查询；不替用户转换国际化域名或补写 URL 编码。模块按该卡入口独立保存，和卡片兼容脚本模块缓存不共用；再次确认已保存地址不重新下载。每个模块最多 1 MiB，每张卡的入口最多 16 个模块且总计不超过 4 MiB。确认本身不会自动跟进模块的依赖或运行代码，也不会改变已开的会话。
+要保存已缓存入口直接声明的某个静态 HTTPS 模块，分别调用 `confirm_card_opening_module`，传入该卡的 `id` 和准确的一个 `url`，成功返回 `{openingModule: {url, size}}`。只接受可明确识别的根、`head` 或 `body` 直接内联 `<script type="module">` 的顶层静态声明。诊断列出的普通脚本、惰性模板、动态或相对导入不能据此下载；不接受 import map 或无法确认结构的入口。模块地址限无歧义的 ASCII DNS 主机和可原样发出的路径／查询；不替用户转换国际化域名或补写 URL 编码。下载和打包不设模块体积或数量配额。授权及存档快照仍按卡、按用途独立；确认后复用库内相同完整 URL 的源码，包括不同卡或用途已经缓存的文件。只要库里仍保留该 URL 的缓存，就不会联网刷新；作者可用新的版本化 URL 指向更新。确认本身不会自动跟进模块的依赖或运行代码，也不会改变已开的会话。
 
 要检查已保存模块的下一级依赖，调用 `preview_card_opening_module_dependencies`，传入 `id` 和这个父模块的准确 `url`。回执中的 `resolvedUrl` 只有在引用是可确认的静态 HTTPS 地址、或能相对父模块明确解析的 `/`、`./`、`../` 路径时才有值；动态、裸模块名和有歧义的路径只作诊断，`resolvedUrl` 为 `null`，不联网。若要保存其中一项，再用 `confirm_card_opening_module` 明确传入同卡 `id`、父模块的 `parentUrl` 和该项准确的 `url`。每次只确认一项，预览、确认父模块及开局都不会自动请求下一层。
 

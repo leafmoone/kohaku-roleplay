@@ -10,11 +10,9 @@ from urllib.parse import urljoin
 from .card_scripts import CardScript
 from .errors import CardError
 from .library import CardNotFound, original_card
-from .module_library import MAX_CARD_MODULES, PackagedModuleMissing, module_sources, read_packaged_module
+from .module_library import PackagedModuleMissing, module_sources, read_packaged_module
 from .script_dependencies import scan_modules
 
-_MAX_LINK_BYTES = 3 * 1024 * 1024
-_MAX_SCRIPT_BYTES = 64 * 1024
 RETRYABLE_MODULE_ISSUES = frozenset({"module_dependency", "dependency_missing", "dependency_unapproved_transitive",
                                     "module_linker_unavailable", "module_link_failed"})
 
@@ -28,7 +26,6 @@ def _virtual_graph(entry: str, remote: dict[str, bytes], original: bytes) -> tup
     code = [entry]
     indexes = {}
     edges: list[dict[str, int]] = []
-    total = len(entry.encode("utf-8"))
     for i, js in enumerate(code):
         refs, syntax_error, truncated = scan_modules(js)
         if syntax_error or truncated or any(ref["kind"] == "unsupported" or ref["specifier"] is None for ref in refs):
@@ -52,9 +49,6 @@ def _virtual_graph(entry: str, remote: dict[str, bytes], original: bytes) -> tup
                 except CardError as exc:
                     raise ModuleLinkError("dependency_unsupported") from exc
             if name not in indexes:
-                total += len(data)
-                if len(indexes) >= MAX_CARD_MODULES or total > _MAX_LINK_BYTES:
-                    raise ModuleLinkError("dependency_limit")
                 indexes[name] = len(code)
                 names.append(name)
                 code.append(data.decode("utf-8-sig"))
@@ -63,7 +57,7 @@ def _virtual_graph(entry: str, remote: dict[str, bytes], original: bytes) -> tup
     return code, edges
 
 
-def _bundle(source: list[str], edges: list[dict[str, int]], *, max_output_bytes: int = _MAX_SCRIPT_BYTES) -> str:
+def _bundle(source: list[str], edges: list[dict[str, int]], *, max_output_bytes: int | None = None) -> str:
     runner = Path(__file__).with_name("link_card_module.mjs")
     node = shutil.which("node")
     if node is None or not (runner.parent.parent / "node_modules" / "rolldown").is_dir():
@@ -83,7 +77,7 @@ def _bundle(source: list[str], edges: list[dict[str, int]], *, max_output_bytes:
         raise ModuleLinkError("dependency_missing")
     if process.returncode or not process.stdout:
         raise ModuleLinkError("module_link_failed")
-    if len(process.stdout) > max_output_bytes:
+    if max_output_bytes is not None and len(process.stdout) > max_output_bytes:
         raise ModuleLinkError("dependency_limit")
     return process.stdout.decode("utf-8")
 

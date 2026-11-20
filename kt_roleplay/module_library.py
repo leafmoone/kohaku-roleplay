@@ -1,17 +1,20 @@
 """Store reviewed module snapshots separately from character card originals."""
 
+from contextlib import ExitStack, contextmanager
 from pathlib import Path, PurePosixPath
 from posixpath import normpath
+from threading import Lock
 from typing import TypedDict
+from weakref import WeakValueDictionary
 
 from .charx import _member, is_charx, open_charx
 from .errors import CardError
 from .library import CardNotFound, _open, get_card
-from .module_download import MAX_MODULE_BYTES, download_module
+from .module_download import download_module
 from .script_dependencies import script_dependencies
 
-MAX_CARD_MODULES = 6
-_MAX_TOTAL_BYTES = 3 * 1024 * 1024
+_module_locks = WeakValueDictionary()
+_module_locks_guard = Lock()
 
 
 class ModuleSnapshot(TypedDict):
@@ -35,8 +38,6 @@ def read_packaged_module(original: bytes, referring_member: str, specifier: str)
         item = index.get(member)
         if item is None:
             raise PackagedModuleMissing(f"Relative module is missing from the CHARX archive: {member}")
-        if item.file_size > MAX_MODULE_BYTES:
-            raise CardError("The packaged module exceeds 1 MiB")
         data = _member(archive, item)
     try:
         data.decode("utf-8-sig")
@@ -57,8 +58,8 @@ def module_sources(directory: Path, card_id: str) -> dict[str, bytes]:
 
 
 def _validate_sources(directory: Path, card_id: str, urls: list[str]) -> None:
-    if not 1 <= len(urls) <= MAX_CARD_MODULES or len(set(urls)) != len(urls):
-        raise CardError("Confirm one to six distinct module sources")
+    if not urls:
+        raise CardError("Confirm at least one module source")
     card = get_card(directory, card_id, with_scripts=True)
     declared = {ref["specifier"] for script in script_dependencies(card.scripts)
                 if script["enabled"] and not script["syntaxError"] and not script["truncated"]
@@ -67,28 +68,39 @@ def _validate_sources(directory: Path, card_id: str, urls: list[str]) -> None:
         raise CardError("Only literal HTTPS modules declared by this card's enabled scripts can be downloaded")
 
 
+@contextmanager
+def module_snapshot_locks(directory: Path, urls: list[str]):
+    """Coalesce simultaneous confirmations of the same exact URL within a library."""
+    directory = directory.resolve()
+    with _module_locks_guard:
+        locks = [_module_locks.setdefault((directory, url), Lock()) for url in sorted(set(urls))]
+    # Acquire in stable order so overlapping batches cannot deadlock.
+    with ExitStack() as stack:
+        for lock in locks:
+            stack.enter_context(lock)
+        yield
+
+
+def confirmed_module_bytes(directory: Path, url: str) -> bytes:
+    """Reuse bytes only after the calling path has verified this card's approval."""
+    with _open(directory) as db:
+        for table in ("card_modules", "card_opening_modules"):
+            row = db.execute(f"SELECT source FROM {table} WHERE url=? ORDER BY card_id LIMIT 1", (url,)).fetchone()
+            if row is not None:
+                return row[0]
+    return download_module(url)
+
+
 def snapshot_modules(directory: Path, card_id: str, urls: list[str]) -> list[ModuleSnapshot]:
     _validate_sources(directory, card_id, urls)
-    installed = {row["url"]: row["size"] for row in saved_modules(directory, card_id)}
-    if len(set(installed) | set(urls)) > MAX_CARD_MODULES:
-        raise CardError("A card may have at most six saved modules")
-    staged = {}
-    total = sum(installed.values())
-    for url in urls:
-        if url in installed:
-            continue
-        content = download_module(url)
-        total += len(content)
-        if total > _MAX_TOTAL_BYTES:
-            raise CardError("Saved modules for one card may not exceed 3 MiB")
-        staged[url] = content
-    with _open(directory) as db:
-        db.execute("BEGIN IMMEDIATE")
-        if db.execute("SELECT 1 FROM cards WHERE id=?", (card_id,)).fetchone() is None:
-            raise CardNotFound(card_id)
-        db.executemany("INSERT INTO card_modules(card_id, url, source) VALUES (?,?,?) ON CONFLICT DO NOTHING",
-                       ((card_id, url, content) for url, content in staged.items()))
-        rows = list(db.execute("SELECT url,length(source) FROM card_modules WHERE card_id=? ORDER BY url", (card_id,)))
-        if len(rows) > MAX_CARD_MODULES or sum(size for _, size in rows) > _MAX_TOTAL_BYTES:
-            raise CardError("Saved modules for one card may not exceed six modules or 3 MiB")
-    return [ModuleSnapshot(url=url, size=size) for url, size in rows]
+    with module_snapshot_locks(directory, urls):
+        installed = {row["url"] for row in saved_modules(directory, card_id)}
+        staged = {url: confirmed_module_bytes(directory, url) for url in dict.fromkeys(urls) if url not in installed}
+        if staged:
+            with _open(directory) as db:
+                db.execute("BEGIN IMMEDIATE")
+                if db.execute("SELECT 1 FROM cards WHERE id=?", (card_id,)).fetchone() is None:
+                    raise CardNotFound(card_id)
+                db.executemany("INSERT INTO card_modules(card_id, url, source) VALUES (?,?,?) ON CONFLICT DO NOTHING",
+                               ((card_id, url, content) for url, content in staged.items()))
+        return saved_modules(directory, card_id)
