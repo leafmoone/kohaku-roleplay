@@ -12,7 +12,6 @@ import {
 
 import {
   collectGreetings,
-  expandPlaceholders,
   extractSafePersonaDraft,
   normalizeStateFields,
   normalizeWorldbookDiagnostics,
@@ -158,13 +157,6 @@ export const RoleplayDockPanel = {
     });
     const active = computed(() => Boolean(state.value.active));
     const greetings = computed(() => collectGreetings(selectedDetail.value?.fields));
-    const greetingPreviewText = computed(() => {
-      const idx = Number(tavernForm.value.greetingIndex) || 0;
-      const raw = greetings.value[idx] || "";
-      const charName =
-        selectedDetail.value?.fields?.name || selectedCardSummary.value?.name || "";
-      return expandPlaceholders(raw, charName, tavernForm.value.playerName || "Player");
-    });
     const selectedCardSummary = computed(
       () => cards.value.find((card) => card.id === selectedCardId.value) || null,
     );
@@ -1063,7 +1055,6 @@ export const RoleplayDockPanel = {
       catalogCardScriptsDefault,
       catalogLoading,
       greetings,
-      greetingPreviewText,
       personaForm,
       personaDirty,
       tavernForm,
@@ -2107,11 +2098,6 @@ export const RoleplayDockPanel = {
             </div>
           </div>
 
-          <div v-if="state.greeting" class="ktrp-field-block">
-            <h4>{{ t('greetingPreview') }}</h4>
-            <p class="ktrp-quote-box ktrp-pre">{{ state.greeting }}</p>
-          </div>
-
           <div class="ktrp-field-block">
             <label class="ktrp-label" for="ktrp-tavern-notes">{{ t('tavernNotesLabel') }}</label>
             <textarea
@@ -2260,9 +2246,6 @@ export const RoleplayDockPanel = {
                   {{ idx === 0 ? t('greetingPrimary') : t('greetingAlternate', { index: idx + 1 }) }}
                 </option>
               </select>
-              <div v-if="greetingPreviewText" class="ktrp-quote-box ktrp-pre" data-testid="kt-rp-greeting-preview">
-                {{ greetingPreviewText }}
-              </div>
             </div>
 
             <div class="ktrp-field-block">

@@ -15,7 +15,6 @@ import {
   DEFAULT_MAX_CARD_BYTES,
   base64ToUint8Array,
   collectGreetings,
-  expandPlaceholders,
   normalizeWorldbookDiagnostics,
   normalizeWorldbookEntries,
   readFileAsBase64,
@@ -301,12 +300,6 @@ export const CardLibraryView = {
     const expandedDetails = ref({});
     const greetingsExpanded = ref(false);
     const greetings = computed(() => collectGreetings(detail.value?.fields));
-    const launchGreetingPreview = computed(() => {
-      const idx = Number(tavernLaunchGreetingIndex.value) || 0;
-      const raw = greetings.value[idx] || "";
-      const charName = detail.value?.fields?.name || selectedCard.value?.name || "";
-      return expandPlaceholders(raw, charName, tavernLaunchPlayer.value || "Player");
-    });
     const tags = computed(() =>
       Array.isArray(detail.value?.fields?.tags) ? detail.value.fields.tags.filter(Boolean) : [],
     );
@@ -1379,7 +1372,6 @@ export const CardLibraryView = {
       tavernLaunchWorldbookMode,
       tavernLaunchScriptsMode,
       tavernLaunchEnableOpeningModules,
-      launchGreetingPreview,
       novelCastIds,
       novelCastLimit: NOVEL_CAST_LIMIT,
       novelCastAtLimit,
@@ -2839,9 +2831,6 @@ export const CardLibraryView = {
                         {{ idx === 0 ? t('greetingPrimary') : t('greetingAlternate', { index: idx + 1 }) }}
                       </option>
                     </select>
-                    <div v-if="launchGreetingPreview" class="ktrp-quote-box ktrp-pre">
-                      {{ launchGreetingPreview }}
-                    </div>
                   </div>
                   <div class="ktrp-field-block">
                     <label class="ktrp-label" for="ktrp-studio-worldbook-select">

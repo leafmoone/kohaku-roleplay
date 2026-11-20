@@ -229,7 +229,6 @@ const EN_FALLBACK = {
   greetingSelect: "Opening greeting",
   greetingPrimary: "First message (#1)",
   greetingAlternate: "Alternate #{index}",
-  greetingPreview: "Opening preview",
   startTavern: "Start Tavern",
   tavernStarted: "Tavern session started.",
   tavernActiveTitle: "Active Tavern Session",

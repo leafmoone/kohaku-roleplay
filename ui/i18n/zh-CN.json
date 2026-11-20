@@ -205,7 +205,6 @@
   "greetingSelect": "选择开场白",
   "greetingPrimary": "主开场白 (#1)",
   "greetingAlternate": "备选开场白 #{index}",
-  "greetingPreview": "开场白预览",
   "startTavern": "开始本局",
   "tavernStarted": "酒馆会话已开启。",
   "tavernActiveTitle": "当前酒馆会话",
