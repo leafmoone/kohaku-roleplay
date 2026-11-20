@@ -1,5 +1,6 @@
 """Link saved modules to an ESM snapshot without giving the bundler a source filesystem."""
 
+from collections.abc import Callable
 import json
 import os
 from pathlib import Path
@@ -21,7 +22,8 @@ class ModuleLinkError(ValueError):
     pass
 
 
-def _virtual_graph(entry: str, remote: dict[str, bytes], original: bytes) -> tuple[list[str], list[dict[str, int]]]:
+def _virtual_graph(entry: str, remote: dict[str, bytes], original: bytes, *,
+                   prepare: Callable[[str], bytes | None] | None = None) -> tuple[list[str], list[dict[str, int]]]:
     names = ["card.json"]
     code = [entry]
     indexes = {}
@@ -36,9 +38,14 @@ def _virtual_graph(entry: str, remote: dict[str, bytes], original: bytes) -> tup
             if spec is None:
                 raise ModuleLinkError("dependency_unsupported")
             parent = names[i]
-            if ref["kind"] == "https" or parent.startswith("https://"):
+            if ref["kind"] == "https" or parent.lower().startswith("https://"):
                 name = urljoin(parent, spec) if ref["kind"] == "relative" else spec
                 data = remote.get(name)
+                if data is None and prepare is not None:
+                    data = prepare(name)
+                    if data is None:
+                        continue
+                    remote[name] = data
                 if data is None:
                     raise ModuleLinkError("dependency_missing" if i == 0 else "dependency_unapproved_transitive")
             else:

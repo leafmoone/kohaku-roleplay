@@ -91,6 +91,23 @@ def confirmed_module_bytes(directory: Path, url: str) -> bytes:
     return download_module(url)
 
 
+def save_discovered_module(directory: Path, card_id: str, url: str) -> bytes:
+    """Store a single static dependency discovered by the card linker."""
+    with module_snapshot_locks(directory, [url]):
+        with _open(directory) as db:
+            row = db.execute('SELECT source FROM card_modules WHERE card_id=? AND url=?', (card_id, url)).fetchone()
+        if row is not None:
+            return row[0]
+        content = confirmed_module_bytes(directory, url)
+        with _open(directory) as db:
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute('SELECT 1 FROM cards WHERE id=?', (card_id,)).fetchone() is None:
+                raise CardNotFound(card_id)
+            db.execute('INSERT INTO card_modules(card_id,url,source) VALUES (?,?,?) ON CONFLICT DO NOTHING',
+                       (card_id, url, content))
+        return content
+
+
 def snapshot_modules(directory: Path, card_id: str, urls: list[str]) -> list[ModuleSnapshot]:
     _validate_sources(directory, card_id, urls)
     with module_snapshot_locks(directory, urls):

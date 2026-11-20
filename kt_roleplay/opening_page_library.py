@@ -1,4 +1,5 @@
 """Cache a confirmed legacy opening entry and prepare it for an isolated session."""
+from collections.abc import Callable
 from html.parser import HTMLParser
 from pathlib import Path
 import re
@@ -393,6 +394,7 @@ def _installed_lodash_module() -> str:
 
 def _opening_module_graph(entry: str, saved: dict[str, bytes], *,
                           pending: dict[str, str | None] | None = None,
+                          prepare: Callable[[str, str | None], bytes | None] | None = None,
                           runtime: OpeningPageRuntime | None = None) -> tuple[list[str], list[dict[str, int]]]:
     urls: list[str | None] = [None]  # Entry declarations require absolute HTTPS URLs.
     sources = [entry]
@@ -416,6 +418,11 @@ def _opening_module_graph(entry: str, saved: dict[str, bytes], *,
                 raise ModuleLinkError('dependency_unsupported')
             if url not in indexes:
                 raw = saved.get(url)
+                if raw is None and prepare is not None:
+                    raw = prepare(url, parent)
+                    if raw is None:
+                        continue
+                    saved[url] = raw
                 if raw is None:
                     if pending is None:
                         raise ModuleLinkError('dependency_missing')
@@ -578,10 +585,6 @@ def opening_module_dependencies(directory: Path, card_id: str, url: str) -> Open
     ])
 
 
-def _saved_opening_modules(db: Connection, card_id: str) -> dict[str, int]:
-    return dict(db.execute('SELECT url,length(source) FROM card_opening_modules WHERE card_id=?', (card_id,)))
-
-
 def snapshot_opening_module(directory: Path, card_id: str, url: str, *, parent_url: str | None = None) -> OpeningPageSnapshot:
     """Save one confirmed static edge from the entry or an already confirmed parent."""
     entry_url, entry = _saved_opening_entry(directory, card_id)
@@ -600,23 +603,32 @@ def snapshot_opening_module(directory: Path, card_id: str, url: str, *, parent_u
             raise CardError('Confirm one exact static import declared by the saved parent opening module')
     if not _exact_opening_module_target(url):
         raise CardError('Opening module sources must use an unambiguous HTTPS host and request path')
+    raw = _save_discovered_opening_module(directory, card_id, entry_url, url, parent_url)
+    return OpeningPageSnapshot(url=url, size=len(raw))
+
+
+def _save_discovered_opening_module(directory: Path, card_id: str, entry_url: str, url: str,
+                                    parent_url: str | None) -> bytes:
+    def existing(db):
+        return db.execute('SELECT source FROM card_opening_modules WHERE card_id=? AND url=?', (card_id, url)).fetchone()
+
     with module_snapshot_locks(directory, [url]):
         with _open(directory) as db:
-            saved = _saved_opening_modules(db, card_id)
-        if url in saved:
-            return OpeningPageSnapshot(url=url, size=saved[url])
+            if (row := existing(db)) is not None:
+                return row[0]
         source = confirmed_module_bytes(directory, url)
         with _open(directory) as db:
             db.execute('BEGIN IMMEDIATE')
             if db.execute('SELECT 1 FROM card_opening_pages WHERE card_id=? AND url=?', (card_id, entry_url)).fetchone() is None:
                 raise CardError('The saved opening page changed before the module was stored')
-            saved = _saved_opening_modules(db, card_id)
-            if parent_url is not None and parent_url not in saved:
+            if parent_url is not None and db.execute(
+                'SELECT 1 FROM card_opening_modules WHERE card_id=? AND url=?', (card_id, parent_url)
+            ).fetchone() is None:
                 raise CardError('The parent opening module changed before its dependency was stored')
-            if url in saved:
-                return OpeningPageSnapshot(url=url, size=saved[url])
+            if (row := existing(db)) is not None:
+                return row[0]
             db.execute('INSERT INTO card_opening_modules(card_id,url,source) VALUES (?,?,?)', (card_id, url, source))
-        return OpeningPageSnapshot(url=url, size=len(source))
+        return source
 
 
 def opening_page_snapshot(directory: Path, card_id: str) -> OpeningPageSnapshot | None:
@@ -629,16 +641,37 @@ def snapshot_opening_page(directory: Path, card_id: str, url: str) -> OpeningPag
     declared = get_card(directory, card_id).legacy_remote_opening
     if declared is None or declared.url != url:
         raise CardError('Confirm the exact external opening page declared by this card')
-    if saved := opening_page_snapshot(directory, card_id):
-        return saved
-    source = download_opening_html(url, _MAX_HTML)
-    if not source.decode('utf-8-sig').strip():
-        raise CardError('The external opening page contains no HTML')
+    with module_snapshot_locks(directory, [url]):
+        if saved := opening_page_snapshot(directory, card_id):
+            return saved
+        with _open(directory) as db:
+            row = db.execute('SELECT source FROM card_opening_pages WHERE url=? ORDER BY card_id LIMIT 1', (url,)).fetchone()
+        source = row[0] if row is not None else download_opening_html(url, _MAX_HTML)
+        if not source.decode('utf-8-sig').strip():
+            raise CardError('The external opening page contains no HTML')
+        with _open(directory) as db:
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute('SELECT 1 FROM cards WHERE id=?', (card_id,)).fetchone() is None:
+                raise CardNotFound(card_id)
+            db.execute('INSERT INTO card_opening_pages(card_id,url,source) VALUES (?,?,?) ON CONFLICT DO NOTHING',
+                       (card_id, url, source))
+            saved_url, size = db.execute('SELECT url,length(source) FROM card_opening_pages WHERE card_id=?', (card_id,)).fetchone()
+        return OpeningPageSnapshot(url=saved_url, size=size)
+
+
+def prepare_opening_assets(directory: Path, card_id: str, url: str, before_fetch: Callable[[], None],
+                           load: Callable[[str, Callable[[], bytes]], bytes | None]) -> None:
+    if opening_page_snapshot(directory, card_id) is None:
+        before_fetch()
+        snapshot_opening_page(directory, card_id, url)
+    entry_url, raw = _saved_opening_entry(directory, card_id)
+    body = _opening_module_body(raw.decode('utf-8-sig'))
+    if body is None:
+        return
     with _open(directory) as db:
-        db.execute('BEGIN IMMEDIATE')
-        if db.execute('SELECT 1 FROM cards WHERE id=?', (card_id,)).fetchone() is None:
-            raise CardNotFound(card_id)
-        db.execute('INSERT INTO card_opening_pages(card_id,url,source) VALUES (?,?,?) ON CONFLICT DO NOTHING',
-                   (card_id, url, source))
-        saved_url, size = db.execute('SELECT url,length(source) FROM card_opening_pages WHERE card_id=?', (card_id,)).fetchone()
-    return OpeningPageSnapshot(url=saved_url, size=size)
+        saved = _opening_module_bytes(db, card_id)
+
+    def fetch(module_url, parent):
+        return load(module_url, lambda: _save_discovered_opening_module(directory, card_id, entry_url, module_url, parent))
+
+    _opening_module_graph(body[2], saved, prepare=fetch)

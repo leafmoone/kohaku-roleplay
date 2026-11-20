@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from kohakuterrarium.api.ext import UICallContext
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError, OwnerForbiddenError, UIOwnerMixin
 
+from .card_assets import prepare_card_assets
 from .card_editor import CopyRequest, edit_draft, save_copy
 from .cards import MAX_CARD_BYTES, CardError, card_format, parse_card
 from .charx import MAX_ARCHIVE_BYTES
@@ -113,6 +114,10 @@ class CardCatalog(UIOwnerMixin):
                 if set(args) != {"data"}:
                     raise OwnerArgumentError("Expected only the card file for dependency preview")
                 return await asyncio.to_thread(_preview_card_dependencies, args)
+            if action == "prepare_card_assets":
+                if set(args) != {"id"}:
+                    raise OwnerArgumentError("Choose one card to prepare its authored resources")
+                return await asyncio.to_thread(prepare_card_assets, directory, _id(args))
             if action == "confirm_card_modules":
                 urls = args.get("urls")
                 if (set(args) != {"id", "urls"} or not isinstance(urls, list) or not urls
