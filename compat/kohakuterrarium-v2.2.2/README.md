@@ -2,7 +2,7 @@
 
 以下可选源码补丁适用于 [KohakuTerrarium](https://github.com/Kohaku-Lab/KohakuTerrarium) 的 `v2.2.2`（`4df7c6afacac02abe8e1548f838558550561f711`）。只在干净、独立的该版上游源码副本应用；不要在运行中的服务目录使用。
 
-Roleplay 的独立 `role` 面板不需要这些补丁；此处的补丁只服务于可信扩展的消息定位。
+Roleplay 的独立 `role` 面板不需要这些补丁；这些补丁只用于消息定位和受支持的消息正文选项，不改会话标题栏。
 
 ## 已完成消息的只读定位
 
@@ -31,6 +31,23 @@ npm ci
 npm run build
 ```
 
-消息行定位不是正文插槽：此补丁不嵌入或运行作者页面、也不增加发送、草稿或历史写入权限。
+单独应用消息行定位补丁不会挂载作者页面，也不增加发送、草稿或历史写入权限。
+
+## 助理回复正文的作者选项
+
+`message-body.patch` 在前两项之上添加独立的可选 `ui.messageBodies` 声明和消息正文容器。只在同一局、当前已成功完成的助理回复且卡片有可用的作者选项时展示；开场、过期分支和失败回复不显示。作者页使用隔离容器，点击只查看这条选项的预览，不会自动发出消息。原版 KT 可以继续使用角色库、世界书库与独立小面板，不出现正文控件。未修改的《日记络络》只做了源码核对；正文点击验收使用同样位置映射的合成作者页，不代表该卡全部脚本原样可运行。
+
+从干净的上游 `v2.2.2` 开始，将三个补丁复制到源码根目录，依顺序应用。使用 Node.js 24，只在最后构建一次前端：
+
+```sh
+for patch in message-history.patch message-locator.patch message-body.patch; do
+  git apply --check "$patch" && git apply "$patch" || exit 1
+done
+cd src/kohakuterrarium-frontend
+npm ci
+npm run build
+```
+
+若前两项已应用，只对 `message-body.patch` 执行 `git apply --check` 与 `git apply`，然后重新构建。启动同一份已打补丁的 Python 源码及其 `src/kohakuterrarium/web_dist`，不要混用旧构建或另一套 KT 安装。
 
 补丁中的上游代码保留原署名，各变更文件带有修改声明。随附的 [KohakuTerrarium License v1.0](LICENSE) 适用于这些宿主源码补丁；它们不是上游官方发行物。

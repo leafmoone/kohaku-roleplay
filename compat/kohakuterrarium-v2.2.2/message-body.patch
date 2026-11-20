@@ -1,0 +1,661 @@
+diff --git a/src/kohakuterrarium-frontend/src/components/chat/shared/ChatTranscriptSection.js b/src/kohakuterrarium-frontend/src/components/chat/shared/ChatTranscriptSection.js
+--- a/src/kohakuterrarium-frontend/src/components/chat/shared/ChatTranscriptSection.js
++++ b/src/kohakuterrarium-frontend/src/components/chat/shared/ChatTranscriptSection.js
+@@ -1,3 +1,4 @@
++// Modified by the Kohaku Roleplay project: optional trusted assistant message-body contributions.
+ import { cloneVNode, defineComponent, h } from "vue"
+ 
+ import "./chat-transcript-section.css"
+@@ -189,15 +190,61 @@
+       }
+       const usedKeys = new Set()
+       const nextKeys = new WeakMap()
++      const windowCoversTail = props.messageOffset + props.messages.length >= totalCount
++      let lastCompletedAssistantIndex = -1
++      let activeTurnConstraint = null
++      let sawUnlocatedAssistant = false
++      if (windowCoversTail) {
++        for (let i = props.messages.length - 1; i >= 0; i -= 1) {
++          const m = props.messages[i]
++          if (!m || typeof m !== "object") continue
++          if (m.role === "user" && !m.queued && !m.injectedMidTurn) {
++            break
++          }
++          if (m.role === "error") {
++            break
++          }
++          if (m.role === "assistant") {
++            if (m._streaming) {
++              break
++            }
++            const rowTurn = m.assistantLocator?.turn ?? m.turnIndex ?? null
++            if (activeTurnConstraint !== null && rowTurn !== activeTurnConstraint) {
++              break
++            }
++            if (m.assistantLocator) {
++              lastCompletedAssistantIndex = i
++              break
++            }
++            sawUnlocatedAssistant = true
++            if (rowTurn === null) {
++              break
++            }
++            if (activeTurnConstraint === null) {
++              activeTurnConstraint = rowTurn
++            }
++          }
++        }
++      }
+       props.messages.forEach((message, index) => {
+         const absoluteIndex = props.messageOffset + index
+         const previousMessage = index > 0 ? props.messages[index - 1] : props.previousMessage
++        const isUniqueLastAssistant =
++          lastCompletedAssistantIndex >= 0
++            ? index === lastCompletedAssistantIndex
++            : windowCoversTail &&
++              activeTurnConstraint === null &&
++              message?.role === "assistant" &&
++              !message._streaming &&
++              absoluteIndex === totalCount - 1 &&
++              (!sawUnlocatedAssistant ||
++                !props.messages.some((item) => item && typeof item === "object" && item.assistantLocator))
+         const context = {
+           index,
+           absoluteIndex,
+           previousMessage,
+           isFirst: absoluteIndex === 0,
+-          isLastAssistant: message?.role === "assistant" && absoluteIndex === totalCount - 1,
++          isLastAssistant: isUniqueLastAssistant,
+           reply: reply(message),
+         }
+         const explicit = message?.id ?? message?.eventId ?? message?.clientId
+diff --git a/src/kohakuterrarium-frontend/src/components/chat/shared/ConversationMessage.js b/src/kohakuterrarium-frontend/src/components/chat/shared/ConversationMessage.js
+--- a/src/kohakuterrarium-frontend/src/components/chat/shared/ConversationMessage.js
++++ b/src/kohakuterrarium-frontend/src/components/chat/shared/ConversationMessage.js
+@@ -1,3 +1,4 @@
++// Modified by the Kohaku Roleplay project: optional trusted assistant message-body contributions.
+ import { computed, defineComponent, h, reactive, ref } from "vue"
+ 
+ import "./conversation-message.css"
+@@ -40,6 +41,7 @@
+     renderTool: { type: Function, default: null },
+     renderUiEvent: { type: Function, default: null },
+     renderContentPart: { type: Function, default: null },
++    renderAssistantBody: { type: Function, default: null },
+     bare: { type: Boolean, default: false },
+   },
+   emits: ["reply", "widget-message", "widget-state"],
+@@ -236,7 +238,7 @@
+         })
+       } else if (role === "assistant") {
+         const parts = assistantParts.value
+-        content = parts.length
++        const primary = parts.length
+           ? h(
+               "div",
+               { class: "kt-conversation-parts" },
+@@ -246,6 +248,8 @@
+               assistant: true,
+               streaming: message._streaming === true,
+             })
++        const bodyExtra = props.renderAssistantBody ? props.renderAssistantBody(message) : null
++        content = bodyExtra ? [primary, bodyExtra] : primary
+       } else if (role === "user") {
+         const userContent = message.contentParts?.length
+           ? h(
+@@ -360,7 +364,13 @@
+         content = h("div", { class: "kt-conversation-system" }, message.content || "")
+       }
+ 
+-      return props.bare ? content : h("article", { class: rootClass }, [content])
++      return props.bare
++        ? content
++        : h(
++            "article",
++            { class: rootClass },
++            Array.isArray(content) ? content : [content],
++          )
+     }
+   },
+ })
+diff --git a/src/kohakuterrarium-frontend/src/components/chat/shared/MessageRow.vue b/src/kohakuterrarium-frontend/src/components/chat/shared/MessageRow.vue
+--- a/src/kohakuterrarium-frontend/src/components/chat/shared/MessageRow.vue
++++ b/src/kohakuterrarium-frontend/src/components/chat/shared/MessageRow.vue
+@@ -1,4 +1,4 @@
+-<!-- Modified by the Kohaku Roleplay message-locator compatibility patch for KohakuTerrarium v2.2.2. -->
++<!-- Modified by the Kohaku Roleplay project: optional trusted assistant message-body contributions. -->
+ <template>
+   <!-- System message -->
+   <ConversationMessage v-if="message.role === 'system'" :message="message" :render-text="renderSharedText" />
+@@ -152,7 +152,7 @@
+   <div v-else-if="message.role === 'assistant' && message.parts" class="max-w-[90%] group relative">
+     <MessageDecorators position="header" :message="messageInfo" />
+     <div class="chat-cv">
+-      <ConversationMessage :message="message" :render-text="renderSharedText" :render-content-part="renderSharedAssistantPart" bare />
++      <ConversationMessage :message="message" :render-text="renderSharedText" :render-content-part="renderSharedAssistantPart" :render-assistant-body="renderSharedAssistantBody" bare />
+     </div>
+     <MessageDecorators position="footer" :message="messageInfo" />
+     <!-- Hover actions -->
+@@ -185,7 +185,7 @@
+   </div>
+ 
+   <!-- Assistant message (legacy: content + tool_calls) -->
+-  <ConversationMessage v-else-if="message.role === 'assistant'" :message="message" :render-text="renderSharedText" :render-content-part="renderSharedAssistantPart" />
++  <ConversationMessage v-else-if="message.role === 'assistant'" :message="message" :render-text="renderSharedText" :render-content-part="renderSharedAssistantPart" :render-assistant-body="renderSharedAssistantBody" />
+ 
+   <!-- Channel message (group chat style) -->
+   <div v-else-if="message.role === 'channel'" class="max-w-[90%] chat-cv">
+@@ -329,6 +329,17 @@
+ 
+ function renderSharedUIEvent(message, reply) {
+   return h(UIEventBlock, { message, onReply: reply })
++}
++
++function renderSharedAssistantBody() {
++  if (!props.isLastAssistant) return null
++  const explicitTab = typeof props.tabId === "string" ? props.tabId : ""
++  if (!explicitTab || explicitTab.startsWith("ch:")) return null
++  if (!messageInfo.value?.assistantLocator) return null
++  return h(MessageDecorators, {
++    position: "body",
++    message: { ...messageInfo.value, tab: explicitTab },
++  })
+ }
+ 
+ function renderSharedContentPart(part) {
+@@ -431,6 +442,7 @@
+     text,
+     turn: message.turnIndex ?? null,
+     tab: messageTab.value,
++    isLastAssistant: props.isLastAssistant === true,
+     assistantLocator,
+   }
+ })
+diff --git a/src/kohakuterrarium-frontend/src/ext/ExtensionContribution.vue b/src/kohakuterrarium-frontend/src/ext/ExtensionContribution.vue
+--- a/src/kohakuterrarium-frontend/src/ext/ExtensionContribution.vue
++++ b/src/kohakuterrarium-frontend/src/ext/ExtensionContribution.vue
+@@ -1,3 +1,4 @@
++<!-- Modified by the Kohaku Roleplay project: optional trusted assistant message-body contributions. -->
+ <template>
+   <div v-if="hidden" class="hidden" data-test="ext-owner-absent" :data-ext="key" />
+   <div v-else class="kt-ext-contribution" :class="inline ? 'min-w-0' : 'h-full w-full overflow-auto'" :data-ext="key">
+@@ -41,7 +42,15 @@
+ const renderError = ref("")
+ const loadError = ref("")
+ const failure = computed(() => renderError.value || loadError.value)
+-const INLINE_KINDS = ["tool-renderer", "trigger-renderer", "message-renderer", "message-decorator", "graph-badge", "graph-panel"]
++const INLINE_KINDS = [
++  "tool-renderer",
++  "trigger-renderer",
++  "message-renderer",
++  "message-decorator",
++  "message-body",
++  "graph-badge",
++  "graph-panel",
++]
+ const inline = computed(() => INLINE_KINDS.includes(props.contribution.kind))
+ 
+ const owner = createOwnerClient(props.contribution.owner || `package:${props.pkg}`, useOwnerScope())
+diff --git a/src/kohakuterrarium-frontend/src/ext/MessageDecorators.vue b/src/kohakuterrarium-frontend/src/ext/MessageDecorators.vue
+--- a/src/kohakuterrarium-frontend/src/ext/MessageDecorators.vue
++++ b/src/kohakuterrarium-frontend/src/ext/MessageDecorators.vue
+@@ -1,4 +1,4 @@
+-<!-- Modified by the Kohaku Roleplay message-locator compatibility patch for KohakuTerrarium v2.2.2. -->
++<!-- Modified by the Kohaku Roleplay project: optional trusted assistant message-body contributions. -->
+ <template>
+   <div v-if="shown.length" class="kt-decorators" :data-position="position" data-test="message-decorators">
+     <div v-for="item in shown" :key="item.key" class="kt-decorator" :style="{ maxHeight: `${item.maxHeight}px` }" :data-test="`message-decorator-${item.id}`">
+@@ -11,20 +11,44 @@
+ import { computed, provide, readonly } from "vue"
+ 
+ import { decoratorsFor } from "@/ext/decorators"
++import { MESSAGE_BODY_TAB_INJECT_KEY } from "@/ext/ownerScope"
+ import { MESSAGE_CONTEXT_INJECT_KEY } from "@/ext/sdk/keys"
+ 
+ const props = defineProps({
+-  /** `header` or `footer`. */
++  /** `header`, `footer`, or `body`. */
+   position: { type: String, required: true },
+-  /** Read-only description of the message: `{ id, role, text, turn, tab, assistantLocator }`. */
++  /** Read-only description of the message: `{ id, role, text, turn, tab, isLastAssistant, assistantLocator }`. */
+   message: { type: Object, required: true },
+ })
+ 
+-const shown = computed(() => decoratorsFor(props.position, props.message.role))
++const validBodyTab = computed(() => {
++  const tab = props.message?.tab
++  return typeof tab === "string" && tab.length > 0 && !tab.startsWith("ch:") ? tab : ""
++})
++
++const shown = computed(() => {
++  if (
++    props.position === "body" &&
++    (!props.message?.assistantLocator || !validBodyTab.value)
++  ) {
++    return []
++  }
++  return decoratorsFor(props.position, props.message.role)
++})
++
++if (props.position === "body") {
++  provide(MESSAGE_BODY_TAB_INJECT_KEY, validBodyTab)
++}
+ 
+ provide(
+   MESSAGE_CONTEXT_INJECT_KEY,
+-  computed(() => readonly({ assistantLocator: null, ...props.message })),
++  computed(() =>
++    readonly({
++      assistantLocator: null,
++      isLastAssistant: false,
++      ...props.message,
++    }),
++  ),
+ )
+ </script>
+ 
+@@ -40,4 +64,10 @@
+   min-width: 0;
+   overflow: auto;
+ }
++.kt-decorators[data-position="body"] > .kt-decorator:empty {
++  display: none;
++}
++.kt-decorators[data-position="body"]:not(:has(> .kt-decorator:not(:empty))) {
++  display: none;
++}
+ </style>
+diff --git a/src/kohakuterrarium-frontend/src/ext/decorators.js b/src/kohakuterrarium-frontend/src/ext/decorators.js
+--- a/src/kohakuterrarium-frontend/src/ext/decorators.js
++++ b/src/kohakuterrarium-frontend/src/ext/decorators.js
+@@ -1,3 +1,4 @@
++// Modified by the Kohaku Roleplay project: optional trusted assistant message-body contributions.
+ /**
+  * Message decorators: package UI drawn beside a message, never inside it.
+  *
+@@ -9,7 +10,7 @@
+ 
+ import { markRaw, reactive } from "vue"
+ 
+-export const DECORATOR_POSITIONS = ["header", "footer"]
++export const DECORATOR_POSITIONS = ["header", "footer", "body"]
+ export const DEFAULT_DECORATOR_HEIGHT = 120
+ export const MAX_DECORATORS_PER_PACKAGE = 3
+ 
+diff --git a/src/kohakuterrarium-frontend/src/ext/loader.js b/src/kohakuterrarium-frontend/src/ext/loader.js
+--- a/src/kohakuterrarium-frontend/src/ext/loader.js
++++ b/src/kohakuterrarium-frontend/src/ext/loader.js
+@@ -1,3 +1,4 @@
++// Modified by the Kohaku Roleplay project: optional trusted assistant message-body contributions.
+ /**
+  * Loads package UI extensions for the active host.
+  *
+@@ -11,6 +12,7 @@
+ 
+ import {
+   provideContributionComponent,
++  provideMessageBodyComponent,
+   registerPackageContributions,
+   unregisterAllContributions,
+   openExtensionTab,
+@@ -178,6 +180,11 @@
+   const join = (path) => `/ext/${encodeURIComponent(pkg)}/${String(path || "").replace(/^\/+/, "")}`
+   const provide = (kind) => (id, component, options) =>
+     provideContributionComponent(pkg, kind, id, component, options)
++  const hasDeclaredMessageBodies = Boolean(
++    record.contributes?.some(
++      (c) => c.kind === "message-body" && c.decorator?.position === "body",
++    ),
++  )
+   return {
+     package: pkg,
+     sdkVersion: SDK_VERSION,
+@@ -194,6 +201,11 @@
+     registerAction: provide("action"),
+     registerMessageRenderer: provide("message-renderer"),
+     registerMessageDecorator: provide("message-decorator"),
++    ...(hasDeclaredMessageBodies
++      ? {
++          registerMessageBody: (id, component) => provideMessageBodyComponent(pkg, id, component),
++        }
++      : {}),
+     registerTrayItem: provide("tray-item"),
+     registerNotificationChannel: provide("notification-channel"),
+     registerFileView: provide("file-view"),
+diff --git a/src/kohakuterrarium-frontend/src/ext/ownerScope.js b/src/kohakuterrarium-frontend/src/ext/ownerScope.js
+--- a/src/kohakuterrarium-frontend/src/ext/ownerScope.js
++++ b/src/kohakuterrarium-frontend/src/ext/ownerScope.js
+@@ -1,3 +1,4 @@
++// Modified by the Kohaku Roleplay project: optional trusted assistant message-body contributions.
+ /**
+  * The runtime scope (session + focused creature) a contribution is mounted in.
+  *
+@@ -6,14 +7,17 @@
+  * creature of a solo session. Outside a session both are empty.
+  */
+ 
+-import { computed } from "vue"
++import { computed, inject } from "vue"
+ 
+ import { injectScope } from "@/composables/useScope"
+ import { useChatStore } from "@/stores/chat"
+ import { useInstancesStore } from "@/stores/instances"
+ 
++export const MESSAGE_BODY_TAB_INJECT_KEY = "kt:message-body-tab"
++
+ export function useOwnerScope() {
+   const scope = injectScope()
++  const bodyTab = inject(MESSAGE_BODY_TAB_INJECT_KEY, null)
+   if (!scope) return computed(() => ({ sessionId: "", creatureId: "" }))
+   const instances = useInstancesStore()
+   const chat = useChatStore(scope)
+@@ -23,7 +27,11 @@
+       ? instances.current
+       : instances.list.find(match) || null
+     const creatures = instance?.creatures || []
+-    const creatureId = chat.terrariumTarget || (creatures.length === 1 ? creatures[0].name : "")
++    const rowTab = bodyTab?.value
++    const rowCreatureId =
++      typeof rowTab === "string" && rowTab.length > 0 && !rowTab.startsWith("ch:") ? rowTab : ""
++    const creatureId =
++      rowCreatureId || chat.terrariumTarget || (creatures.length === 1 ? creatures[0].name : "")
+     return { sessionId: instance?.graph_id || instance?.id || scope, creatureId: creatureId || "" }
+   })
+ }
+diff --git a/src/kohakuterrarium-frontend/src/ext/registry.js b/src/kohakuterrarium-frontend/src/ext/registry.js
+--- a/src/kohakuterrarium-frontend/src/ext/registry.js
++++ b/src/kohakuterrarium-frontend/src/ext/registry.js
+@@ -1,3 +1,4 @@
++// Modified by the Kohaku Roleplay project: optional trusted assistant message-body contributions.
+ /**
+  * Bridges UI contributions into the dashboard's own registries.
+  *
+@@ -70,6 +71,7 @@
+   action: "package",
+   "message-renderer": "any",
+   "message-decorator": "package",
++  "message-body": "plugin",
+   "file-view": "package",
+   "graph-badge": "package",
+   "graph-panel": "package",
+@@ -147,6 +149,8 @@
+   )
+ }
+ 
++const BODY_DECORATOR_TOKEN = Symbol("messageBody")
++
+ function ownerAllowed(kind, owner, pkg) {
+   const ownerKind = MOUNT_OWNER_KINDS[kind]
+   const [prefix, ...rest] = String(owner || "").split(":")
+@@ -282,6 +286,7 @@
+       break
+     }
+     case "message-decorator":
++      if (contribution.decorator?.position === "body") return null
+       registerDecorator({
+         key,
+         pkg,
+@@ -290,6 +295,27 @@
+         order: contribution.order,
+         component: host,
+         options: decoratorOptions(contribution.decorator),
++      })
++      break
++    case "message-body":
++      if (
++        contribution.decorator?.position !== "body" ||
++        !ownerAllowed("message-body", contribution.owner, pkg)
++      ) {
++        return null
++      }
++      registerDecorator({
++        key,
++        pkg,
++        id: contribution.id,
++        label: contribution.label,
++        order: contribution.order,
++        component: host,
++        options: {
++          ...decoratorOptions(contribution.decorator),
++          position: "body",
++          roles: ["assistant"],
++        },
+       })
+       break
+     case "message-renderer":
+@@ -363,6 +389,12 @@
+   return _registered.map((r) => r.key)
+ }
+ 
++export function provideMessageBodyComponent(pkg, id, component) {
++  return provideContributionComponent(pkg, "message-body", id, component, {
++    _bodyToken: BODY_DECORATOR_TOKEN,
++  })
++}
++
+ /**
+  * Store the component a package provides for ``kind``/``id``. An id the
+  * manifest did not declare is registered on the fly as an inline contribution.
+@@ -371,6 +403,25 @@
+   if (!component) throw new Error(`${pkg}: register${kind} ${id} needs a component`)
+   if (HANDLER_KINDS.includes(kind) && typeof component !== "function") {
+     throw new Error(`${pkg}: ${kind} ${id} needs a handler function`)
++  }
++  if (kind === "message-body") {
++    if (options?._bodyToken !== BODY_DECORATOR_TOKEN) {
++      throw new Error(`${pkg}: message body ${id} requires registerMessageBody`)
++    }
++    const declaredBody = findContribution(pkg, id)
++    if (
++      !declaredBody ||
++      declaredBody.kind !== "message-body" ||
++      declaredBody.decorator?.position !== "body" ||
++      !ownerAllowed("message-body", declaredBody.owner, pkg)
++    ) {
++      throw new Error(`${pkg}: message body ${id} must be declared in ui.messageBodies`)
++    }
++    contributionComponents.set(contributionKey(pkg, id), markRaw(component))
++    return
++  }
++  if (kind === "message-decorator" && options?.position === "body") {
++    throw new Error(`${pkg}: position "body" requires registerMessageBody`)
+   }
+   if (kind === "file-view" && !findContribution(pkg, id) && !options.patterns?.length) {
+     throw new Error(`${pkg}: an undeclared file-view ${id} needs options.patterns`)
+diff --git a/src/kohakuterrarium-frontend/src/ext/sdk/index.js b/src/kohakuterrarium-frontend/src/ext/sdk/index.js
+--- a/src/kohakuterrarium-frontend/src/ext/sdk/index.js
++++ b/src/kohakuterrarium-frontend/src/ext/sdk/index.js
+@@ -1,3 +1,4 @@
++// Modified by the Kohaku Roleplay project: optional trusted assistant message-body contributions.
+ /**
+  * ``@kohakuterrarium/ui-sdk`` v1: the only contract between the dashboard
+  * and package UI code. Package code imports it by its bare name; the page
+@@ -86,10 +87,10 @@
+  * ``call(action, args)`` runs ``ui_call``; ``on(event, fn)`` receives every
+  * other ``ui_emit`` push and is removed with the component.
+  */
+-export function useOwner() {
++export function useOwner(options = {}) {
+   const client = inject(OWNER_INJECT_KEY, null)
+   if (!client) throw new Error("useOwner() must be called inside an extension contribution")
+-  client.start()
++  if (options?.subscribe !== false) client.start()
+   const hasInstance = Boolean(getCurrentInstance())
+   return {
+     owner: client.owner,
+diff --git a/src/kohakuterrarium-frontend/src/ext/sdk/mock.js b/src/kohakuterrarium-frontend/src/ext/sdk/mock.js
+--- a/src/kohakuterrarium-frontend/src/ext/sdk/mock.js
++++ b/src/kohakuterrarium-frontend/src/ext/sdk/mock.js
+@@ -1,4 +1,4 @@
+-// Modified by the Kohaku Roleplay message-locator compatibility patch for KohakuTerrarium v2.2.2.
++// Modified by the Kohaku Roleplay project: optional trusted assistant message-body contributions.
+ /**
+  * Test double of ``@kohakuterrarium/ui-sdk`` for extension unit tests.
+  *
+@@ -106,6 +106,7 @@
+     action: new Map(),
+     "message-renderer": new Map(),
+     "message-decorator": new Map(),
++    "message-body": new Map(),
+     "tray-item": new Map(),
+     "notification-channel": new Map(),
+     "file-view": new Map(),
+@@ -154,6 +155,11 @@
+     registerAction: provide("action"),
+     registerMessageRenderer: provide("message-renderer"),
+     registerMessageDecorator: provide("message-decorator"),
++    registerMessageBody: (id, component) =>
++      registered["message-body"].set(id, {
++        component,
++        options: { position: "body", roles: ["assistant"] },
++      }),
+     registerTrayItem: provide("tray-item"),
+     registerNotificationChannel: provide("notification-channel"),
+     registerFileView: provide("file-view"),
+@@ -264,7 +270,7 @@
+   return current().kt
+ }
+ 
+-export function useOwner() {
++export function useOwner(_options = {}) {
+   return current().owner
+ }
+ 
+@@ -300,6 +306,7 @@
+     text: "",
+     turn: null,
+     tab: "",
++    isLastAssistant: false,
+     assistantLocator: null,
+     ...host.message,
+   })
+diff --git a/src/kohakuterrarium/packages/slots/ui.py b/src/kohakuterrarium/packages/slots/ui.py
+--- a/src/kohakuterrarium/packages/slots/ui.py
++++ b/src/kohakuterrarium/packages/slots/ui.py
+@@ -1,3 +1,4 @@
++# Modified by the Kohaku Roleplay project: optional trusted assistant message-body contributions.
+ """The ``ui:`` manifest slot: dashboard contributions declared by a package.
+ 
+ Parses and validates each installed package's ``ui:`` block without
+@@ -49,7 +50,7 @@
+ _FILE_PATTERN_RE = re.compile(
+     r"^(\*\.[A-Za-z0-9_+-]+(\.[A-Za-z0-9_+-]+)*|[A-Za-z0-9_][A-Za-z0-9_.+-]{0,63})$"
+ )
+-DECORATOR_POSITIONS: tuple[str, ...] = ("header", "footer")
++DECORATOR_POSITIONS: tuple[str, ...] = ("header", "footer", "body")
+ DECORATOR_MIN_HEIGHT = 16
+ DECORATOR_MAX_HEIGHT = 400
+ RENDERER_KINDS: tuple[str, ...] = ("widget", "message-renderer")
+@@ -252,10 +253,16 @@
+ 
+ 
+ def _parse_owner(
+-    raw: object, kind: str, package: str, where: str, declared: frozenset
++    raw: object,
++    kind: str,
++    package: str,
++    where: str,
++    declared: frozenset,
++    *,
++    message_body: bool = False,
+ ) -> str:
+     """Normalize a contribution's owner to ``<kind>:<name>`` and check it fits."""
+-    allowed = MOUNT_OWNER_KINDS[kind]
++    allowed = ("plugin",) if message_body else MOUNT_OWNER_KINDS[kind]
+     if raw is None or raw == "package":
+         if "package" not in allowed:
+             raise _SlotError(
+@@ -281,9 +288,14 @@
+ 
+ 
+ def _parse_contribution(
+-    raw: object, index: int, package: str, declared: frozenset
++    raw: object,
++    index: int,
++    package: str,
++    declared: frozenset,
++    *,
++    slot: str = "contributes",
+ ) -> UIContribution:
+-    where = f"contributes[{index}]"
++    where = f"{slot}[{index}]"
+     if not isinstance(raw, dict):
+         raise _SlotError(f"{where} must be a mapping")
+     kind = raw.get("kind")
+@@ -302,11 +314,21 @@
+     if not isinstance(order, int) or isinstance(order, bool):
+         raise _SlotError(f"{where}.order must be an integer")
+     renderer = _parse_renderer(raw.get("renderer"), kind, where)
++    decorator = _parse_decorator(raw, kind, where)
++    message_body = decorator.get("position") == "body"
++    if message_body:
++        if slot != "messageBodies":
++            raise _SlotError(f"{where}: declare message bodies under ui.messageBodies")
++        if isolation != "inline" or decorator["roles"] != ["assistant"]:
++            raise _SlotError(f"{where}: a message body must be inline and assistant-only")
+     return UIContribution(
+-        kind=kind,
++        # Old frontends ignore this wire kind instead of treating a body as a footer.
++        kind="message-body" if message_body else kind,
+         id=cid,
+         label=str(raw.get("label") or cid),
+-        owner=_parse_owner(raw.get("owner"), kind, package, where, declared),
++        owner=_parse_owner(
++            raw.get("owner"), kind, package, where, declared, message_body=message_body
++        ),
+         icon=str(raw.get("icon") or ""),
+         description=str(raw.get("description") or ""),
+         order=order,
+@@ -318,7 +340,7 @@
+         keywords=_parse_keywords(raw, kind, where),
+         status=_parse_status(raw, kind, where),
+         action=_parse_action(raw, kind, where),
+-        decorator=_parse_decorator(raw, kind, where),
++        decorator=decorator,
+         dock=_parse_dock(raw, kind, where),
+         file_view=_parse_file_view(raw, kind, where),
+         graph=_parse_graph(raw, kind, where),
+@@ -572,6 +594,34 @@
+     return root
+ 
+ 
++def _parse_message_bodies(
++    raw: dict, package: str, declared: frozenset
++) -> tuple[UIContribution, ...]:
++    # Keep optional bodies outside `contributes` so older hosts ignore them
++    # without invalidating the package's ordinary UI contributions.
++    bodies = raw.get("messageBodies", [])
++    if not isinstance(bodies, list):
++        raise _SlotError("messageBodies must be a list of mappings")
++    parsed = []
++    for i, body in enumerate(bodies):
++        if not isinstance(body, dict) or set(body) - {
++            "id", "owner", "label", "maxHeight", "order"
++        }:
++            raise _SlotError(
++                f"messageBodies[{i}] accepts only id, owner, label, maxHeight and order"
++            )
++        parsed.append(
++            _parse_contribution(
++                {**body, "kind": "message-decorator", "position": "body"},
++                i,
++                package,
++                declared,
++                slot="messageBodies",
++            )
++        )
++    return tuple(parsed)
++
++
+ def _parse_block(
+     raw: dict, package_root: Path, package: str, declared: frozenset
+ ) -> dict:
+@@ -584,7 +634,7 @@
+     contributions = tuple(
+         _parse_contribution(item, i, package, declared)
+         for i, item in enumerate(raw.get("contributes") or [])
+-    )
++    ) + _parse_message_bodies(raw, package, declared)
+     seen: set[str] = set()
+     for c in contributions:
+         if c.id in seen:
