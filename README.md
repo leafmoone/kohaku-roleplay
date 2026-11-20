@@ -9,8 +9,7 @@
 `0.5.0` 新增酒馆原生玩法 Tool、字面量 MVU 更新和多项世界书规则。升级时先停止目标 Studio，再在同一 KT 配置下按同名包更新，重启后从 History 恢复旧会话；不要清空 KT 配置目录或角色库。已保存的会话不会重放开场或改写原有世界书快照。
 
 - 角色库：在 Studio 的「新建标签」菜单打开 **Roleplay Library**，也可从设置里的 **Roleplay Cards** 跳转到该标签页。导入并选中卡片后，使用顶部的开局按钮。
-- 会话面板：展开聊天里的浮动工具栏，打开 `role` 面板，再用标题栏的固定按钮将它移到右侧。原版 KT 2.2.2 可能只在悬停时显示 `role`；支持扩展按钮文字的界面会直接显示它。未加载 `roleplay` 的 creature 不会应用角色卡。
-- 酒馆摘要：在 `role` 面板的摘要设置里勾选本局公开条目并保存，最多八项。宿主支持 `sessionHeader` 时，桌面和窄屏会话标题区会实时显示只读摘要；不同会话不共享勾选。原版 KT 2.2.2 仍只有 `role` 侧栏入口，不显示标题摘要；仅更新本插件不会增加宿主能力。可选的 [KohakuTerrarium v2.2.2 标题栏源码补丁](compat/kohakuterrarium-v2.2.2/README.md) 及其构建说明适用于该精确版本。
+- 会话面板：在聊天工具栏打开 `role`，可用面板自己的固定按钮将其固定在右侧。原版 KT 2.2.2 可能需要悬停才显示 `role`。本局状态、脚本操作和作者网页都在这个独立面板里，不占会话标题栏，也不需要修改宿主标题栏。未加载 `roleplay` 的 creature 不会应用角色卡。
 - 人物形象：在已有 creature 的插件列表启用 `roleplay`，再在面板确认形象；移除仅影响之后的模型请求。
 - 酒馆：从角色库一键开局，或自选玩家身份和开场；也可启动 `@kohaku-roleplay/creatures/rp_agent` 后在面板选卡。开场白只展示并保存为一条角色消息，不向模型发送请求。
 - 小说（实验性）：从角色库用所选卡开局，或用演员列表组队，再在 root 聊天中输入行动。root 只在收齐必要回报后裁定；打开面板不会推进剧情，缺报时不会替角色作决定，新局也不读取旧局。
@@ -210,7 +209,7 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 - `kohaku.yaml`：KT 包清单；`creatures/rp_agent/`：单 agent 酒馆配置与角色行为。
 - `kt_roleplay/`：后端，含卡片解析、素材库、人物形象/游玩投影和世界书筛选；`card_state.py` 定义卡片状态协议，`state_tool.py` 提供酒馆更新工具，`mvu.py` / `mvu_tool.py` 负责静态初值与本局原生更新工具，`panels.py` 投影酒馆原生面板，`novel.py` / `scene_tools.py` / `recovery.py` 处理小说裁定、分发回报与中断恢复。
 - `kt_roleplay/card_editor.py`：在原格式上另存卡片；`charx.py`：读取归档及本地媒体；`portraits.py` / `portrait_library.py`：处理嵌入的本地图片、公开状态映射与立绘副本。
-- [`compat/kohakuterrarium-v2.2.2/`](compat/kohakuterrarium-v2.2.2/README.md)：可选的 KohakuTerrarium 标题栏与消息定位宿主源码补丁、上游许可证；[`compat/stagedog-opening.md`](compat/stagedog-opening.md)：实测旧作的开场兼容说明。
+- [`compat/kohakuterrarium-v2.2.2/`](compat/kohakuterrarium-v2.2.2/README.md)：可选的 KohakuTerrarium 消息定位宿主源码补丁与上游许可证；[`compat/stagedog-opening.md`](compat/stagedog-opening.md)：实测旧作的开场兼容说明。
 - `package.json` / `package-lock.json`：卡片模块离线链接器的一次性 Node.js 安装声明；`kt_roleplay/module_*.py`、`script_dependencies.py` 和 `link_card_module.mjs` 负责检查、保存与链接。
 - [原生玩法最小示例：物资登记员](examples/native-ledger.json)：可直接在角色库导入并开酒馆。无需卡片 JS、MVU 或 Node。查看 `state` 如何声明库存、核对结果和任务状态，再看 `panels` 如何引用它们。点击「核对清单」只发送所示玩家输入；由玩法工具记录动作，面板读取结果，不靠按钮直接改存档。
 - `kt_roleplay/opening_page_library.py`：已确认外部开场入口和模块缓存、依赖诊断；`ui/src/CardWebPanel.js`：在酒馆 Dock 挂载隔离的本局作者页。
