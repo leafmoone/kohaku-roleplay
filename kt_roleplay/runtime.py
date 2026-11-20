@@ -391,9 +391,13 @@ class RoleplayPlugin(BasePlugin):
         events = await run(recent, binding.agent_name, limit=LEGACY_MESSAGE_EVENT_LIMIT)
         return completed_legacy_message_anchor(reply, events) if still_current() else None
 
-    async def _resolve_message_slot(self, request: LegacyMessageSlotRequest) -> tuple[TavernSession, LegacyReplyState] | None:
-        if request.panelScope != self._web_panel_scope:
+    async def _resolve_message_slot(
+        self, locator: LegacyMessageLocator, *, panel_scope: str | None = None
+    ) -> tuple[TavernSession, LegacyReplyState] | None:
+        if panel_scope is not None and panel_scope != self._web_panel_scope:
             raise OwnerArgumentError('The message slot session changed')
+        if not self._web_panel_scope:
+            return None
         record = self._record()
         play = TavernSession.model_validate(record) if record is not None else None
         if not play or not play.web_panel or not play.web_panel_ready or not play.legacy_opening_web:
@@ -401,15 +405,23 @@ class RoleplayPlugin(BasePlugin):
         legacy, reply = play.legacy_opening_web, play.legacy_reply_web
         if not legacy.message_slot_enabled or reply is None or not has_legacy_message_slot(reply.text):
             return None
-        locator = request.locator
         if (reply.turn, reply.branch) != (locator.turn, locator.branchId):
             return None
         if await self._web_message_anchor(play, locator.turn) != locator.model_dump() or self._record() != record:
             return None
         return play, reply
 
+    async def _legacy_message_offer(self, locator: LegacyMessageLocator) -> dict:
+        # Discovery never advertises old snapshots with no explicit ready flag.
+        if (self._record() or {}).get('web_panel_ready') is not True:
+            return {'offer': None}
+        resolved = await self._resolve_message_slot(locator)
+        if resolved is None or not legacy_slot_options(resolved[1].text):
+            return {'offer': None}
+        return {'offer': {'mode': LEGACY_MESSAGE_SLOT, 'panelScope': self._web_panel_scope}}
+
     async def _legacy_message_slot(self, request: LegacyMessageSlotRequest) -> dict:
-        if (resolved := await self._resolve_message_slot(request)) is None:
+        if (resolved := await self._resolve_message_slot(request.locator, panel_scope=request.panelScope)) is None:
             return {'slot': None}
         play, reply = resolved
         # Only the compatibility message_id (the tavern turn) goes into the
@@ -419,7 +431,7 @@ class RoleplayPlugin(BasePlugin):
                 'message': legacy_web_message(reply.turn, reply.text, reply.values, selected)}
 
     async def _legacy_message_option(self, request: LegacyMessageOptionRequest) -> dict:
-        if (resolved := await self._resolve_message_slot(request)) is None:
+        if (resolved := await self._resolve_message_slot(request.locator, panel_scope=request.panelScope)) is None:
             return {'draft': None}
         _, reply = resolved
         options = legacy_slot_options(reply.text)
@@ -785,6 +797,10 @@ class RoleplayPlugin(BasePlugin):
                 return self.ui_state()
             if action == "cards" and self.mode in ("persona", "tavern"):
                 return cards_view(library_dir())
+            if action == 'card_web_message_offer' and self.mode == 'tavern':
+                if set(args) != {'locator'}:
+                    raise OwnerArgumentError('Expected only the trusted message locator')
+                return await self._legacy_message_offer(LegacyMessageLocator.model_validate(args['locator']))
             if action == 'card_web_message_slot' and self.mode == 'tavern':
                 return await self._legacy_message_slot(LegacyMessageSlotRequest.model_validate(args))
             if action == 'card_web_message_option' and self.mode == 'tavern':
