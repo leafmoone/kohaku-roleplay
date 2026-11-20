@@ -310,13 +310,6 @@ export const RoleplayMiniPanel = {
     });
     const novelView = computed(() => projectNovelView(state.value));
 
-    const modeBadgeLabel = computed(() => {
-      if (mode.value === "tavern") return t("modeTavern");
-      if (mode.value === "novel") return t("modeNovel");
-      if (mode.value === "npc") return t("modeNpc");
-      return t("modePersona");
-    });
-
     const summaryMode = computed(() => {
       if (!isActiveTavern.value) return "none";
       const pinnedItems = state.value.headerSummary?.items;
@@ -565,7 +558,6 @@ export const RoleplayMiniPanel = {
       t,
       state,
       mode,
-      modeBadgeLabel,
       active,
       isActiveTavern,
       tavernScopeKey,
@@ -616,11 +608,7 @@ export const RoleplayMiniPanel = {
         <div class="ktrp-mini-head" data-testid="kt-rp-mini-head">
           <div class="ktrp-mini-title-row">
             <strong class="ktrp-mini-char-name" data-testid="kt-rp-mini-char-name">{{ state.name }}</strong>
-            <span class="ktrp-chip ktrp-chip--accent" data-testid="kt-rp-mini-mode-badge">{{ modeBadgeLabel }}</span>
           </div>
-          <span class="ktrp-muted" data-testid="kt-rp-mini-player-summary">
-            {{ t('tavernPlayerSummary', { name: state.player?.name || 'Player' }) }}
-          </span>
         </div>
 
         <div
@@ -642,7 +630,7 @@ export const RoleplayMiniPanel = {
               {{ summaryExpanded ? t('collapseFieldBtn') : t('expandFieldBtn') }}
             </ActionButton>
           </div>
-          <div class="ktrp-header-summary">
+          <div v-if="!summaryExpanded" class="ktrp-header-summary">
             <div
               v-for="item in summaryItems"
               :key="item.id"
@@ -670,7 +658,7 @@ export const RoleplayMiniPanel = {
             </div>
           </div>
           <div
-            v-if="summaryExpanded"
+            v-else
             class="ktrp-state-list ktrp-state-list--compact"
             data-testid="kt-rp-mini-summary-details"
           >
@@ -806,10 +794,6 @@ export const RoleplayMiniPanel = {
 
       <template v-else-if="mode === 'novel' && novelView.active">
         <div class="ktrp-mini-head" data-testid="kt-rp-mini-novel">
-          <div class="ktrp-mini-title-row">
-            <strong class="ktrp-mini-char-name">{{ t('novelProjectionTitle') }}</strong>
-            <span class="ktrp-chip ktrp-chip--accent" data-testid="kt-rp-mini-mode-badge">{{ modeBadgeLabel }}</span>
-          </div>
           <div class="ktrp-inline-actions">
             <span class="ktrp-chip">{{ t('novelSceneCompleted', { count: novelView.sceneNumber }) }}</span>
             <ActionButton
@@ -835,10 +819,6 @@ export const RoleplayMiniPanel = {
 
       <template v-else>
         <div class="ktrp-mini-head" data-testid="kt-rp-mini-inactive">
-          <div class="ktrp-mini-title-row">
-            <strong class="ktrp-mini-char-name">{{ t('panelTitle') }}</strong>
-            <span class="ktrp-chip" data-testid="kt-rp-mini-mode-badge">{{ modeBadgeLabel }}</span>
-          </div>
           <p class="ktrp-muted">{{ t('miniPanelInactiveHint') }}</p>
         </div>
       </template>

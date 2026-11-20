@@ -1027,19 +1027,11 @@ export const RoleplayDockPanel = {
       }
     }
 
-    const modeBadgeLabel = computed(() => {
-      if (mode.value === "tavern") return t("modeTavern");
-      if (mode.value === "novel") return t("modeNovel");
-      if (mode.value === "npc") return t("modeNpc");
-      return t("modePersona");
-    });
-
     return {
       owner,
       t,
       state,
       mode,
-      modeBadgeLabel,
       active,
       cards,
       cardsLoading,
@@ -1137,10 +1129,6 @@ export const RoleplayDockPanel = {
   template: `
     <div class="ktrp-panel" :aria-busy="busy" data-testid="kt-rp-panel">
       <header class="ktrp-panel-head">
-        <div class="ktrp-panel-title-wrap">
-          <strong class="ktrp-panel-title">{{ t('panelTitle') }}</strong>
-          <span class="ktrp-chip ktrp-chip--accent" data-testid="kt-rp-mode-badge">{{ modeBadgeLabel }}</span>
-        </div>
         <div class="ktrp-panel-actions">
           <ActionButton
             size="sm"
@@ -1302,14 +1290,6 @@ export const RoleplayDockPanel = {
             />
             <div class="ktrp-active-meta">
               <h4>{{ state.name }}</h4>
-              <p class="ktrp-muted">{{ t('tavernPlayerSummary', { name: state.player?.name || 'Player' }) }}</p>
-              <span
-                v-if="state.openingSent"
-                class="ktrp-chip ktrp-chip--accent"
-                data-testid="kt-rp-tavern-opening-sent"
-              >
-                {{ t('tavernOpeningSent') }}
-              </span>
             </div>
           </div>
 
@@ -1501,7 +1481,6 @@ export const RoleplayDockPanel = {
                 </ActionButton>
               </div>
             </div>
-            <p class="ktrp-muted">{{ t('cardScriptsSessionHint') }}</p>
 
             <div
               v-if="scriptError"

@@ -669,15 +669,6 @@ export const CardWebPanel = {
         props.webPanelMeta?.source === "legacyOpening",
     );
 
-    const displayedLatestTurnNumber = computed(() => {
-      if (Number.isInteger(latestTurnNumber.value)) {
-        return latestTurnNumber.value;
-      }
-      const fromMeta = props.webPanelMeta?.latestMessageId;
-      if (Number.isInteger(fromMeta)) return fromMeta;
-      return null;
-    });
-
     const canSwitchLegacySnapshot = computed(
       () =>
         isOpen.value &&
@@ -1119,14 +1110,9 @@ export const CardWebPanel = {
       activeMountToken,
       activeTitle,
       activeSnapshotTarget,
-      activeSelectedMessageId,
-      hasLegacyLatest,
-      latestTurnNumber,
-      displayedLatestTurnNumber,
       canSwitchLegacySnapshot,
       outerSrcdoc,
       outerFrameRef,
-      isLegacyOpening,
       issueMessage,
       selectLegacySnapshot,
       openOrReloadPanel,
@@ -1144,21 +1130,6 @@ export const CardWebPanel = {
           <strong class="ktrp-box-head" data-testid="kt-rp-web-panel-title">
             {{ webPanelMeta?.title || activeTitle || t('cardWebPanelDefaultTitle') }}
           </strong>
-          <span
-            v-if="webPanelMeta"
-            class="ktrp-chip"
-            :class="{ 'ktrp-chip--accent': !isLegacyOpening }"
-            data-testid="kt-rp-web-panel-mode-badge"
-          >
-            {{ isLegacyOpening ? t('cardWebPanelLegacyReadonlyBadge') : t('cardWebPanelInteractiveBadge') }}
-          </span>
-          <span
-            v-if="isOpen && isLegacyOpening && activeSelectedMessageId !== null"
-            class="ktrp-chip"
-            data-testid="kt-rp-web-panel-turn-badge"
-          >
-            #{{ activeSelectedMessageId }}
-          </span>
         </div>
 
         <div v-if="webPanelMeta" class="ktrp-inline-actions">
@@ -1190,11 +1161,7 @@ export const CardWebPanel = {
                 data-testid="kt-rp-web-panel-snapshot-latest-btn"
                 @click="selectLegacySnapshot('latest')"
               >
-                {{
-                  displayedLatestTurnNumber !== null
-                    ? t('cardWebPanelSnapshotLatestTurnBtn', { turn: displayedLatestTurnNumber })
-                    : t('cardWebPanelSnapshotLatestBtn')
-                }}
+                {{ t('cardWebPanelSnapshotLatestBtn') }}
               </ActionButton>
             </template>
             <ActionButton
@@ -1222,10 +1189,6 @@ export const CardWebPanel = {
           </template>
         </div>
       </div>
-
-      <p v-if="webPanelMeta" class="ktrp-muted" data-testid="kt-rp-web-panel-hint">
-        {{ isLegacyOpening ? t('cardWebPanelLegacyHint') : t('cardWebPanelInteractiveHint') }}
-      </p>
 
       <div
         v-if="webPanelIssue && !webPanelMeta"
