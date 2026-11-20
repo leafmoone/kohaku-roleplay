@@ -147,7 +147,7 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 可信宿主组件可用 `card_web_message_anchor` 传入本局 `panelScope` 和 `legacyLatest.message_id`，查询本局当前分支的已完成旧网页回复。仅支持宿主提供按 agent 限量读取的 `recent_agent_events`，且持久 `processing_end` 明确标记成功的版本。成功返回 `{anchor: {turn, branchId, eventId, roundStartEventId}}`；生成开始、规范回复和成功终止必须各有正整数物理 ID，且严格按此顺序。宿主按这些持久事件定位，不按正文或回合号猜测；正在生成、回复已过期、旧存档缺分支或未在最近 128 条本 agent 事件内确认完成时，返回 `{anchor: null}`。原版 KT 2.2.2 不提供该能力，旧快照照常显示。该版可选用[持久消息定位源码补丁](compat/kohakuterrarium-v2.2.2/README.md#已完成消息的只读定位)。这是宿主侧只读接口，不传给作者 iframe，不开放聊天记录、草稿或 DOM 写入。
 
-实验性 `legacyMessageSlot: "mes-text-v1"` 只在新局明确启用开场模块、且所选远程开场实际从已确认的资源成功离线链接时可用。完整助理回复含唯一且非空的 `<roleplay_options>…</roleplay_options>` 时，可信 owner 可用 `card_web_message_slot({panelScope, locator})` 取该行的一份已批准网页和消息快照。`locator` 必须按上式精确匹配当前成功分支的全部四个字段；没有可确认的当前锚点或定位已过期时返回 `{slot: null}`，参数缺失或作用域错误则拒绝请求。scope、分支和两个物理事件 ID 不应进入作者框；快照里的 `message_id` 只是兼容层的回合号，用于作者代码访问这一份消息。另已开启 `enableOpeningMvuRead` 时才带玩家选中的公开变量。这里的读取接口不挂载消息行、不触发作者脚本，也不开放真实宿主 DOM。
+新局所选远程开场从本地资源成功离线链接后，默认具备 `mes-text-v1` 兼容能力，不另做开局授权。接口可显式传 `legacyMessageSlot: null` 关闭。`card_web_message_offer({locator})` 只为当前、已完成且有合法选项的行返回 `{offer: {mode, panelScope}}`，不读取网页到客户端；不符合条件时返回 `{offer: null}`。完整助理回复含唯一且非空的 `<roleplay_options>…</roleplay_options>` 时，可信 owner 可用 `card_web_message_slot({panelScope, locator})` 取该行的一份已批准网页和消息快照。`locator` 必须按上式精确匹配当前成功分支的全部四个字段；没有可确认的当前锚点或定位已过期时返回 `{slot: null}`，参数缺失或作用域错误则拒绝请求。scope、分支和两个物理事件 ID 不应进入作者框；快照里的 `message_id` 只是兼容层的回合号，用于作者代码访问这一份消息。另已开启 `enableOpeningMvuRead` 时才带玩家选中的公开变量。这里的读取接口不挂载消息行、不触发作者脚本，也不开放真实宿主 DOM。
 
 可信 owner 的 `card_web_message_option({panelScope, locator, optionIndex})` 可为当前消息核对一条选项并返回待展示的纯文本 `{draft: {label, text}}`。只认该成功回复中合法选项块的本地零基索引（最多八项，每行 `名称: 内容` 或 `名称：内容`）；识别 `「…」`／`${…}` 仅去除外层字符，不求值。过期行返回 `{draft: null}`，非法索引或调用方传来的任意文本拒绝。调用不会写草稿、发消息、推进回合或结算；宿主不得把展示候选文本说成已发送。
 
@@ -165,7 +165,7 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 仅新开局选到含该标记的开场、且没有适用的 CHARX 或卡内页面时，才从本地缓存快照自包含的外链入口。页面和开场照旧只读，随本局存档；后来缓存或删除库卡不改旧局。未确认、需要外部资源、或入口形式暂不支持时，酒馆正常开局，owner 分别报告 `entry_unconfirmed`、`entry_needs_resources` 或 `entry_unsupported`，不提供面板。这里检查的是页面声明的资源和脚本依赖，不替代浏览器隔离，也不保证任意旧网页可运行。卡库选中有此声明的卡片后，在「外部开场网页」区分别确认 HTML 和每个待确认模块；子模块会标明父地址。可跳过，不影响文本开局。确认成功但清单刷新失败时，「重试」只重新读取清单，不再提交下载。
 
-新局可在卡库开局时勾选「运行已确认的开场网页模块」（接口 `enableOpeningModules: true`），只使用本卡已经确认且完整的静态模块图。此开关与兼容卡脚本独立，每次开局默认关闭，成功开局后复位。该方式只支持一个可识别的内联模块脚本，不支持图片、样式表或动态模块等额外资源；已安装 Node.js 和包内 Rolldown 时，KT 离线链接模块，将结果作为本局只读网页快照，玩家仍要在 Dock 中显式打开才运行。依赖未齐、入口不支持或无法链接时保留正常文本开场，不回填旧局。原开场 HTML 和模块缓存仍按原字节保存。
+新局默认使用本卡已缓存且完整的静态开场模块图，不需要为同一份本地内容再勾选一次。接口仍可传 `enableOpeningModules: false` 显式关闭；该默认与兼容卡脚本的设置无关。该方式只支持一个可识别的内联模块脚本，不支持图片、样式表或动态模块等额外资源；已安装 Node.js 和包内 Rolldown 时，KT 离线链接模块，将结果作为本局只读网页快照，玩家仍要在 Dock 中显式打开才运行。依赖未齐、入口不支持或无法链接时保留正常文本开场，不回填旧局。原开场 HTML 和模块缓存仍按原字节保存。
 
 开局接口另支持显式 `openingPageRuntime: "vue-3.5.22"`（试验性、默认无、须同时允许开场模块，目前没有卡库选项）。仅在本卡已确认、可离线链接的网页依赖图中恰有一个精确的 jsDelivr `vue@3.5.22/+esm` 时，在作者的隔离页面内提供只读 `Vue` 全局。它复用图中同一模块，不另外下载，不接触宿主 Vue、其他局、库原件或历史快照；对自包含网页无作用。
 

@@ -232,10 +232,11 @@ def _cached_page_bytes(directory: Path, card_id: str, url: str) -> bytes | None:
 def cached_opening_panel(directory: Path, card_id: str, declared: LegacyRemoteOpening, *,
                          allow_modules: bool = False,
                          runtime: OpeningPageRuntime | None = None,
-                         require_linked: bool = False) -> tuple[WebPanel | None, OpeningPageIssue | None]:
+                         require_linked: bool = False) -> tuple[WebPanel | None, OpeningPageIssue | None, bool]:
+    """Return the saved panel, its issue (if any), and whether it was linked offline."""
     source = _cached_page_bytes(directory, card_id, declared.url)
     if source is None:
-        return None, 'entry_unconfirmed'
+        return None, 'entry_unconfirmed', False
     checker = _EntryResources()
     try:
         html = source.decode('utf-8-sig')
@@ -243,14 +244,17 @@ def cached_opening_panel(directory: Path, card_id: str, declared: LegacyRemoteOp
         checker.close()
     except (AssertionError, ValueError):
         # The parser can reject malformed declarations or oversized numeric character references.
-        return None, 'entry_unsupported'
+        return None, 'entry_unsupported', False
     if checker.unsupported or checker.truncated or checker.inline:
-        return None, 'entry_unsupported'
+        return None, 'entry_unsupported', False
     if checker.needs_resources:
         if allow_modules:
-            return _cached_linked_opening_panel(directory, card_id, declared.title, html, runtime=runtime)
-        return None, 'entry_needs_resources'
-    return (None, 'entry_unsupported') if require_linked else (WebPanel(title=declared.title, html=html), None)
+            panel, issue = _cached_linked_opening_panel(directory, card_id, declared.title, html, runtime=runtime)
+            return panel, issue, panel is not None
+        return None, 'entry_needs_resources', False
+    if require_linked:
+        return None, 'entry_unsupported', False
+    return WebPanel(title=declared.title, html=html), None, False
 
 
 class OpeningPageDependencies(TypedDict):

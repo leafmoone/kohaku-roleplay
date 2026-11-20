@@ -81,7 +81,7 @@ class Play(Arguments):
     greetingIndex: int = Field(ge=0)
     worldbookId: str | None = Field(default=None, min_length=1)
     enableCardScripts: bool = False
-    enableOpeningModules: bool = False
+    enableOpeningModules: bool = True
     openingPageRuntime: OpeningPageRuntime | None = None
     enableOpeningMvuRead: bool = False
     openingMvuCounter: OpeningCounterGrant | None = None
@@ -91,7 +91,7 @@ class Play(Arguments):
     @model_validator(mode='after')
     def _opening_runtime_consent(self) -> 'Play':
         if self.openingPageRuntime is not None and not self.enableOpeningModules:
-            raise ValueError('An opening-page runtime also needs explicit opening module permission')
+            raise ValueError('An opening-page runtime requires opening modules to be enabled')
         if self.enableOpeningMvuRead and self.openingPageRuntime != CALLBACK_RUNTIME:
             raise ValueError('Opening-page MVU reads require the tavern-page-callbacks-v1 runtime')
         if self.openingMvuCounter is not None and not self.enableOpeningMvuRead:
@@ -100,7 +100,7 @@ class Play(Arguments):
                                       or 'enableCardScripts' not in self.model_fields_set):
             raise ValueError('The opening schema needs a counter and explicit enableCardScripts: false')
         if self.legacyMessageSlot is not None and not self.enableOpeningModules:
-            raise ValueError('The message slot requires explicit approval to run the linked opening page')
+            raise ValueError('The message slot requires opening modules to be enabled')
         return self
 
 
@@ -1082,21 +1082,22 @@ class RoleplayPlugin(BasePlugin):
                     if rule is not None:
                         web_panel, marker = rule.panel, rule.marker
                     elif (remote := card.legacy_remote_opening) is not None and remote.marker in opening:
-                        web_panel, web_panel_issue = await to_thread(cached_opening_panel, library_dir(), choice.cardId, remote,
-                                                                     allow_modules=choice.enableOpeningModules,
-                                                                     runtime=choice.openingPageRuntime,
-                                                                     require_linked=choice.enableOpeningMvuRead or choice.legacyMessageSlot is not None)
+                        web_panel, web_panel_issue, linked = await to_thread(
+                            cached_opening_panel, library_dir(), choice.cardId, remote,
+                            allow_modules=choice.enableOpeningModules, runtime=choice.openingPageRuntime,
+                            require_linked=choice.enableOpeningMvuRead,
+                        )
                         check_opening_target()
                         marker = remote.marker
                         mvu_read_enabled = choice.enableOpeningMvuRead
-                        message_slot_enabled = choice.legacyMessageSlot == LEGACY_MESSAGE_SLOT
+                        message_slot_enabled = linked and (
+                            'legacyMessageSlot' not in choice.model_fields_set or choice.legacyMessageSlot == LEGACY_MESSAGE_SLOT
+                        )
                     if web_panel is not None and marker is not None:
                         legacy_state = LegacyOpeningState(marker=marker, values={},
                                                           mvu_status_adapter=has_mvu_status_adapter(marker, card.scripts),
                                                           mvu_read_enabled=mvu_read_enabled,
                                                           message_slot_enabled=message_slot_enabled)
-                if choice.legacyMessageSlot and not (legacy_state and legacy_state.message_slot_enabled):
-                    raise OwnerArgumentError('The message slot needs the selected approved linked remote opening page')
                 if counter := choice.openingMvuCounter:
                     if not legacy_state or not legacy_state.mvu_read_enabled or not mvu or counter.current(mvu.values) is None:
                         raise OwnerArgumentError('Choose an existing initialized integer in the linked opening for this counter')
