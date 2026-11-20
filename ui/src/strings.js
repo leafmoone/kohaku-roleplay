@@ -412,7 +412,7 @@ const EN_FALLBACK = {
   cardDepsPreviewBadge: "Card script module dependency review",
   cardDepsPreviewTitle: "Review script dependencies for \"{name}\"",
   cardDepsPreviewHint:
-    "This card declares script module imports. Remote HTTPS modules are never fetched automatically; select up to {max} eligible static HTTPS sources from author-enabled scripts to download and snapshot locally, or import the card without downloading remote modules.",
+    "This card declares script module imports. Remote HTTPS modules are never fetched automatically; select eligible static HTTPS sources from author-enabled scripts to download and snapshot locally, or import the card without downloading remote modules.",
   cardDepsImportConfirmModulesBtn: "Import card & download selected modules ({count})",
   cardDepsImportWithoutModulesBtn: "Import card without remote modules",
   cardDepsCancelImportBtn: "Cancel import",
@@ -440,7 +440,6 @@ const EN_FALLBACK = {
   cardDepsRefUnspecified: "(non-literal or dynamic specifier)",
   cardDepsNoteExternalMvuZod:
     "Uses external mvu_zod registerMvuSchema helper (runtime schema validation notice).",
-  cardDepsMaxLimitHint: "Up to {max} distinct static HTTPS modules can be selected per card.",
   headerSummaryTitle: "Header summary pins",
   headerSummaryHint:
     "Select up to {max} public state fields, native panels, or MVU variables to display in the session header bar.",
@@ -490,14 +489,11 @@ const EN_FALLBACK = {
   openingPlanStatusModulesMissing: "Pending module approvals",
   openingPlanStatusStaticGraphComplete: "Static module cache complete (not a runtime guarantee)",
   openingPlanStatusOtherResources: "References non-module external resources",
-  openingPlanStatusModuleLimit: "Opening module count or size limit exceeded",
   openingPlanStatusUnsupported: "Unsupported HTML or module syntax",
   openingPlanStaticGraphCompleteNote:
     "All discovered static HTTPS module imports are cached locally. This only confirms static cache completeness and does not guarantee runtime compatibility.",
   openingPlanOtherResourcesNote:
     "This opening page references external non-module resources (such as stylesheets, images, or classic script src) that cannot run in the offline sandbox.",
-  openingPlanModuleLimitNote:
-    "This opening page exceeds the maximum allowed opening module count (16) or total size (4 MiB).",
   openingPlanUnsupportedNote:
     "This opening page or one of its modules uses unsupported HTML tags, importmaps, or dynamic/non-literal imports.",
   openingPlanSavedModulesTitle: "Saved opening module snapshots ({count})",

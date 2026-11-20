@@ -34,7 +34,6 @@ import { useRoleplayText } from "./strings.js";
  * When `mode === 'tab'`, also exposes Tavern & Novel launch actions via `kt.api.post(...)`.
  */
 const NOVEL_CAST_LIMIT = 32;
-const MAX_CARD_MODULES = 6;
 
 function normalizeScriptDependencies(rawScripts) {
   if (!Array.isArray(rawScripts)) return [];
@@ -607,8 +606,6 @@ export const CardLibraryView = {
           return t("openingPlanStatusStaticGraphComplete");
         case "other_resources":
           return t("openingPlanStatusOtherResources");
-        case "module_limit":
-          return t("openingPlanStatusModuleLimit");
         case "unsupported":
         default:
           return t("openingPlanStatusUnsupported");
@@ -777,9 +774,7 @@ export const CardLibraryView = {
                 : [],
             );
             const unsavedEligible = eligible.filter((u) => !savedSet.has(u));
-            detailSelectedModuleUrls.value = (
-              unsavedEligible.length ? unsavedEligible : eligible
-            ).slice(0, MAX_CARD_MODULES);
+            detailSelectedModuleUrls.value = unsavedEligible.length ? unsavedEligible : eligible;
             if (result?.remoteOpeningPage && typeof result.remoteOpeningPage.url === "string") {
               void loadOpeningModulePlan(id);
             } else {
@@ -928,7 +923,7 @@ export const CardLibraryView = {
             : file.name;
         if (scripts.length > 0) {
           const eligibleUrls = collectEligibleHttpsUrls(scripts);
-          pendingImportSelectedUrls.value = eligibleUrls.slice(0, MAX_CARD_MODULES);
+          pendingImportSelectedUrls.value = [...eligibleUrls];
           pendingImportDeps.value = {
             data: base64,
             name: resolvedName,
@@ -973,7 +968,7 @@ export const CardLibraryView = {
       if (idx >= 0) {
         list.splice(idx, 1);
         pendingImportSelectedUrls.value = list;
-      } else if (list.length < MAX_CARD_MODULES) {
+      } else {
         list.push(url);
         pendingImportSelectedUrls.value = list;
       }
@@ -1030,9 +1025,9 @@ export const CardLibraryView = {
           }
         }
         const urls = withSelectedModules
-          ? pendingImportSelectedUrls.value
-              .filter((u) => pendingEligibleHttpsUrls.value.includes(u))
-              .slice(0, MAX_CARD_MODULES)
+          ? pendingImportSelectedUrls.value.filter((u) =>
+              pendingEligibleHttpsUrls.value.includes(u),
+            )
           : [];
         if (urls.length > 0 && cardId) {
           try {
@@ -1075,7 +1070,7 @@ export const CardLibraryView = {
       if (idx >= 0) {
         list.splice(idx, 1);
         detailSelectedModuleUrls.value = list;
-      } else if (list.length < MAX_CARD_MODULES) {
+      } else {
         list.push(url);
         detailSelectedModuleUrls.value = list;
       }
@@ -1085,9 +1080,9 @@ export const CardLibraryView = {
       const card = selectedCard.value;
       if (!card || busy.value || confirmingDetailModules.value) return;
       const targetCardId = card.id;
-      const urls = detailSelectedModuleUrls.value
-        .filter((u) => detailEligibleHttpsUrls.value.includes(u))
-        .slice(0, MAX_CARD_MODULES);
+      const urls = detailSelectedModuleUrls.value.filter((u) =>
+        detailEligibleHttpsUrls.value.includes(u),
+      );
       if (!urls.length) return;
       const seq = ++detailModulesSeq;
       confirmingDetailModules.value = true;
@@ -1322,7 +1317,6 @@ export const CardLibraryView = {
       toggleEmbeddedInspector,
       selectEmbeddedEntry,
       worldbookIssueLabel,
-      maxCardModules: MAX_CARD_MODULES,
       pendingImportDeps,
       pendingImportSelectedUrls,
       pendingEligibleHttpsUrls,
@@ -1509,7 +1503,7 @@ export const CardLibraryView = {
             <h4 data-testid="kt-rp-card-deps-preview-title">
               {{ t('cardDepsPreviewTitle', { name: pendingImportDeps.name }) }}
             </h4>
-            <p class="ktrp-muted">{{ t('cardDepsPreviewHint', { max: maxCardModules }) }}</p>
+            <p class="ktrp-muted">{{ t('cardDepsPreviewHint') }}</p>
           </div>
         </div>
 
@@ -1607,11 +1601,7 @@ export const CardLibraryView = {
                     v-if="refItem.selectable"
                     type="checkbox"
                     :checked="pendingImportSelectedUrls.includes(refItem.specifier)"
-                    :disabled="
-                      busy ||
-                      (!pendingImportSelectedUrls.includes(refItem.specifier) &&
-                        pendingImportSelectedUrls.length >= maxCardModules)
-                    "
+                    :disabled="busy"
                     :data-testid="'kt-rp-card-deps-preview-check-' + script.scriptId + '-' + rIdx"
                     :data-url="refItem.specifier"
                     @change="togglePendingModuleUrl(refItem.specifier)"
@@ -1639,10 +1629,6 @@ export const CardLibraryView = {
             </div>
           </div>
         </div>
-
-        <p v-if="pendingEligibleHttpsUrls.length > maxCardModules" class="ktrp-muted">
-          {{ t('cardDepsMaxLimitHint', { max: maxCardModules }) }}
-        </p>
 
         <div class="ktrp-inline-actions" data-testid="kt-rp-card-deps-preview-actions">
           <ActionButton
@@ -2380,12 +2366,7 @@ export const CardLibraryView = {
                             v-if="refItem.selectable"
                             type="checkbox"
                             :checked="detailSelectedModuleUrls.includes(refItem.specifier)"
-                            :disabled="
-                              busy ||
-                              confirmingDetailModules ||
-                              (!detailSelectedModuleUrls.includes(refItem.specifier) &&
-                                detailSelectedModuleUrls.length >= maxCardModules)
-                            "
+                            :disabled="busy || confirmingDetailModules"
                             :data-testid="'kt-rp-card-script-dep-check-' + script.scriptId + '-' + rIdx"
                             :data-url="refItem.specifier"
                             @change="toggleDetailModuleUrl(refItem.specifier)"
@@ -2579,13 +2560,6 @@ export const CardLibraryView = {
                     data-testid="kt-rp-card-opening-plan-other-resources-note"
                   >
                     {{ t('openingPlanOtherResourcesNote') }}
-                  </p>
-                  <p
-                    v-else-if="openingPlan.status === 'module_limit'"
-                    class="ktrp-muted"
-                    data-testid="kt-rp-card-opening-plan-limit-note"
-                  >
-                    {{ t('openingPlanModuleLimitNote') }}
                   </p>
                   <p
                     v-else-if="openingPlan.status === 'unsupported'"
