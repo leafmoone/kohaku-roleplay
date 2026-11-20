@@ -11,17 +11,19 @@ from pathlib import Path
 
 from .script_dependencies import scan_modules
 
-MAX_TEMPLATES = 32
-MAX_TEMPLATE_BYTES = 64 * 1024
-MAX_TEMPLATE_RESULT = 16 * 1024
-_TAG = re.compile(r'<%([_#]?)(.*?)([_-]?)%>', re.S)
+_TAG = re.compile(r'<%([_#=-]?)(.*?)([_-]?)%>', re.S)
+_IF = re.compile(r'@@if[ \t]+([^\r\n]+)(?:\r?\n|\Z)')
 _TOKEN = re.compile(r'''//[^\r\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|(?P<player>\??\.<user>)''')
 
 
+def is_template(text: str) -> bool:
+    return '<%' in text or text.startswith(('@@if ', '@@if\t'))
+
+
 def compile_template(text: str) -> str | None:
-    """Compile control tags and trim markers; reject other EJS tags and module loads."""
+    """Compile read-only prompt tags and leading conditions, without module loads."""
     try:
-        return _compile(text) if len(text.encode('utf-8')) <= MAX_TEMPLATE_BYTES else None
+        return _compile(text)
     except (UnicodeError, RecursionError):
         return None
 
@@ -36,10 +38,16 @@ def _player_property(match: re.Match[str]) -> str:
 def _compile(text: str) -> str | None:
     chunks = []
     end = 0
+    while match := _IF.match(text, end):
+        condition = match[1]
+        if '<%' in condition:
+            return None
+        chunks.append('if (!(' + _TOKEN.sub(_player_property, condition) + '\n)) return;')
+        end = match.end()
     trim = ''
     while (start := text.find('<%', end)) != -1:
         tag = _TAG.match(text, start)
-        if tag is None or '<%' in tag[2] or tag[2].startswith(('=', '-', '%', '~', ':')):
+        if tag is None or '<%' in tag[2] or (not tag[1] and tag[2].startswith(('%', '~', ':'))):
             return None
         literal = text[end:start]
         if trim == '_':
@@ -49,8 +57,12 @@ def _compile(text: str) -> str | None:
         if tag[1] == '_':
             literal = literal.rstrip()
         chunks.append('$ktOutput(' + json.dumps(literal) + ');')
-        if tag[1] != '#':
-            chunks.append(_TOKEN.sub(_player_property, tag[2]))
+        code = _TOKEN.sub(_player_property, tag[2])
+        if tag[1] in ('=', '-'):
+            # Both tags insert text during prompt generation, not browser HTML.
+            chunks.append('$ktOutput((' + code.rstrip().removesuffix(';') + '\n));')
+        elif tag[1] != '#':
+            chunks.append(code)
         end, trim = tag.end(), tag[3]
     tail = text[end:]
     if not end:
@@ -60,7 +72,7 @@ def _compile(text: str) -> str | None:
     elif trim == '-':
         tail = re.sub(r'^\r?\n', '', tail)
     chunks.append('$ktOutput(' + json.dumps(tail) + ');')
-    compiled = '($ktOutput, getvar, _, $ktPlayer) => {\n' + '\n'.join(chunks) + '\n}'
+    compiled = 'async ($ktOutput, getvar, _, $ktPlayer) => {\n' + '\n'.join(chunks) + '\n}'
     refs, invalid, truncated = scan_modules(compiled)
     return None if refs or invalid or truncated else compiled
 
@@ -68,12 +80,7 @@ def _compile(text: str) -> str | None:
 def render_templates(texts: list[str], values: dict, player: str) -> tuple[dict[str, str], int]:
     """Return only successful nonempty renderings, and count failed entries for diagnostics."""
     authored = Counter(texts)
-    pairs = []
-    for text in authored:
-        if len(pairs) >= MAX_TEMPLATES:
-            break
-        if program := compile_template(text):
-            pairs.append((text, program))
+    pairs = [(text, program) for text in authored if (program := compile_template(text)) is not None]
     failed = len(texts) - sum(authored[text] for text, _ in pairs)
     if not pairs:
         return {}, failed
@@ -82,19 +89,24 @@ def render_templates(texts: list[str], values: dict, player: str) -> tuple[dict[
                              ensure_ascii=True, allow_nan=False).encode('ascii')
         worker = Path(__file__).with_name('script_vm.py')
         env = {key: os.environ[key] for key in ('SYSTEMROOT', 'WINDIR') if key in os.environ}
-        result = subprocess.run([sys.executable, '-I', '-B', str(worker), 'lore'], cwd=worker.parent, env=env,
-                                input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3)
-        if result.returncode:
-            return {}, len(texts)
-        rendered = json.loads(result.stdout)
-        if not isinstance(rendered, list) or len(rendered) != len(pairs):
-            return {}, len(texts)
-        output = {}
-        for (text, _), body in zip(pairs, rendered, strict=True):
-            if not isinstance(body, str) or '<%' in body or len(body.encode('utf-8')) > MAX_TEMPLATE_RESULT:
-                failed += authored[text]
-            elif body.strip():
-                output[text] = body
-        return output, failed
-    except (OSError, subprocess.TimeoutExpired, ValueError, RecursionError):
+        try:
+            result = subprocess.run([sys.executable, '-I', '-B', str(worker), 'lore'], cwd=worker.parent, env=env,
+                                    input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3)
+            wire = result.stdout
+        except subprocess.TimeoutExpired as exc:
+            wire = exc.stdout or b''
+    except (OSError, ValueError, RecursionError):
         return {}, len(texts)
+    # A timed-out worker may have completed earlier entries. Keep its complete responses.
+    output = {}
+    rendered = wire.split(b'\n')[:-1]
+    for index, (text, _) in enumerate(pairs):
+        try:
+            body = json.loads(rendered[index]) if index < len(rendered) else None
+        except (ValueError, RecursionError):
+            body = None
+        if not isinstance(body, str) or '<%' in body:
+            failed += authored[text]
+        elif body.strip():
+            output[text] = body
+    return output, failed

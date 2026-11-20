@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from .errors import CardError
 from .lore import LoreBook, LoreEntry, LorePosition, SecondaryLogic
 from .lore_regex import is_regex_key, valid_regex_key
-from .lore_templates import compile_template
+from .lore_templates import compile_template, is_template
 
 
 _POSITIONS: dict[int, LorePosition] = {
@@ -50,7 +50,7 @@ def _read_entry(item: object, *, standalone: bool) -> LoreEntry:
     if any(isinstance(key, str) and is_regex_key(key) and not valid_regex_key(key) for key in (*keys, *secondary)):
         raise _SkippedEntry("unsupported_key")
     text = item.get("content")
-    template = isinstance(text, str) and '<%' in text
+    template = isinstance(text, str) and is_template(text)
     if isinstance(text, str) and (_SCRIPT_CONTENT.search(text) or (template and compile_template(text) is None)):
         raise _SkippedEntry("script_content")
     if any(fields.get(key) for key in _UNSUPPORTED_TRIGGERS):

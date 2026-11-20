@@ -230,46 +230,54 @@ def _execute_opening_schema(payload: dict) -> dict:
 
 
 _LORE_RENDER = r"""
-(program, wire, player) => {
+async (program, wire, player) => {
     const parse = JSON.parse, own = Object.hasOwn;
     const values = parse(wire);
     const playerKey = own(values, '<user>') ? '<user>' : player;
-    const getvar = key => key === 'stat_data' ? parse(wire) : undefined;
-    const _ = Object.freeze({has(object, path) {
-        if (typeof path !== 'string') return false;
+    const missing = Symbol();
+    const lookup = (object, path) => {
+        if (typeof path !== 'string' || !path) return missing;
         const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean);
         if (parts[0] === '<user>') parts[0] = playerKey;
         for (const key of parts) {
-            if (object == null || !own(object, key)) return false;
+            if (object == null || !own(object, key)) return missing;
             object = object[key];
         }
-        return parts.length > 0;
-    }});
-    let result = '';
-    program(text => {
-        if (typeof text !== 'string' || result.length + text.length > 16384) throw new Error('Template output too large');
-        result += text;
+        return parts.length ? object : missing;
+    };
+    const getvar = (key, options) => {
+        if (key === 'stat_data') return parse(wire);
+        const value = typeof key === 'string' && key.startsWith('stat_data.') ? lookup(values, key.slice(10)) : missing;
+        return value === missing ? options?.defaults : value && typeof value === 'object' ? parse(JSON.stringify(value)) : value;
+    };
+    const _ = Object.freeze({has: (object, path) => lookup(object, path) !== missing});
+    const result = [];
+    await program(text => {
+        if (text != null) result.push(String(text));
     }, getvar, _, playerKey);
-    return result;
+    return result.join('');
 }
 """
 
 
-def _render_lore(payload: dict) -> list[str | None]:
+def _render_lore(payload: dict):
     import quickjs
 
     wire = json.dumps(json.dumps(payload['values'], allow_nan=False))
     player = json.dumps(payload['player'])
-    rows = []
     for program in payload['programs']:
         try:
             context = _sandbox_context()
-            context.eval('const $ktRender = (' + _LORE_RENDER + ');')
-            text = context.eval('$ktRender((' + program + '),' + wire + ',' + player + ')')
-            rows.append(text if isinstance(text, str) and len(text.encode('utf-8')) <= 16 * 1024 else None)
+            context.eval('const $ktRender = (' + _LORE_RENDER + '); let $ktRendered;')
+            deadline = perf_counter() + 0.05
+            context.eval('$ktRender((' + program + '),' + wire + ',' + player
+                         + ').then(text => { $ktRendered = text; }, () => {});')
+            while perf_counter() < deadline and context.execute_pending_job():
+                pass
+            text = context.eval('$ktRendered')
+            yield text if isinstance(text, str) else None
         except (quickjs.JSException, UnicodeError):
-            rows.append(None)
-    return rows
+            yield None
 
 
 def main() -> None:
@@ -289,7 +297,9 @@ def main() -> None:
         elif schema:
             result = _execute_opening_schema(json.loads(raw))
         elif sys.argv[1:] == ['lore']:
-            result = _render_lore(json.loads(raw))
+            for text in _render_lore(json.loads(raw)):
+                print(json.dumps(text, ensure_ascii=True), flush=True)
+            return
         else:
             result = execute(json.loads(raw))
     except ImportError as exc:
