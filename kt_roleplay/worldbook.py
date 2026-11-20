@@ -8,13 +8,14 @@ from pydantic import ValidationError
 from .errors import CardError
 from .lore import LoreBook, LoreEntry, LorePosition, SecondaryLogic
 from .lore_regex import is_regex_key, valid_regex_key
+from .lore_templates import compile_template
 
 
 _POSITIONS: dict[int, LorePosition] = {
     0: "before_char", 1: "after_char", 2: "before_notes", 3: "after_notes", 4: "at_depth", 7: "outlet",
 }
 _LOGIC: dict[int, SecondaryLogic] = {0: "and_any", 1: "not_all", 2: "not_any", 3: "and_all"}
-_SCRIPT_CONTENT = re.compile(r"<%|<\s*(?:script|iframe)\b", re.IGNORECASE)
+_SCRIPT_CONTENT = re.compile(r"<\s*(?:script|iframe)\b", re.IGNORECASE)
 _UNSUPPORTED_TRIGGERS = (
     "vectorized", "ignoreBudget", "ignore_budget",
     "characterFilter", "character_filter", "automationId", "automation_id", "triggers",
@@ -49,7 +50,8 @@ def _read_entry(item: object, *, standalone: bool) -> LoreEntry:
     if any(isinstance(key, str) and is_regex_key(key) and not valid_regex_key(key) for key in (*keys, *secondary)):
         raise _SkippedEntry("unsupported_key")
     text = item.get("content")
-    if isinstance(text, str) and _SCRIPT_CONTENT.search(text):
+    template = isinstance(text, str) and '<%' in text
+    if isinstance(text, str) and (_SCRIPT_CONTENT.search(text) or (template and compile_template(text) is None)):
         raise _SkippedEntry("script_content")
     if any(fields.get(key) for key in _UNSUPPORTED_TRIGGERS):
         raise _SkippedEntry("unsupported_trigger")
@@ -82,7 +84,8 @@ def _read_entry(item: object, *, standalone: bool) -> LoreEntry:
     order = item.get("order" if standalone else "insertion_order", 100)
     try:
         return LoreEntry.model_validate({
-            "keys": keys, "secondary_keys": secondary, "content": text, "position": position, "outlet_name": outlet.strip(),
+            "keys": keys, "secondary_keys": secondary, "content": text, "content_template": template,
+            "position": position, "outlet_name": outlet.strip(),
             "enabled": not item.get("disable", False) if standalone else item.get("enabled"),
             "insertion_order": order,
             "priority": item.get("priority", order if standalone else 0),
@@ -131,6 +134,9 @@ def _entry_preview(index: int, item: object, standalone: bool, entry: LoreEntry 
     }
 
 
+TEMPLATE_BOOK_BUDGET = 4096
+
+
 def read_worldbook(source: dict[str, object], *, preview: list[dict[str, object]] | None = None) -> LoreBook:
     entries = source.get("entries")
     standalone = isinstance(entries, dict)
@@ -151,11 +157,12 @@ def read_worldbook(source: dict[str, object], *, preview: list[dict[str, object]
             skipped[issue] += 1
         if preview is not None:
             preview.append(_entry_preview(index, item, standalone, entry, issue))
+    default_budget = TEMPLATE_BOOK_BUDGET if any(entry.content_template for entry in rows) else 512
     try:
         return LoreBook.model_validate({
             "entries": rows, "issues": dict(skipped),
             "scan_depth": source.get("scan_depth", source.get("scanDepth", 4)),
-            "token_budget": source.get("token_budget", source.get("tokenBudget", 512)),
+            "token_budget": source.get("token_budget", source.get("tokenBudget", default_budget)),
             "recursive_scanning": source.get("recursive_scanning", source.get("recursiveScanning", False)),
             "group_scoring": source.get("use_group_scoring", source.get("useGroupScoring")) or False,
         })

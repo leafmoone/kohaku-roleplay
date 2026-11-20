@@ -44,6 +44,7 @@ from .library import CardNotFound, card_scripts_default, get_card
 from .module_linker import RETRYABLE_MODULE_ISSUES, ModuleLinkError, link_card_scripts
 from .lore import LoreBook, active_entries
 from .lore_regex import MatchBudget
+from .lore_templates import render_templates
 from .lore_timing import LoreTiming
 from .mvu import MvuChange, MvuInit, apply_changes, inspect_initializers, is_initializer, public_options, public_values
 from .mvu_legacy import apply_literal_update, split_opening
@@ -54,7 +55,7 @@ from .opening_mvu_schema import (OpeningSchemaGrant, OpeningSchemaSnapshot, deri
 from .opening_page_library import CALLBACK_RUNTIME, OpeningPageIssue, OpeningPageRuntime, cached_opening_panel
 from .panels import ChoicePanel, InventoryPanel, NativePanel, QuestPanel, public_panels
 from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
-from .worldbook import read_worldbook
+from .worldbook import TEMPLATE_BOOK_BUDGET, read_worldbook
 from .worldbook_library import WorldbookNotFound, WorldbookReference, default_worldbook_for_play, snapshot_detail, worldbook_for_play
 from .scene_tools import ingest_report
 from .script_session import ScriptSession, SessionScripts, approved, settled_mvu_scripts, upgrade_button_receipts, upgrade_script_clock
@@ -1229,8 +1230,36 @@ class RoleplayPlugin(BasePlugin):
                         and (message.metadata or {}).get("kind") != TOOL_FEEDBACK_KIND
                         for message in host.controller.conversation.get_messages()
                     )
+            # Reserve worker slots for entries that can activate now before speculating about recursive matches.
+            authored, recursive = [], []
+            scan = {}
+            template_match_budget = MatchBudget()
+            has_templates = False
+            for kind, book in sources.items():
+                for index, entry in enumerate(book.entries):
+                    if not entry.enabled or not entry.content_template:
+                        continue
+                    has_templates = True
+                    depth = book.scan_depth if entry.scan_depth is None else entry.scan_depth
+                    if depth not in scan:
+                        scan[depth] = '\n'.join(history[-depth:]) if depth else ''
+                    try:
+                        matches = entry.match_score(scan[depth], template_match_budget) is not None
+                    except TimeoutError:
+                        matches = False
+                    if matches or str(index) in play.lore_activation.get(kind, {}):
+                        authored.append(entry.content)
+                    elif book.recursive_scanning and not entry.exclude_recursion:
+                        recursive.append(entry.content)
+            rendered, template_failures = {}, 0
+            if authored or recursive:
+                rendered, template_failures = await to_thread(render_templates, authored + recursive,
+                                                               play.mvu.values if play.mvu else {}, play.player.name)
+                if self._record() != record:
+                    raise PluginBlockError('Roleplay session changed while rendering the worldbook; retry this turn')
             entries = []
-            remaining = 2048
+            allowance = TEMPLATE_BOOK_BUDGET if has_templates else 2048
+            remaining = allowance
 
             def lore_cost(text: str) -> int:
                 return _cost(render_tavern_text(text, play.card, play.player))
@@ -1241,7 +1270,7 @@ class RoleplayPlugin(BasePlugin):
             for kind, book in sources.items():
                 timing = LoreTiming(chat_count, activation.get(kind, {})) if kind in timers and chat_count is not None else None
                 chosen = active_entries(book, history, lore_cost, remaining, chat_messages=chat_count,
-                                        regex_budget=regex_budget, outlets=outlets, timing=timing)
+                                        regex_budget=regex_budget, outlets=outlets, timing=timing, rendered_templates=rendered)
                 entries.extend(chosen)
                 remaining -= sum(lore_cost(e.content) for e in chosen)
                 if timing is not None and timing.next:
@@ -1275,7 +1304,9 @@ class RoleplayPlugin(BasePlugin):
             if play.mvu_legacy:
                 content += "\nIf the card requests a literal <UpdateVariable> block, call rp_apply_mvu_update instead of printing the block. Do not apply the same change through both update tools."
             if books and self.binding:
-                lore_view = {"totalEntries": sum(len(book.entries) for book in books), "activeTitles": [e.name or e.comment or ", ".join(e.keys) for e in entries], "usedTokens": 2048 - remaining, "budgetTokens": min(2048, sum(book.token_budget for book in books))}
+                lore_view = {"totalEntries": sum(len(book.entries) for book in books), "activeTitles": [e.name or e.comment or ", ".join(e.keys) for e in entries], "usedTokens": allowance - remaining, "budgetTokens": min(allowance, sum(book.token_budget for book in books))}
+                if template_failures:
+                    lore_view['templateFailures'] = template_failures
                 if self.binding.get_state("loreView") != lore_view:
                     self.binding.set_state("loreView", lore_view)
                     self.ui_emit("state", self.ui_state())

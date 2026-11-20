@@ -229,6 +229,49 @@ def _execute_opening_schema(payload: dict) -> dict:
     return {'status': 'ok', 'values': json.loads(result)}
 
 
+_LORE_RENDER = r"""
+(program, wire, player) => {
+    const parse = JSON.parse, own = Object.hasOwn;
+    const values = parse(wire);
+    const playerKey = own(values, '<user>') ? '<user>' : player;
+    const getvar = key => key === 'stat_data' ? parse(wire) : undefined;
+    const _ = Object.freeze({has(object, path) {
+        if (typeof path !== 'string') return false;
+        const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean);
+        if (parts[0] === '<user>') parts[0] = playerKey;
+        for (const key of parts) {
+            if (object == null || !own(object, key)) return false;
+            object = object[key];
+        }
+        return parts.length > 0;
+    }});
+    let result = '';
+    program(text => {
+        if (typeof text !== 'string' || result.length + text.length > 16384) throw new Error('Template output too large');
+        result += text;
+    }, getvar, _, playerKey);
+    return result;
+}
+"""
+
+
+def _render_lore(payload: dict) -> list[str | None]:
+    import quickjs
+
+    wire = json.dumps(json.dumps(payload['values'], allow_nan=False))
+    player = json.dumps(payload['player'])
+    rows = []
+    for program in payload['programs']:
+        try:
+            context = _sandbox_context()
+            context.eval('const $ktRender = (' + _LORE_RENDER + ');')
+            text = context.eval('$ktRender((' + program + '),' + wire + ',' + player + ')')
+            rows.append(text if isinstance(text, str) and len(text.encode('utf-8')) <= 16 * 1024 else None)
+        except (quickjs.JSException, UnicodeError):
+            rows.append(None)
+    return rows
+
+
 def main() -> None:
     try:
         mvu = sys.argv[1:] == ['mvu']
@@ -245,6 +288,8 @@ def main() -> None:
             result = execute_update(json.loads(raw))
         elif schema:
             result = _execute_opening_schema(json.loads(raw))
+        elif sys.argv[1:] == ['lore']:
+            result = _render_lore(json.loads(raw))
         else:
             result = execute(json.loads(raw))
     except ImportError as exc:

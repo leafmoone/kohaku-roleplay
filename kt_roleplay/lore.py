@@ -1,7 +1,7 @@
 """Select enabled world-info entries for a roleplay request."""
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from random import random
 from typing import Literal
 
@@ -19,6 +19,7 @@ class LoreEntry(BaseModel):
     model_config = ConfigDict(strict=True)
     keys: list[str]
     content: str
+    content_template: bool = False
     enabled: bool
     insertion_order: int
     name: str = ""
@@ -117,7 +118,8 @@ def _weighted_winner(group: list[tuple[int, LoreEntry]]) -> int:
 
 def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str], int], allowance: int,
                    *, chat_messages: int | None = None, regex_budget: MatchBudget | None = None,
-                   outlets: frozenset[str] = frozenset(), timing: LoreTiming | None = None) -> list[LoreEntry]:
+                   outlets: frozenset[str] = frozenset(), timing: LoreTiming | None = None,
+                   rendered_templates: Mapping[str, str] | None = None) -> list[LoreEntry]:
     if regex_budget is None:
         regex_budget = MatchBudget()
     budget = min(book.token_budget, allowance)
@@ -128,9 +130,14 @@ def active_entries(book: LoreBook, history: Sequence[str], cost: Callable[[str],
     selected = set()
     blocked = set()
     accepted_groups = set()
-    ordered = sorted(enumerate(book.entries), key=lambda row: -row[1].priority)
+    rendered = rendered_templates or {}
+    # Keep snapshot indexes stable for timers, even when conditional content is absent.
+    ready = ((index, entry.model_copy(update={'content': rendered[entry.content]}) if entry.content_template else entry)
+             for index, entry in enumerate(book.entries) if not entry.content_template or entry.content in rendered)
+    ordered = sorted(ready, key=lambda row: -row[1].priority)
     memberships = {index: set(entry.group.split(',')) if entry.group else set() for index, entry in ordered}
-    effects = {index: timing.status(index, entry.sticky_messages, entry.cooldown_messages) for index, entry in ordered
+    effects = {index: timing.status(index, entry.sticky_messages, entry.cooldown_messages)
+               for index, entry in enumerate(book.entries)
                if timing is not None and entry.enabled and (entry.sticky_messages or entry.cooldown_messages)}
     # Bound the number of scans even when an imported book contains a long chain.
     for level in range(8 if book.recursive_scanning else 1):
