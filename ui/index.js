@@ -3,6 +3,7 @@ import { defineExtension } from "@kohakuterrarium/ui-sdk";
 import { CardLibraryView } from "./src/CardLibraryView.js";
 import { ChoiceBlock } from "./src/ChoiceBlock.js";
 import { RoleplayDockPanel } from "./src/RoleplayDockPanel.js";
+import { RoleplayMiniPanel } from "./src/RoleplayMiniPanel.js";
 import { WorldbookLibraryView } from "./src/WorldbookLibraryView.js";
 
 const SettingsLibrary = {
@@ -29,10 +30,17 @@ export const RoleplaySurface = {
   template: `<RoleplayDockPanel />`,
 };
 
+export const RoleplayMiniSurface = {
+  name: "RoleplayMiniSurface",
+  components: { RoleplayMiniPanel },
+  template: `<RoleplayMiniPanel />`,
+};
+
 export default defineExtension((kt) => {
   kt.registerSettingsSection("library", SettingsLibrary);
   kt.registerTab("studio", StudioLibraryTab);
   kt.registerTab("worldbooks", WorldbookLibraryTab);
   kt.registerPanel("roleplay", RoleplaySurface);
+  kt.registerPanel("gameplay", RoleplayMiniSurface);
   kt.registerMessageRenderer("choices", ChoiceBlock);
 });

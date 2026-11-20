@@ -933,3 +933,64 @@
   flex-direction: column;
   gap: 0.25rem;
 }
+
+div.absolute:has(> div > section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"]):has(> div > [data-test="v2-dock"]) {
+  top: 0.75rem;
+  justify-content: space-between;
+}
+
+section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"] {
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: min(17rem, calc(100vh - 11rem));
+  width: 20.5rem;
+}
+
+section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"] > header button.i-carbon-side-panel-open {
+  display: none !important;
+}
+
+.ktrp-mini-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.65rem 0.75rem;
+  max-height: min(14.5rem, calc(100vh - 13.5rem));
+  overflow-y: auto;
+  color: var(--color-text);
+  font-size: var(--kt-fs-xs, 0.8125rem);
+}
+
+.ktrp-mini-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.ktrp-mini-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.ktrp-mini-char-name {
+  font-size: var(--kt-fs-sm, 0.875rem);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ktrp-mini-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.ktrp-mini-script-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}

@@ -515,6 +515,8 @@ const EN_FALLBACK = {
   studioLaunchOpeningModulesLabel: "Allow cached opening page modules in this new tavern",
   studioLaunchOpeningModulesHint:
     "Explicit per-tavern opt-in (off by default). Links locally cached opening modules into the opening page without enabling card scripts or automatically opening the web panel.",
+  miniPanelNoPublicSummary: "No public summary variables or panels projected yet.",
+  miniPanelInactiveHint: "No active tavern or novel gameplay session. Open Role to configure or start a session.",
 };
 
 function interpolate(template, params = {}) {

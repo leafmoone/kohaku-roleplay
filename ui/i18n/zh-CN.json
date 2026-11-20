@@ -464,5 +464,7 @@
   "cardAssetsPreparingBtn": "正在准备资源…",
   "cardAssetsSectionHint": "一键准备此卡声明的启用脚本静态 HTTPS 模块与外部开场网页及静态子依赖；本地已存快照自动复用不重复下载。",
   "cardAssetsSectionTitle": "卡片资源与离线依赖准备",
-  "studioLaunchCachedOpeningAutoHint": "已缓存的开场网页与静态模块会在新酒馆开局时随卡自动离线链接使用；若缺少依赖将明确给出诊断提示。"
+  "studioLaunchCachedOpeningAutoHint": "已缓存的开场网页与静态模块会在新酒馆开局时随卡自动离线链接使用；若缺少依赖将明确给出诊断提示。",
+  "miniPanelNoPublicSummary": "当前暂无已公开的状态摘要项。",
+  "miniPanelInactiveHint": "当前尚未开启酒馆或群像玩法会话，请在 Role 面板配置或开局。"
 }

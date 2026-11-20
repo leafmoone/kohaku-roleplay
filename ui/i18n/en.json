@@ -464,5 +464,7 @@
   "cardAssetsPreparingBtn": "Preparing assets…",
   "cardAssetsSectionHint": "Prepare declared static HTTPS script modules and external opening page dependencies in one step. Previously saved snapshots are reused without re-downloading.",
   "cardAssetsSectionTitle": "Card assets & offline dependencies",
-  "studioLaunchCachedOpeningAutoHint": "Cached opening web pages and static modules are linked automatically when starting a new tavern; missing dependencies are reported as diagnostics."
+  "studioLaunchCachedOpeningAutoHint": "Cached opening web pages and static modules are linked automatically when starting a new tavern; missing dependencies are reported as diagnostics.",
+  "miniPanelNoPublicSummary": "No public summary variables or panels projected yet.",
+  "miniPanelInactiveHint": "No active tavern or novel gameplay session. Open Role to configure or start a session."
 }
