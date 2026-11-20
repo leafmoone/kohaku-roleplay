@@ -1420,6 +1420,15 @@ export const RoleplayDockPanel = {
           />
 
           <div
+            v-if="state.openingGameplayIssue"
+            class="ktrp-banner ktrp-banner--info"
+            role="status"
+            data-testid="kt-rp-opening-gameplay-issue"
+          >
+            <span>{{ state.openingGameplayIssue }}</span>
+          </div>
+
+          <div
             v-if="tavernStateFields.length"
             class="ktrp-card-box"
             data-testid="kt-rp-tavern-state-card"
