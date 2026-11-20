@@ -922,6 +922,12 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.14);
 }
 
+.ktrp-script-floating-body {
+  max-height: 9rem;
+  overflow-y: auto;
+  padding-right: 0.15rem;
+}
+
 .ktrp-script-floating-group {
   display: flex;
   flex-direction: column;

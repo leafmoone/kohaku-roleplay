@@ -24,6 +24,7 @@ import { CardWebPanel } from "./CardWebPanel.js";
 import { MvuPanel } from "./MvuPanel.js";
 import { NativePanels } from "./NativePanels.js";
 import { PortraitFrame } from "./PortraitFrame.js";
+import { RoleplayHeaderSummary } from "./RoleplayHeaderSummary.js";
 import { StateFieldsView } from "./StateFieldsView.js";
 import { useRoleplayText } from "./strings.js";
 
@@ -60,6 +61,7 @@ export const RoleplayDockPanel = {
     MvuPanel,
     NativePanels,
     PortraitFrame,
+    RoleplayHeaderSummary,
     StateFieldsView,
   },
   setup() {
@@ -127,16 +129,17 @@ export const RoleplayDockPanel = {
     const scriptBusy = ref(false);
     const scriptError = ref("");
     const scriptSuccessNotice = ref("");
-    const scriptFloatingExpanded = ref(true);
+    const scriptFloatingExpanded = ref(false);
     const invokingScriptButtonKey = ref("");
     let scriptMutationSeq = 0;
 
-    // Session header summary pins state
+    // Session summary pins & secondary config collapsible state
     const headerPinsDraft = ref([]);
     const headerPinsDirty = ref(false);
     const headerPinsBusy = ref(false);
     const headerPinsError = ref("");
     const headerPinsSaved = ref(false);
+    const panelMoreExpanded = ref(false);
     let headerPinsSeq = 0;
 
     const resumingScene = ref(false);
@@ -416,12 +419,13 @@ export const RoleplayDockPanel = {
       scriptBusy.value = false;
       scriptError.value = "";
       scriptSuccessNotice.value = "";
-      scriptFloatingExpanded.value = true;
+      scriptFloatingExpanded.value = false;
       invokingScriptButtonKey.value = "";
       headerPinsDirty.value = false;
       headerPinsBusy.value = false;
       headerPinsError.value = "";
       headerPinsSaved.value = false;
+      panelMoreExpanded.value = false;
       resetSlotInspector();
     });
 
@@ -1110,6 +1114,7 @@ export const RoleplayDockPanel = {
       headerPinsBusy,
       headerPinsError,
       headerPinsSaved,
+      panelMoreExpanded,
       headerPinTestId,
       toggleHeaderPinOption,
       saveHeaderSummaryPins,
@@ -1317,6 +1322,8 @@ export const RoleplayDockPanel = {
             </div>
           </div>
 
+          <RoleplayHeaderSummary />
+
           <div
             v-if="runnableScriptButtonGroups.length"
             class="ktrp-card-box ktrp-script-floating-bar"
@@ -1370,7 +1377,7 @@ export const RoleplayDockPanel = {
 
             <div
               v-if="scriptFloatingExpanded"
-              class="ktrp-stack"
+              class="ktrp-stack ktrp-script-floating-body"
               data-testid="kt-rp-script-floating-body"
             >
               <div
@@ -1438,6 +1445,28 @@ export const RoleplayDockPanel = {
             :disabled="busy"
           />
 
+          <div class="ktrp-card-box" data-testid="kt-rp-panel-more-box">
+            <div class="ktrp-row-between">
+              <strong class="ktrp-box-head" data-testid="kt-rp-panel-more-title">
+                {{ t('panelMoreSectionTitle') }}
+              </strong>
+              <ActionButton
+                size="sm"
+                variant="ghost"
+                :aria-expanded="String(panelMoreExpanded)"
+                data-testid="kt-rp-panel-more-toggle-btn"
+                @click="panelMoreExpanded = !panelMoreExpanded"
+              >
+                {{ panelMoreExpanded ? t('panelMoreCollapseBtn') : t('panelMoreExpandBtn') }}
+              </ActionButton>
+            </div>
+          </div>
+
+          <div
+            v-show="panelMoreExpanded"
+            class="ktrp-stack"
+            data-testid="kt-rp-panel-more-body"
+          >
           <div
             v-if="sessionCardScripts"
             class="ktrp-card-box"
@@ -2096,6 +2125,7 @@ export const RoleplayDockPanel = {
                 {{ t('saveNotes') }}
               </ActionButton>
             </div>
+          </div>
           </div>
         </section>
 

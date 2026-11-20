@@ -3,7 +3,6 @@ import { defineExtension } from "@kohakuterrarium/ui-sdk";
 import { CardLibraryView } from "./src/CardLibraryView.js";
 import { ChoiceBlock } from "./src/ChoiceBlock.js";
 import { RoleplayDockPanel } from "./src/RoleplayDockPanel.js";
-import { RoleplayHeaderSummary } from "./src/RoleplayHeaderSummary.js";
 import { WorldbookLibraryView } from "./src/WorldbookLibraryView.js";
 
 const SettingsLibrary = {
@@ -26,14 +25,8 @@ const WorldbookLibraryTab = {
 
 export const RoleplaySurface = {
   name: "RoleplaySurface",
-  components: { RoleplayDockPanel, RoleplayHeaderSummary },
-  props: {
-    surface: { type: String, default: "dock" },
-  },
-  template: `
-    <RoleplayHeaderSummary v-if="surface === 'session-header'" />
-    <RoleplayDockPanel v-else />
-  `,
+  components: { RoleplayDockPanel },
+  template: `<RoleplayDockPanel />`,
 };
 
 export default defineExtension((kt) => {

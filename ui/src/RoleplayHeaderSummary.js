@@ -71,10 +71,8 @@ function formatCompactValue(item, t) {
 }
 
 /**
- * Read-only compact header summary bar for `plugin:roleplay`.
- * Mounted in desktop SessionBar and mobile PhoneHeader via
- * `<ExtensionContribution surface="session-header" />` using the same
- * scoped `plugin:roleplay` owner without opening a new socket or exposing private state.
+ * Read-only compact summary strip for the standalone `plugin:roleplay` dock panel.
+ * Reuses the scoped `plugin:roleplay` owner without opening a new socket or exposing private state.
  */
 export const RoleplayHeaderSummary = {
   name: "RoleplayHeaderSummary",
