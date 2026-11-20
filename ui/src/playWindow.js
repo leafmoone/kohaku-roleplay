@@ -152,17 +152,25 @@ export function usePlayWindow(rootElRef) {
     hasCustomGeometry.value = true;
     hostSection.dataset.ktrpCustomGeom = "true";
     const bounds = getBoundsRect();
-    const absLeft = Math.round(bounds.left + clamped.left);
-    const absTop = Math.round(bounds.top + clamped.top);
+    const zoom =
+      typeof hostSection.currentCSSZoom === "number" &&
+      Number.isFinite(hostSection.currentCSSZoom) &&
+      hostSection.currentCSSZoom > 0
+        ? hostSection.currentCSSZoom
+        : 1;
+    const absLeft = (bounds.left + clamped.left) / zoom;
+    const absTop = (bounds.top + clamped.top) / zoom;
+    const cssWidth = clamped.width / zoom;
+    const cssHeight = clamped.height / zoom;
     hostSection.style.setProperty("position", "fixed", "important");
     hostSection.style.setProperty("left", `${absLeft}px`, "important");
     hostSection.style.setProperty("top", `${absTop}px`, "important");
     hostSection.style.setProperty("right", "auto", "important");
     hostSection.style.setProperty("bottom", "auto", "important");
-    hostSection.style.setProperty("width", `${clamped.width}px`, "important");
-    hostSection.style.setProperty("height", `${clamped.height}px`, "important");
-    hostSection.style.setProperty("max-width", `${clamped.width}px`, "important");
-    hostSection.style.setProperty("max-height", `${clamped.height}px`, "important");
+    hostSection.style.setProperty("width", `${cssWidth}px`, "important");
+    hostSection.style.setProperty("height", `${cssHeight}px`, "important");
+    hostSection.style.setProperty("max-width", `${cssWidth}px`, "important");
+    hostSection.style.setProperty("max-height", `${cssHeight}px`, "important");
     return clamped;
   }
 
