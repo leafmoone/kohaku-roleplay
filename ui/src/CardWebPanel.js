@@ -67,12 +67,21 @@ function normalizePinnedMvuSetup(rawSetup) {
   };
 }
 
+const PINNED_STATUS_PORTRAIT_DATA_URI_RE =
+  /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/;
+
 function normalizePinnedMvuStatus(rawStatus) {
   if (!rawStatus || typeof rawStatus !== "object" || Array.isArray(rawStatus)) return null;
   const statData = rawStatus.data?.stat_data;
   if (!isNonEmptyPlainObject(statData)) return null;
+  const portrait =
+    typeof rawStatus.portrait === "string" &&
+    PINNED_STATUS_PORTRAIT_DATA_URI_RE.test(rawStatus.portrait)
+      ? rawStatus.portrait
+      : null;
   return {
     data: { stat_data: statData },
+    ...(portrait ? { portrait } : {}),
   };
 }
 
@@ -626,6 +635,10 @@ if (
   const _jsonParse = JSON.parse;
   const _jsonStringify = JSON.stringify;
 
+  const _statusPortrait =
+    typeof BOOT.pinnedMvuStatus.portrait === "string" && BOOT.pinnedMvuStatus.portrait
+      ? BOOT.pinnedMvuStatus.portrait
+      : null;
   let _statusStatDataJson = _jsonStringify(BOOT.pinnedMvuStatus.data.stat_data);
 
   updatePinnedStatusStatData = function(nextStatData) {
@@ -659,7 +672,23 @@ if (
 
   const getVariablesStatusFacade = function getVariables(option) {
     validateStatusReadOption(option);
-    return { stat_data: _jsonParse(_statusStatDataJson) };
+    const statData = _jsonParse(_statusStatDataJson);
+    if (
+      _statusPortrait &&
+      statData &&
+      typeof statData === "object" &&
+      !_ArrayIsArray(statData)
+    ) {
+      if (
+        !statData.Mainchar ||
+        typeof statData.Mainchar !== "object" ||
+        _ArrayIsArray(statData.Mainchar)
+      ) {
+        statData.Mainchar = {};
+      }
+      statData.Mainchar.Image = [_statusPortrait, "Portrait"];
+    }
+    return { stat_data: statData };
   };
 
   const mvuStatusSubset = Object.freeze({
@@ -789,6 +818,8 @@ function prependPreheatBeforeAuthorMarkup(rawHtml, preheatTag) {
 }
 
 export function buildOuterSandboxSrcdoc(authorHtml, bootData) {
+  const isPinnedStatus = Boolean(normalizePinnedMvuStatus(bootData?.pinnedMvuStatus));
+  const imgSrcDirective = isPinnedStatus ? "img-src data:" : "img-src 'none'";
   const preheat = buildAuthorPreheatScript(bootData);
   const fullInnerHtml = prependPreheatBeforeAuthorMarkup(authorHtml, preheat);
   const innerHtmlJson = encodeJsonForInlineScript(fullInnerHtml);
@@ -797,7 +828,7 @@ export function buildOuterSandboxSrcdoc(authorHtml, bootData) {
 <html>
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src 'none'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; object-src 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src 'none'; connect-src 'none'; ${imgSrcDirective}; media-src 'none'; font-src 'none'; object-src 'none'; form-action 'none'">
 <style>
 html, body {
   margin: 0;
@@ -1019,9 +1050,15 @@ export const CardWebPanel = {
       const token = `${props.scopeKey}::${props.mvuPublicSignature}::mount::${seq}::${Date.now()}`;
       const isStatusTarget = preferredTarget === "status";
       const liveMetaStatus = normalizePinnedMvuStatus(props.webPanelMeta?.pinnedMvuStatus);
-      const pinnedMvuStatus = isStatusTarget
-        ? liveMetaStatus || normalizePinnedMvuStatus(payload.pinnedMvuStatus)
-        : null;
+      const payloadStatus = normalizePinnedMvuStatus(payload.pinnedMvuStatus);
+      const basePinnedStatus = liveMetaStatus || payloadStatus;
+      const pinnedMvuStatus =
+        isStatusTarget && basePinnedStatus
+          ? {
+              data: basePinnedStatus.data,
+              ...(payloadStatus?.portrait ? { portrait: payloadStatus.portrait } : {}),
+            }
+          : null;
       const isLegacy =
         !isStatusTarget &&
         (Boolean(payload.legacyOpening) || props.webPanelMeta?.source === "legacyOpening");
@@ -1552,9 +1589,13 @@ export const CardWebPanel = {
         }
         if (!isNonEmptyPlainObject(plainStatData)) return;
         if (cachedStatusPayload.value && typeof cachedStatusPayload.value === "object") {
+          const prevStatus = cachedStatusPayload.value.pinnedMvuStatus;
           cachedStatusPayload.value = {
             ...cachedStatusPayload.value,
             pinnedMvuStatus: {
+              ...(prevStatus && typeof prevStatus === "object" && typeof prevStatus.portrait === "string"
+                ? { portrait: prevStatus.portrait }
+                : {}),
               data: { stat_data: plainStatData },
             },
           };
@@ -1574,6 +1615,9 @@ export const CardWebPanel = {
           return;
         }
         activePinnedMvuStatus.value = {
+          ...(typeof activePinnedMvuStatus.value.portrait === "string"
+            ? { portrait: activePinnedMvuStatus.value.portrait }
+            : {}),
           data: { stat_data: plainStatData },
         };
         frameWin.postMessage(

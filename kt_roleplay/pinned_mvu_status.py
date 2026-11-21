@@ -76,6 +76,8 @@ class _StatusLayout(HTMLParser):
         self.valid = True
         self.fields: dict[str, set[str]] = {root: set() for root in _ROOTS}
         self.inventory = False
+        self.portrait = False
+        self._div_paths: list[tuple[int, str | None]] = []
         self.feed(source)
         self.close()
 
@@ -95,6 +97,12 @@ class _StatusLayout(HTMLParser):
         # subtrees do not describe a supported display field.
         if any(parent != 'template' for parent in self._inert):
             return
+        depth = len(self._inert)
+        if tag == 'div':
+            self._div_paths.append((depth, dict(attrs).get('data-bind-fullpath')))
+        if tag == 'img' and [v for k, v in attrs if k == 'data-bind-img'] == ['Image']:
+            path = next((p for d, p in reversed(self._div_paths) if d == depth and p is not None), None)
+            self.portrait |= path == 'Mainchar.Image'
         seen: set[str] = set()
         for key, value in attrs:
             if key in _BOUND_ATTRS and key in seen:
@@ -112,6 +120,8 @@ class _StatusLayout(HTMLParser):
                 self.inventory = True
 
     def handle_endtag(self, tag):
+        if tag == 'div' and self._div_paths and self._div_paths[-1][0] == len(self._inert):
+            self._div_paths.pop()
         if tag == 'script' and self._start is not None:
             end = self._offset()
             if end <= self._start:
@@ -119,6 +129,8 @@ class _StatusLayout(HTMLParser):
             self.module = (self._start, end)
             self._start = None
         if self._inert and tag == self._inert[-1]:
+            while self._div_paths and self._div_paths[-1][0] == len(self._inert):
+                self._div_paths.pop()
             self._inert.pop()
 
 
@@ -139,6 +151,14 @@ def _has_supported_status_module(code: str) -> bool:
                 return False
         pending.extend(node.named_children)
     return True
+
+
+def has_status_portrait(panel: StatusPanel) -> bool:
+    try:
+        layout = _StatusLayout(panel.panel.html)
+        return layout.valid and layout.portrait
+    except (AssertionError, UnicodeError):
+        return False
 
 
 def status_panel(panel: WebPanel) -> StatusPanel | None:

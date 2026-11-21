@@ -1,6 +1,7 @@
 """Owner calls for a standalone author page, not a chat message renderer."""
 from __future__ import annotations
 
+from asyncio import to_thread
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -12,7 +13,9 @@ from .legacy_plugins import LegacyWebRequest
 from .legacy_web import OpeningCounterWrite, legacy_web_message
 from .mvu import public_values
 from .panels import public_panels
+from .paths import library_dir
 from .pinned_mvu_setup import MvuSetupWrite, render_setup_template, setup_projection
+from .status_portrait import read_status_portrait
 from .tavern_state import TavernSession
 
 if TYPE_CHECKING:
@@ -38,11 +41,21 @@ async def call_web_panel(plugin: RoleplayPlugin, action: str, args: dict[str, ob
         raise OwnerArgumentError('This tavern has no ready card web panel')
     if action == 'card_web_panel':
         if args == {'target': 'status'}:
-            if not (status := pinned_status_view(play)):
+            if not pinned_status_view(play):
                 raise OwnerArgumentError('This tavern has no supported author status panel')
+            # Send cached pixels on explicit mount only, never with live state.
+            portrait = await to_thread(read_status_portrait, library_dir(), play.cardId)
+            record = plugin._record()
+            current = TavernSession.model_validate(record) if record is not None else None
+            if (plugin._web_panel_scope != scope or current is None or current.cardId != play.cardId
+                    or not (status := pinned_status_view(current))):
+                raise OwnerArgumentError('The card web panel session changed; open the panel again')
+            cap = {'data': status['data']}
+            if portrait is not None:
+                cap['portrait'] = portrait
             # A status mount has no redeemable gameplay or setup scope.
-            return {**play.pinned_mvu_status.panel.model_dump(), 'panelScope': uuid4().hex,
-                    'pinnedMvuStatus': {'data': status['data']}}
+            return {**current.pinned_mvu_status.panel.model_dump(), 'panelScope': uuid4().hex,
+                    'pinnedMvuStatus': cap}
         if args:
             raise OwnerArgumentError('Choose the opening web panel or its author status view')
         panel = {**play.web_panel.model_dump(), 'panelScope': scope}

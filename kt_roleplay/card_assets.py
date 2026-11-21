@@ -10,6 +10,7 @@ from .module_linker import RETRYABLE_MODULE_ISSUES, ModuleLinkError, _virtual_gr
 from .opening_page_library import opening_module_plan, opening_page_snapshot, prepare_opening_assets
 from .pinned_mvu import PINNED_HELPER, cached_pinned_helper, helper_text, pinned_card_author
 from .script_values import CardScriptError
+from .status_portrait import declared_status_portrait, prepare_status_portrait
 from .tavern_artifacts import artifact_issue, inspect_tavern_artifacts
 
 
@@ -51,6 +52,8 @@ def prepare_card_assets(directory: Path, card_id: str) -> dict:
                     helper_text(helper)
         except CardScriptError as exc:
             issues.append({'kind': 'script', 'id': author.id, 'name': author.name, 'message': str(exc)})
+        if url := declared_status_portrait(card):
+            load(url, lambda: prepare_status_portrait(directory, card_id, url), 'status-image')
     elif scripts:
         remote = module_sources(directory, card_id)
         raw = original_card(directory, card_id)

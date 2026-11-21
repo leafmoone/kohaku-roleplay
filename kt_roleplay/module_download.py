@@ -80,8 +80,8 @@ def _public_ip(hostname: str, kind: str) -> str:
     return str(ips[0])
 
 
-def _download_text(hostname: str, resource: str, *, kind: str, accept: str, media_types: frozenset[str],
-                   format_label: str, max_bytes: int | None = None, size_label: str = "") -> bytes:
+def _download_bytes(hostname: str, resource: str, *, kind: str, accept: str, media_types: frozenset[str],
+                    format_label: str, max_bytes: int | None = None, size_label: str = "") -> bytes:
     connection = _ModuleConnection(hostname, _public_ip(hostname, kind.capitalize()))
     started = monotonic()
     try:
@@ -112,11 +112,25 @@ def _download_text(hostname: str, resource: str, *, kind: str, accept: str, medi
         connection.close()
     if not content:
         raise CardError(f"The {kind} source returned an empty file")
+    return bytes(content)
+
+
+def _download_text(hostname: str, resource: str, *, kind: str, accept: str, media_types: frozenset[str],
+                   format_label: str, max_bytes: int | None = None, size_label: str = "") -> bytes:
+    content = _download_bytes(hostname, resource, kind=kind, accept=accept, media_types=media_types,
+                              format_label=format_label, max_bytes=max_bytes, size_label=size_label)
     try:
         content.decode("utf-8-sig")
     except UnicodeError as exc:
         raise CardError(f"The {kind} source is not UTF-8 {format_label}") from exc
-    return bytes(content)
+    return content
+
+
+def download_status_image(url: str) -> bytes:
+    media = frozenset({'image/jpeg', 'image/png', 'image/webp'})
+    return _download_bytes(*_https_target(url, 'Status image'), kind='status image', accept=', '.join(sorted(media)),
+                           media_types=media, format_label='JPEG, PNG, or WebP', max_bytes=4 * 1024 * 1024,
+                           size_label='4 MiB')
 
 
 def download_module(url: str) -> bytes:
