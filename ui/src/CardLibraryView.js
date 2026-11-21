@@ -101,6 +101,13 @@ function collectEligibleHttpsUrls(normalizedScripts) {
   return urls;
 }
 
+const ASSET_ISSUE_MESSAGE_KEYS = {
+  dependency_dynamic_import: "cardScriptIssueDependencyDynamicImport",
+  dependency_unsupported: "cardScriptIssueDependencyUnsupported",
+  dependency_missing: "cardScriptIssueDependencyMissing",
+  dependency_unapproved_transitive: "cardScriptIssueDependencyUnapprovedTransitive",
+};
+
 function normalizeAssetIssues(rawIssues) {
   if (!Array.isArray(rawIssues)) return [];
   return rawIssues
@@ -114,6 +121,7 @@ function normalizeAssetIssues(rawIssues) {
     .map((item) => ({
       kind: typeof item.kind === "string" ? item.kind : "asset",
       id: typeof item.id === "string" ? item.id : "",
+      name: typeof item.name === "string" ? item.name.trim() : "",
       message: item.message.trim(),
     }));
 }
@@ -447,6 +455,21 @@ export const CardLibraryView = {
       } catch (err) {
         actionError.value = err?.message || String(err);
       }
+    }
+
+    function assetIssueDisplayLabel(issue) {
+      if (!issue || typeof issue !== "object") return "";
+      const name = typeof issue.name === "string" ? issue.name.trim() : "";
+      if (name) return name;
+      return typeof issue.id === "string" ? issue.id : "";
+    }
+
+    function assetIssueDisplayMessage(issue) {
+      const msg = typeof issue?.message === "string" ? issue.message.trim() : "";
+      const key = Object.hasOwn(ASSET_ISSUE_MESSAGE_KEYS, msg)
+        ? ASSET_ISSUE_MESSAGE_KEYS[msg]
+        : null;
+      return key ? t(key) : msg;
     }
 
     function worldbookIssueLabel(code, count = 1) {
@@ -1209,6 +1232,8 @@ export const CardLibraryView = {
       toggleEmbeddedInspector,
       selectEmbeddedEntry,
       worldbookIssueLabel,
+      assetIssueDisplayLabel,
+      assetIssueDisplayMessage,
       pendingImportDeps,
       pendingEligibleHttpsUrls,
       pendingHasPreparableAssets,
@@ -1446,7 +1471,7 @@ export const CardLibraryView = {
               :data-issue-kind="issue.kind"
             >
               <span>
-                <strong v-if="issue.id">{{ issue.id }}: </strong>{{ issue.message }}
+                <strong v-if="assetIssueDisplayLabel(issue)">{{ assetIssueDisplayLabel(issue) }}: </strong>{{ assetIssueDisplayMessage(issue) }}
               </span>
             </div>
           </div>
@@ -2235,7 +2260,7 @@ export const CardLibraryView = {
                       :data-issue-kind="issue.kind"
                     >
                       <span>
-                        <strong v-if="issue.id">{{ issue.id }}: </strong>{{ issue.message }}
+                        <strong v-if="assetIssueDisplayLabel(issue)">{{ assetIssueDisplayLabel(issue) }}: </strong>{{ assetIssueDisplayMessage(issue) }}
                       </span>
                     </div>
                   </div>

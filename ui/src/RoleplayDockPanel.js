@@ -40,6 +40,7 @@ const CARD_SCRIPT_ISSUE_KEYS = {
   module_dependency: "cardScriptIssueModuleDependency",
   dependency_missing: "cardScriptIssueDependencyMissing",
   dependency_unapproved_transitive: "cardScriptIssueDependencyUnapprovedTransitive",
+  dependency_dynamic_import: "cardScriptIssueDependencyDynamicImport",
   dependency_unsupported: "cardScriptIssueDependencyUnsupported",
   dependency_limit: "cardScriptIssueDependencyLimit",
   module_linker_unavailable: "cardScriptIssueModuleLinkerUnavailable",
