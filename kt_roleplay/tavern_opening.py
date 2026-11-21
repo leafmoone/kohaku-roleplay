@@ -18,6 +18,7 @@ from .mvu_settlement import settle_mvu_candidate
 from .opening_mvu_schema import OpeningSchemaSnapshot, derive_opening_schema, link_opening_schema
 from .opening_page_library import CALLBACK_RUNTIME, cached_opening_panel
 from .pinned_mvu import calculate_pinned_mvu, compile_pinned_mvu, initializer_entries, pinned_card_author
+from .pinned_mvu_setup import SETUP_MARKER, setup_projection
 from .portraits import rules_for
 from .projections import expand
 from .script_session import SessionScripts, approved
@@ -125,10 +126,16 @@ async def prepare_tavern_opening(
     opening_gameplay_issue = None
     web_panel, legacy_state, web_panel_issue = card.web_panel, None, None
     if web_panel is None:
-        rule = next((row for row in card.legacy_web_rules if row.marker in opening), None)
+        setup = None
+        if pinned_mvu and mvu and choice.enableOpeningModules and SETUP_MARKER in opening:
+            setup = next((row for row in card.legacy_mvu_setups if row.marker == SETUP_MARKER), None)
+            if not setup or not setup_projection(mvu.values):
+                setup = None
+                web_panel_issue = 'The author character setup needs a supported HTML template and initialized setup fields.'
+        rule = setup or next((row for row in card.legacy_web_rules if row.marker in opening), None)
         marker, mvu_read_enabled = None, False
         if rule is not None:
-            web_panel, marker = rule.panel, rule.marker
+            web_panel, marker, web_panel_issue = rule.panel, rule.marker, None
         elif (remote := card.legacy_remote_opening) is not None and remote.marker in opening:
             web_panel, web_panel_issue, _ = await to_thread(
                 cached_opening_panel, directory, choice.cardId, remote,
@@ -149,7 +156,7 @@ async def prepare_tavern_opening(
         if web_panel is not None and marker is not None:
             legacy_state = LegacyOpeningState(marker=marker, values={},
                                               mvu_status_adapter=has_mvu_status_adapter(marker, card.scripts),
-                                              mvu_read_enabled=mvu_read_enabled)
+                                              mvu_read_enabled=mvu_read_enabled, pinned_setup=setup is not None)
     if counter := choice.openingMvuCounter:
         if not legacy_state or not legacy_state.mvu_read_enabled or not mvu or counter.current(mvu.values) is None:
             raise OwnerArgumentError('Choose an existing initialized integer in the linked opening for this counter')

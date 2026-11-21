@@ -14,6 +14,7 @@ from .card_web import WebPanel, _MAX_HTML
 from .errors import CardError
 from .module_download import opening_html_target
 from .mvu import public_values
+from .pinned_mvu_setup import SETUP_MARKER, supported_setup_template
 from .script_dependencies import script_dependencies
 
 _MARKER = re.compile(r'<[A-Za-z][A-Za-z0-9_-]{0,79}\s*/>')
@@ -55,7 +56,8 @@ def _remote_body_loader_url(html: str) -> str | None:
         return None
 
 
-def opening_web_rules(extensions: object, openings: list[str], warnings: list[str]) -> tuple[list[LegacyWebRule], LegacyRemoteOpening | None]:
+def opening_web_rules(extensions: object, openings: list[str], warnings: list[str], *,
+                      setup_only: bool = False) -> tuple[list[LegacyWebRule], LegacyRemoteOpening | None]:
     """Find self-contained opening pages and one declared external source; never load it here."""
     rules = extensions.get('regex_scripts') if isinstance(extensions, dict) else None
     matches: list[LegacyWebRule] = []
@@ -80,14 +82,19 @@ def opening_web_rules(extensions: object, openings: list[str], warnings: list[st
             continue
         # With a literal marker there are no captures. JS replacements with any token
         # expansion would not produce the same document after extraction.
-        if re.search(r"\$(?:[0-9&`'$]|<)|\{\{", replacement):
+        if re.search(r"\$(?:[0-9&`'$]|<)", replacement):
+            continue
+        if setup_only:
+            if marker != SETUP_MARKER or not supported_setup_template(replacement):
+                continue
+        elif '{{' in replacement:
             continue
         match = _FENCE.fullmatch(replacement.strip())
         if match is None:
             continue
         html = match['html']
         if not _DOCUMENT.match(html.lstrip()) or not html.rstrip().lower().endswith('</html>'):
-            if remote is None and (url := _remote_body_loader_url(html)) is not None:
+            if not setup_only and remote is None and (url := _remote_body_loader_url(html)) is not None:
                 try:
                     opening_html_target(url)
                     name.encode('utf-8')
@@ -210,6 +217,7 @@ class LegacyOpeningState(BaseModel):
     mvu_read_enabled: bool = False
     counter: OpeningCounterGrant | None = None
     counter_revision: int = 0
+    pinned_setup: bool = Field(default=False, exclude_if=lambda value: not value)
     # Read old saves without ever enabling or saving the retired inline slot.
     message_slot_enabled: bool = Field(default=False, exclude=True)
 

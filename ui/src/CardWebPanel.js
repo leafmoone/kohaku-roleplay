@@ -52,14 +52,33 @@ function normalizeCounterGrant(rawGrant, selectedMessage) {
   };
 }
 
+function normalizePinnedMvuSetup(rawSetup) {
+  if (!rawSetup || typeof rawSetup !== "object" || Array.isArray(rawSetup)) return null;
+  if (rawSetup.mode !== "mvu-setup-v1") return null;
+  const statData = rawSetup.data?.stat_data;
+  if (!isNonEmptyPlainObject(statData)) return null;
+  if (!isNonEmptyPlainObject(statData.Mainchar) || typeof statData.GameStarted !== "boolean") {
+    return null;
+  }
+  return {
+    mode: "mvu-setup-v1",
+    writable: Boolean(rawSetup.writable),
+    data: { stat_data: statData },
+  };
+}
+
 function buildAuthorPreheatScript(bootData) {
   // Never serialize both legacyOpening and legacyLatest into the author frame:
   // only serialize the single selected message snapshot (or null for CHARX native web panels).
   const singleMessage = bootData.isLegacyOpening
     ? bootData.selectedLegacyMessage || null
     : null;
+  const pinnedMvuSetupCap = bootData.isLegacyOpening
+    ? normalizePinnedMvuSetup(bootData.pinnedMvuSetup)
+    : null;
   const hasSelectedStatData = isNonEmptyPlainObject(singleMessage?.data?.stat_data);
   const mvuReadCap =
+    !pinnedMvuSetupCap &&
     bootData.isLegacyOpening &&
     hasSelectedStatData &&
     bootData.legacyMvuRead &&
@@ -75,6 +94,7 @@ function buildAuthorPreheatScript(bootData) {
     playerName: typeof bootData.playerName === "string" ? bootData.playerName : "Player",
     characterName: typeof bootData.characterName === "string" ? bootData.characterName : "",
     selectedLegacyMessage: singleMessage,
+    ...(pinnedMvuSetupCap ? { pinnedMvuSetup: pinnedMvuSetupCap } : {}),
     ...(mvuReadCap ? { legacyMvuRead: mvuReadCap } : {}),
     ...(mvuCounterCap ? { legacyMvuCounter: mvuCounterCap } : {}),
   };
@@ -441,6 +461,138 @@ if (BOOT.isLegacyOpening && BOOT.selectedLegacyMessage) {
   }
 }
 
+if (
+  BOOT.isLegacyOpening &&
+  BOOT.pinnedMvuSetup &&
+  BOOT.pinnedMvuSetup.mode === "mvu-setup-v1" &&
+  BOOT.pinnedMvuSetup.data &&
+  BOOT.pinnedMvuSetup.data.stat_data
+) {
+  const _ReflectOwnKeys = Reflect.ownKeys;
+  const _getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  const _getProtoOf = Object.getPrototypeOf;
+  const _ObjectProto = Object.prototype;
+  const _ArrayIsArray = Array.isArray;
+  const _hasOwn =
+    typeof Object.hasOwn === "function"
+      ? Object.hasOwn
+      : Function.prototype.call.bind(_ObjectProto.hasOwnProperty);
+  const _jsonParse = JSON.parse;
+  const _jsonStringify = JSON.stringify;
+
+  let _setupWritable = Boolean(BOOT.pinnedMvuSetup.writable);
+  let _setupWriteInFlight = false;
+  let _setupStatDataJson = _jsonStringify(BOOT.pinnedMvuSetup.data.stat_data);
+
+  const cloneSetupStatData = function() {
+    return _jsonParse(_setupStatDataJson);
+  };
+
+  const validateChatOption = function(option, fnName) {
+    if (!option || typeof option !== "object" || _ArrayIsArray(option)) {
+      throw new Error(fnName + " requires an explicit { type: 'chat' } option");
+    }
+    const proto = _getProtoOf(option);
+    if (proto !== _ObjectProto && proto !== null) {
+      throw new Error(fnName + " option must be a plain object");
+    }
+    const ownKeys = _ReflectOwnKeys(option);
+    if (ownKeys.length !== 1 || ownKeys[0] !== "type") {
+      throw new Error("Only chat-scoped " + fnName + "({ type: 'chat' }) is supported");
+    }
+    const desc = _getOwnPropDesc(option, "type");
+    if (!desc || !desc.enumerable || !_hasOwn(desc, "value") || desc.value !== "chat") {
+      throw new Error("Only chat-scoped " + fnName + "({ type: 'chat' }) is supported");
+    }
+  };
+
+  const getVariablesSetupFacade = function getVariables(option) {
+    validateChatOption(option, "getVariables");
+    return { stat_data: cloneSetupStatData() };
+  };
+
+  const updateVariablesWithSetupFacade = async function updateVariablesWith(updater, option) {
+    if (_setupWriteInFlight) {
+      throw new Error("Character setup update is already in flight");
+    }
+    if (!_setupWritable) {
+      throw new Error("Character setup is only writable once, before the first turn");
+    }
+    _setupWriteInFlight = true;
+    try {
+      if (typeof updater !== "function") {
+        throw new Error("updateVariablesWith requires a synchronous updater function");
+      }
+      validateChatOption(option, "updateVariablesWith");
+      const draftContainer = { stat_data: cloneSetupStatData() };
+      const returned = updater(draftContainer);
+      if (
+        returned &&
+        (typeof returned === "object" || typeof returned === "function") &&
+        typeof returned.then === "function"
+      ) {
+        throw new Error("Async updater callbacks are not supported");
+      }
+      const candidateContainer =
+        returned && typeof returned === "object" && !_ArrayIsArray(returned)
+          ? returned
+          : draftContainer;
+      const candidateDesc = _getOwnPropDesc(candidateContainer, "stat_data");
+      if (!candidateDesc || !candidateDesc.enumerable || !_hasOwn(candidateDesc, "value")) {
+        throw new Error("Updated variables must contain an own enumerable stat_data object");
+      }
+      const candidateStatData = candidateDesc.value;
+      if (!candidateStatData || typeof candidateStatData !== "object" || _ArrayIsArray(candidateStatData)) {
+        throw new Error("Updated stat_data must be a plain object");
+      }
+      const receipt = await callBridge("card_web_mvu_setup", {
+        statData: _jsonParse(_jsonStringify(candidateStatData))
+      });
+      const settled = receipt && receipt.data && receipt.data.stat_data;
+      if (!settled || typeof settled !== "object" || _ArrayIsArray(settled)) {
+        throw new Error("Invalid character setup settlement receipt");
+      }
+      _setupStatDataJson = _jsonStringify(settled);
+      _setupWritable = false;
+      return { stat_data: cloneSetupStatData() };
+    } finally {
+      _setupWriteInFlight = false;
+    }
+  };
+
+  const insertOrAssignVariablesSetupFacade = function insertOrAssignVariables(payload, option) {
+    validateChatOption(option, "insertOrAssignVariables");
+    const desc =
+      payload && typeof payload === "object" && !_ArrayIsArray(payload)
+        ? _getOwnPropDesc(payload, "stat_data")
+        : null;
+    if (!desc || !desc.enumerable || !_hasOwn(desc, "value")) {
+      return Promise.reject(new Error("insertOrAssignVariables requires a { stat_data } object"));
+    }
+    const statSnapshot = desc.value;
+    return updateVariablesWithSetupFacade(function() {
+      return { stat_data: statSnapshot };
+    }, option);
+  };
+
+  const lockGlobal = function(name, value) {
+    try {
+      Object.defineProperty(window, name, {
+        value: value,
+        configurable: false,
+        enumerable: true,
+        writable: false
+      });
+    } catch (_e) {
+      window[name] = value;
+    }
+  };
+  lockGlobal("getCurrentMessageId", function getCurrentMessageId() { return -1; });
+  lockGlobal("getVariables", getVariablesSetupFacade);
+  lockGlobal("updateVariablesWith", updateVariablesWithSetupFacade);
+  lockGlobal("insertOrAssignVariables", insertOrAssignVariablesSetupFacade);
+}
+
 window.substitudeMacros = function substitudeMacros(text) {
   if (typeof text !== "string") return String(text ?? "");
   const user = typeof BOOT.playerName === "string" && BOOT.playerName ? BOOT.playerName : "Player";
@@ -567,7 +719,8 @@ const ALLOWED_ACTIONS = new Set([
   "card_web_state",
   "card_web_gameplay",
   "card_web_plugin_request",
-  "card_web_mvu_counter"
+  "card_web_mvu_counter",
+  "card_web_mvu_setup"
 ]);
 const innerFrame = document.getElementById("ktrp-inner-sandbox");
 innerFrame.srcdoc = INNER_HTML;
@@ -627,6 +780,7 @@ window.addEventListener("message", function(ev) {
  * - Inner iframe: `sandbox="allow-scripts"` (opaque origin, never `allow-same-origin`)
  */
 const activeCounterTxByScope = new Map();
+const activeSetupTxByScope = new Map();
 
 export const CardWebPanel = {
   name: "RoleplayCardWebPanel",
@@ -655,6 +809,7 @@ export const CardWebPanel = {
     const userPinnedOpening = ref(false);
     const activeSelectedMessageId = ref(null);
     const activeCounterGrant = ref(null);
+    const activePinnedMvuSetup = ref(null);
     const hasLegacyLatest = ref(false);
     const latestTurnNumber = ref(null);
     const cachedPanelPayload = ref(null);
@@ -700,6 +855,7 @@ export const CardWebPanel = {
       cachedPanelPayload.value = null;
       activeSelectedMessageId.value = null;
       activeCounterGrant.value = null;
+      activePinnedMvuSetup.value = null;
       hasLegacyLatest.value = false;
       latestTurnNumber.value = null;
       outerSrcdoc.value = "";
@@ -749,10 +905,15 @@ export const CardWebPanel = {
           ? latestMsg
           : openingMsg
         : null;
+      const pinnedMvuSetup =
+        isLegacy && resolvedTarget === "opening"
+          ? normalizePinnedMvuSetup(payload.pinnedMvuSetup)
+          : null;
       const selectedHasStatData = isNonEmptyPlainObject(
         singleSelectedMessage?.data?.stat_data,
       );
       const legacyMvuRead =
+        !pinnedMvuSetup &&
         isLegacy &&
         selectedHasStatData &&
         payload.legacyMvuRead &&
@@ -770,6 +931,7 @@ export const CardWebPanel = {
           ? singleSelectedMessage.message_id
           : null;
       activeCounterGrant.value = legacyMvuCounter;
+      activePinnedMvuSetup.value = pinnedMvuSetup;
       activePanelScope.value = String(payload.panelScope);
       activeMountToken.value = token;
       activeTitle.value = String(payload.title || props.webPanelMeta?.title || "");
@@ -781,6 +943,7 @@ export const CardWebPanel = {
         playerName: props.playerName || "Player",
         characterName: props.characterName || "",
         selectedLegacyMessage: singleSelectedMessage,
+        pinnedMvuSetup,
         legacyMvuRead,
         legacyMvuCounter,
       });
@@ -898,9 +1061,93 @@ export const CardWebPanel = {
         action !== "card_web_state" &&
         action !== "card_web_gameplay" &&
         action !== "card_web_plugin_request" &&
-        action !== "card_web_mvu_counter"
+        action !== "card_web_mvu_counter" &&
+        action !== "card_web_mvu_setup"
       ) {
         replyToOuter(false, null, "Unsupported card web action");
+        return;
+      }
+
+      if (action === "card_web_mvu_setup") {
+        const setupSnap = activePinnedMvuSetup.value;
+        if (
+          !setupSnap ||
+          !setupSnap.writable ||
+          activeSnapshotTarget.value !== "opening" ||
+          activeSelectedMessageId.value !== 0
+        ) {
+          replyToOuter(
+            false,
+            null,
+            "Character setup is only writable once, before the first turn",
+          );
+          return;
+        }
+        if (activeSetupTxByScope.has(scopeSnap)) {
+          replyToOuter(false, null, "Character setup update is already in flight");
+          return;
+        }
+        const reqStatData = payload.statData;
+        if (!isNonEmptyPlainObject(reqStatData)) {
+          replyToOuter(false, null, "Invalid character setup payload");
+          return;
+        }
+        const txToken = Symbol("setupTx");
+        activeSetupTxByScope.set(scopeSnap, txToken);
+        try {
+          const result = await props.owner.call("card_web_mvu_setup", {
+            panelScope: panelScopeSnap,
+            statData: reqStatData,
+          });
+          if (
+            !isOpen.value ||
+            activeMountToken.value !== tokenSnap ||
+            activePanelScope.value !== panelScopeSnap ||
+            props.scopeKey !== scopeSnap ||
+            props.mvuPublicSignature !== mvuSigSnap ||
+            activeSnapshotTarget.value !== "opening" ||
+            activeSelectedMessageId.value !== 0
+          ) {
+            return;
+          }
+          if (
+            result &&
+            typeof result === "object" &&
+            result.data &&
+            typeof result.data === "object" &&
+            isNonEmptyPlainObject(result.data.stat_data)
+          ) {
+            const nextSetup = {
+              mode: "mvu-setup-v1",
+              writable: false,
+              data: { stat_data: result.data.stat_data },
+            };
+            activePinnedMvuSetup.value = nextSetup;
+            if (cachedPanelPayload.value && typeof cachedPanelPayload.value === "object") {
+              cachedPanelPayload.value = {
+                ...cachedPanelPayload.value,
+                pinnedMvuSetup: nextSetup,
+              };
+            }
+          }
+          error.value = "";
+          replyToOuter(true, result, "");
+        } catch (err) {
+          const msg = err?.message || String(err);
+          if (
+            isOpen.value &&
+            activeMountToken.value === tokenSnap &&
+            props.scopeKey === scopeSnap &&
+            props.mvuPublicSignature === mvuSigSnap
+          ) {
+            error.value = msg;
+          }
+          replyToOuter(false, null, msg);
+        } finally {
+          if (activeSetupTxByScope.get(scopeSnap) === txToken) {
+            activeSetupTxByScope.delete(scopeSnap);
+          }
+        }
         return;
       }
 

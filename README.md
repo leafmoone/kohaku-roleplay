@@ -106,7 +106,9 @@ kt web --host 127.0.0.1 --port 8000
 
 当卡同时声明受支持的 MagVarUpdate 核心入口和 StageDog 的 MVU Zod schema，要求 JSONPatch 且没有其他启用的伴随脚本时，启用兼容脚本的新局可使用固定版 `0a730cd4`。需要字面 `_.set`／`_.add` 结算的卡继续使用旧路径。先按下文安装可选 Node 依赖，再点「准备卡片资源」：不会下载浮动的 MagVarUpdate 核心，而是准备经核对的 `mvu_zod.js` 固定版本。此方案不按卡名启用，不改卡片原件，已有酒馆不会自动切换。
 
-该路径在隔离计算进程中读取有效的静态 `[InitVar]`，并调用卡作者的 schema；游玩时用 `rp_apply_mvu_update` 接收 `<UpdateVariable>` 内的字面 `<JSONPatch>`，支持 `add`、`replace`、`remove`，可编辑作者 schema 允许的对象成员。作者拒绝任一操作则整批不存，保留上一版状态。初始化不可用时，默认仍可用文字开局并查看诊断。这里只接变量计算，不加载原版作者菜单、任意动态导入，也不是完整的 MVU Helper。
+该路径在隔离计算进程中读取有效的静态 `[InitVar]`，并调用卡作者的 schema；游玩时用 `rp_apply_mvu_update` 接收 `<UpdateVariable>` 内的字面 `<JSONPatch>`，支持 `add`、`replace`、`remove`，可编辑作者 schema 允许的对象成员。作者拒绝任一操作则整批不存，保留上一版状态。初始化不可用时，默认仍可用文字开局并查看诊断。
+
+加上支持的 `<GameStartMenu/>` 开场声明时，可在独立 `role` 面板打开作者建角菜单。确认只保存本局建角状态，不发送聊天；可在首轮对话前确认一次，建角之后或进入对话后不再接受写入。菜单只收到建角相关字段，变更仍经作者 schema 整批验证；不会改写原卡或回填旧局。不包括作者的回合状态菜单、装备编辑、升级页、任意动态导入或完整 MVU Helper。
 
 ### 酒馆卡片脚本（实验性）
 

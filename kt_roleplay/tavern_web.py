@@ -11,6 +11,7 @@ from .legacy_plugins import LegacyWebRequest
 from .legacy_web import OpeningCounterWrite, legacy_web_message
 from .mvu import public_values
 from .panels import public_panels
+from .pinned_mvu_setup import MvuSetupWrite, render_setup_template, setup_projection
 from .tavern_state import TavernSession
 
 if TYPE_CHECKING:
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
 
 
 WEB_ACTIONS = frozenset({'card_web_panel', 'card_web_state', 'card_web_gameplay', 'card_web_plugin_request',
-                         'card_web_mvu_counter'})
+                         'card_web_mvu_counter', 'card_web_mvu_setup'})
 
 
 async def call_web_panel(plugin: RoleplayPlugin, action: str, args: dict[str, object]) -> dict:
@@ -32,6 +33,10 @@ async def call_web_panel(plugin: RoleplayPlugin, action: str, args: dict[str, ob
             raise OwnerArgumentError('The card web panel does not take arguments')
         panel = {**play.web_panel.model_dump(), 'panelScope': scope}
         if legacy := play.legacy_opening_web:
+            if legacy.pinned_setup and play.pinned_mvu and play.mvu and (projected := setup_projection(play.mvu.values)):
+                panel['html'] = render_setup_template(play.web_panel.html, play.player.name)
+                panel['pinnedMvuSetup'] = {'mode': 'mvu-setup-v1', 'writable': plugin._can_write_mvu_setup(play),
+                                           'data': {'stat_data': projected}}
             panel['legacyOpening'] = plugin._opening_web_message(play, legacy.values)
             panel['legacyMarker'] = legacy.marker
             if plugin._opening_counter_value(play) is not None and play.mvu and legacy.counter:
@@ -48,9 +53,13 @@ async def call_web_panel(plugin: RoleplayPlugin, action: str, args: dict[str, ob
     if args.get('panelScope') != scope:
         raise OwnerArgumentError('The card web panel session changed; open the panel again')
     payload = {key: value for key, value in args.items() if key != 'panelScope'}
+    if action == 'card_web_mvu_setup':
+        return await plugin._write_mvu_setup(MvuSetupWrite.model_validate(payload), scope)
     if action == 'card_web_mvu_counter':
         return await plugin._write_opening_counter(OpeningCounterWrite.model_validate(payload), scope)
     if action == 'card_web_plugin_request':
+        if play.legacy_opening_web and play.legacy_opening_web.pinned_setup:
+            raise OwnerArgumentError('Character setup does not use external plugin requests')
         call = LegacyWebRequest.model_validate(payload).to_plugin_request()
         if play.legacy_opening_web is not None and call.method != 'GET':
             raise OwnerArgumentError('The legacy opening page is read-only')

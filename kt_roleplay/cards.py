@@ -86,6 +86,7 @@ class ParsedCard(BaseModel):
     gameplay_pack: GameplayPack | None = None
     web_panel: WebPanel | None = None
     legacy_web_rules: list[LegacyWebRule] = Field(default_factory=list)
+    legacy_mvu_setups: list[LegacyWebRule] = Field(default_factory=list)
     legacy_remote_opening: LegacyRemoteOpening | None = None
     opening_gameplay: AuthorOpeningGameplay | None = None
 
@@ -210,6 +211,7 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
         portrait = base64.b64decode(cover.data)
     openings = [fields.first_mes, *fields.alternate_greetings]
     legacy_web, remote_opening = opening_web_rules(extensions, openings, warnings)
+    legacy_mvu_setups, _ = opening_web_rules(extensions, openings, warnings, setup_only=True)
     opening_gameplay = None
     if 'openingGameplay' in namespace:
         try:
@@ -227,6 +229,7 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
                       portrait=portrait, state_fields=definitions, portraits=portraits, source_format=fmt,
                       native_panels=panels, invalid_native_panels=bad_panels,
                       scripts=inspect_card_scripts(extensions), gameplay_pack=pack, legacy_web_rules=legacy_web,
+                       legacy_mvu_setups=legacy_mvu_setups,
                       legacy_remote_opening=remote_opening, opening_gameplay=opening_gameplay)
     if book is not None:
         _ = card.lore

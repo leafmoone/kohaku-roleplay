@@ -48,6 +48,7 @@ from .opening_mvu_schema import OpeningSchemaSnapshot, derive_opening_schema, wi
 from .panels import ChoicePanel, InventoryPanel, QuestPanel, public_panels
 from .paths import library_dir
 from .pinned_mvu import calculate_pinned_mvu
+from .pinned_mvu_setup import MvuSetupWrite, setup_preserved, setup_projection, setup_update
 from .projections import Persona, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
 from .worldbook import TEMPLATE_BOOK_BUDGET, read_worldbook
 from .worldbook_library import WorldbookNotFound, snapshot_detail, worldbook_for_play
@@ -456,6 +457,31 @@ class RoleplayPlugin(BasePlugin):
         if play.opening_schema and not self._opening_schema_visible(play, play.mvu.values):
             return None
         return legacy.counter.current(play.mvu.values)
+
+    def _can_write_mvu_setup(self, play: TavernSession) -> bool:
+        binding = self.binding
+        agent = binding.host_agent if binding else None
+        return bool(agent and binding.session_store is not None and not agent.is_processing
+                    and self._script_turn_index() == 0 and play.openingSent and play.web_panel_ready
+                    and play.pinned_mvu and play.legacy_opening_web and play.legacy_opening_web.pinned_setup
+                    and play.mvu and play.mvu.values.get('GameStarted') is False)
+
+    async def _write_mvu_setup(self, requested: MvuSetupWrite, token: str) -> dict:
+        async with self._scripts.lock:
+            record = self._record()
+            if token != self._web_panel_scope or record is None:
+                raise OwnerArgumentError('The card web panel session changed; open the panel again')
+            play = TavernSession.model_validate(record)
+            if not self._can_write_mvu_setup(play) or not (before := setup_projection(play.mvu.values)):
+                raise OwnerArgumentError('Character setup is only writable once, before the first turn')
+            update = setup_update(before, requested.statData)
+            settled = await self._prepare_mvu_update(play, record, update)
+            if (token != self._web_panel_scope or self._record() != record or not self._can_write_mvu_setup(play)
+                    or not setup_preserved(play.mvu.values, settled.mvu.values)):
+                raise OwnerArgumentError('The opening setup could not be saved in the current session')
+            self._save(settled.model_dump())
+            self.ui_emit('state', self.ui_state())
+            return {'data': {'stat_data': setup_projection(settled.mvu.values)}}
 
     async def _write_opening_counter(self, requested: OpeningCounterWrite, token: str) -> dict:
         binding = self.binding
