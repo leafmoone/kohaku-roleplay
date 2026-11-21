@@ -47,6 +47,7 @@ from .mvu_tool import ApplyMvuUpdate, UpdateMvu
 from .opening_mvu_schema import OpeningSchemaSnapshot, derive_opening_schema, with_opening_schema_output
 from .panels import ChoicePanel, InventoryPanel, QuestPanel, public_panels
 from .paths import library_dir
+from .pinned_mvu import calculate_pinned_mvu
 from .projections import Persona, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
 from .worldbook import TEMPLATE_BOOK_BUDGET, read_worldbook
 from .worldbook_library import WorldbookNotFound, snapshot_detail, worldbook_for_play
@@ -285,7 +286,8 @@ class RoleplayPlugin(BasePlugin):
             if record and record.get('gameplay_pack'):
                 allowed.update(pack_tools(record, context.host_agent))
             if record and (record.get("mvu") or {}).get("values"):
-                allowed.add("rp_update_mvu")
+                if not record.get('pinned_mvu'):
+                    allowed.add("rp_update_mvu")
                 if record.get("mvu_legacy"):
                     allowed.add("rp_apply_mvu_update")
             if record and any(p.get("type") in ("inventory", "quest") for p in record.get("native_panels", [])):
@@ -376,6 +378,8 @@ class RoleplayPlugin(BasePlugin):
             raise SceneError("Bind a card in a tavern session before changing variables")
         play = TavernSession.model_validate(record)
         settled = await self._prepare_mvu_update(play, record, update)
+        if play.pinned_mvu is not None and play.mvu and settled.mvu and json_equal(play.mvu.values, settled.mvu.values):
+            return
         legacy = play.legacy_opening_web
         if legacy and legacy.counter and play.mvu and settled.mvu and self._script_turn_index() == 0:
             # Integer eligibility is stricter than Python's numeric equality (35 == 35.0).
@@ -397,6 +401,16 @@ class RoleplayPlugin(BasePlugin):
         if play.mvu is None or not play.mvu.values or (isinstance(update, str) and not play.mvu_legacy):
             raise SceneError("This tavern has no initialized variables for this update format")
         try:
+            if play.pinned_mvu is not None:
+                if not isinstance(update, str):
+                    raise ValueError('Use rp_apply_mvu_update for this fixed MVU profile')
+                binding = self.binding
+                store = binding.session_store if binding else None
+                values = await to_thread(calculate_pinned_mvu, play.pinned_mvu, [], play.mvu.values, update)
+                if (binding is None or self.binding is not binding or binding.session_store is not store
+                        or self._record() != record):
+                    raise ValueError('The tavern changed during the MVU update; try again')
+                return play.model_copy(update={'mvu': play.mvu.model_copy(update={'values': values})})
             state = upgrade_button_receipts(play.script_state)
             scripts = approved(play.scripts, state) if self._script_turn_index() is not None else []
             # An old diagnostic is not proof of absent listeners: re-probe unknown registrations.
@@ -554,15 +568,17 @@ class RoleplayPlugin(BasePlugin):
             view['webPanelIssue'] = play.web_panel_issue
         if play.opening_gameplay_issue:
             view['openingGameplayIssue'] = play.opening_gameplay_issue
-        if play.scripts:
+        if play.scripts and play.pinned_mvu is None:
             host_ok = self._script_turn_index() is not None
             issues = play.script_state.issues if host_ok else {**play.script_state.issues, "$host": SCRIPT_CLOCK_UNAVAILABLE}
+            if play.pinned_mvu_issue:
+                issues = {**issues, '$host': play.pinned_mvu_issue}
             runnable = {s.id for s in approved(play.scripts, play.script_state)} if host_ok else set()
             views = [s.view() if s.id not in runnable else {
                 **s.view(), 'buttons': visible_script_buttons(s, play.script_state.appended_buttons.get(s.id, [])),
             } for s in play.scripts]
             view["cardScripts"] = {"entries": views,
-                                   "canEnable": host_ok and play.opening_schema is None and bool(play.mvu and play.mvu.values and any(
+                                   "canEnable": host_ok and play.opening_schema is None and not play.pinned_mvu_issue and bool(play.mvu and play.mvu.values and any(
                                        s.enabled and (s.issue is None or s.issue in RETRYABLE_MODULE_ISSUES) for s in play.scripts)),
                                    "enabled": bool(runnable),
                                    "issues": issues, 'inactiveEvents': play.script_state.inactive_events}
@@ -584,6 +600,8 @@ class RoleplayPlugin(BasePlugin):
                            "invalidOpeningUpdates": play.mvu.issues.get("invalid_opening_update", 0),
                            "options": public_options(play.mvu.values), "selected": play.mvu_public,
                            "values": public_values(play.mvu.values, play.mvu_public)}
+            if play.pinned_mvu is not None:
+                view['mvu']['runtime'] = 'magvarupdate-zod-v1'
         view["headerSummary"] = header_summary(view, play.header_pins)
         return view
 
@@ -651,6 +669,8 @@ class RoleplayPlugin(BasePlugin):
                 if set(args) != {"enabled"} or type(args["enabled"]) is not bool:
                     raise OwnerArgumentError("Expected an explicit script enable or disable choice")
                 play = TavernSession.model_validate(record)
+                if play.pinned_mvu is not None or (args['enabled'] and play.pinned_mvu_issue):
+                    raise OwnerArgumentError('The fixed MVU runtime is selected at opening; prepare resources and start a new tavern')
                 if args['enabled'] and play.opening_schema:
                     raise OwnerArgumentError('This opening schema profile runs separately from ordinary card scripts')
                 if args["enabled"] and self._script_turn_index() is None:
@@ -1014,7 +1034,8 @@ class RoleplayPlugin(BasePlugin):
                 content += ("\nFor an inventory or quest action, use rp_apply_gameplay with these panel IDs; "
                             "do not replace inventory contents or set a quest to its completed value through rp_set_card_state.\n" + json.dumps(gameplay, ensure_ascii=False))
             if play.mvu is not None and play.mvu.values:
-                content += ("\nThese are initialized variables in the current fictional session only. Use rp_update_mvu to "
+                mvu_tool = 'rp_apply_mvu_update' if play.pinned_mvu is not None else 'rp_update_mvu'
+                content += (f"\nThese are initialized variables in the current fictional session only. Use {mvu_tool} to "
                             "record only justified changes. Variables not selected for display are private; do not copy "
                             "their values into prose.\n" + json.dumps({"mvu_variables": play.mvu.values,
                                                                        "mvu_displayed_paths": [json.loads(key) for key in play.mvu_public]},
@@ -1023,7 +1044,9 @@ class RoleplayPlugin(BasePlugin):
                 script_choices = [{"id": script.id, "name": script.name} for script in approved(play.scripts, play.script_state)]
                 if script_choices:
                     content += "\nOnly use rp_run_card_script for a justified action with a registered ID from this list:\n" + json.dumps(script_choices, ensure_ascii=False)
-            if play.mvu_legacy:
+            if play.pinned_mvu is not None:
+                content += '\nUse one <UpdateVariable><JSONPatch>…</JSONPatch></UpdateVariable> with literal JSON add, replace and remove operations. Do not print the update in the story.'
+            elif play.mvu_legacy:
                 content += "\nIf the card requests a literal <UpdateVariable> block, call rp_apply_mvu_update instead of printing the block. Do not apply the same change through both update tools."
             if books and self.binding:
                 lore_view = {"totalEntries": sum(len(book.entries) for book in books), "activeTitles": [e.name or e.comment or ", ".join(e.keys) for e in entries], "usedTokens": allowance - remaining, "budgetTokens": min(allowance, sum(book.token_budget for book in books))}

@@ -17,6 +17,7 @@ from .mvu_legacy import split_opening
 from .mvu_settlement import settle_mvu_candidate
 from .opening_mvu_schema import OpeningSchemaSnapshot, derive_opening_schema, link_opening_schema
 from .opening_page_library import CALLBACK_RUNTIME, cached_opening_panel
+from .pinned_mvu import calculate_pinned_mvu, compile_pinned_mvu, initializer_entries, pinned_card_author
 from .portraits import rules_for
 from .projections import expand
 from .script_session import SessionScripts, approved
@@ -85,21 +86,39 @@ async def prepare_tavern_opening(
                         and card_scripts_default(directory))
     if authored and authored.schema_grant:
         enable_requested = False  # The declared schema owns this opening's narrow settlement path.
+    pinned_mvu = pinned_mvu_issue = None
     if enable_requested and script_host_ok and mvu and mvu.values:
-        scripts = await to_thread(link_card_scripts, directory, choice.cardId, scripts)
+        if not choice.openingMvuCounter and (scheme := pinned_card_author(card)) is not None:
+            try:
+                if mvu.issues:
+                    raise CardScriptError('The fixed MVU profile needs valid static [InitVar] entries')
+                code = await to_thread(compile_pinned_mvu, directory, choice.cardId, scheme)
+                values = await to_thread(calculate_pinned_mvu, code, initializer_entries(card.book), {}, None)
+                mvu = mvu.model_copy(update={'values': values})
+                pinned_mvu = code
+            except (ValueError, RecursionError) as exc:
+                if choice.enableCardScripts:
+                    raise OwnerArgumentError(str(exc)) from exc
+                pinned_mvu_issue = str(exc)
+        else:
+            scripts = await to_thread(link_card_scripts, directory, choice.cardId, scripts)
         ensure_current()
-    script_card_ok = bool(mvu and mvu.values and any(s.enabled and not s.issue for s in scripts))
+    script_card_ok = bool(mvu and mvu.values and (pinned_mvu or any(s.enabled and not s.issue for s in scripts)))
     if choice.enableCardScripts and not script_host_ok:
         raise OwnerArgumentError(SCRIPT_CLOCK_UNAVAILABLE)
     if choice.enableCardScripts and not script_card_ok:
         raise card_scripts_unavailable(scripts, mvu)
-    enable_scripts = enable_requested and script_host_ok and script_card_ok
+    enable_scripts = enable_requested and script_host_ok and script_card_ok and pinned_mvu is None
     script_state = SessionScripts(clock='turn', approved=script_fingerprint(scripts) if enable_scripts else None,
                                   button_receipts_current=True)
     if block is not None:
         try:
-            listeners = approved(scripts, script_state) if enable_scripts else []
-            mvu, script_state = await settle_mvu_candidate(mvu, script_state, block, listeners)
+            if pinned_mvu is not None:
+                values = await to_thread(calculate_pinned_mvu, pinned_mvu, [], mvu.values, block)
+                mvu = mvu.model_copy(update={'values': values})
+            else:
+                listeners = approved(scripts, script_state) if enable_scripts else []
+                mvu, script_state = await settle_mvu_candidate(mvu, script_state, block, listeners)
         except (ValueError, RecursionError):
             mvu = mvu.model_copy(update={'issues': {**mvu.issues, 'invalid_opening_update': 1}})
         ensure_current()
@@ -178,7 +197,8 @@ async def prepare_tavern_opening(
         hasPortrait=card.portrait is not None, portrait_rules=rules_for(card.portraits), state_fields=card.state_fields,
         media=card.media, media_issues=card.media_issues, scene_media_rules=card.scene_media_rules,
         native_panels=card.native_panels, invalid_native_panels=card.invalid_native_panels,
-        mvu=mvu, mvu_public=mvu_public, mvu_legacy=legacy_mvu,
+        mvu=mvu, mvu_public=mvu_public, mvu_legacy=legacy_mvu or pinned_mvu is not None,
+        pinned_mvu=pinned_mvu, pinned_mvu_issue=pinned_mvu_issue,
         gameplay_pack=card.gameplay_pack, web_panel=web_panel, web_panel_ready=web_panel is None,
         web_panel_issue=web_panel_issue, legacy_opening_web=legacy_state, scripts=scripts,
         script_state=script_state, opening_schema=schema, opening_gameplay_issue=opening_gameplay_issue,

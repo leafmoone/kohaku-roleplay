@@ -48,7 +48,8 @@ class ApplyMvuUpdate(UpdateMvu):
     tool_name = "rp_apply_mvu_update"
     description = (
         "Apply one literal <UpdateVariable> block for a card that expects MagVarUpdate format. "
-        "Use literal _.set/_.add commands (one per line) or a <JSONPatch> array with test/replace and array add/remove. "
+        "Use literal _.set/_.add commands or <JSONPatch> as instructed by this tavern. "
+        "The fixed author-schema profile requires JSONPatch and allows object add/remove; other profiles do not. "
         "Do not duplicate the same updates with rp_update_mvu or print the block in the story."
     )
 

@@ -8,6 +8,8 @@ from .library import get_card, original_card
 from .module_library import module_sources, save_discovered_module, saved_modules
 from .module_linker import RETRYABLE_MODULE_ISSUES, ModuleLinkError, _virtual_graph
 from .opening_page_library import opening_module_plan, opening_page_snapshot, prepare_opening_assets
+from .pinned_mvu import PINNED_HELPER, cached_pinned_helper, helper_text, pinned_card_author
+from .script_values import CardScriptError
 from .tavern_artifacts import artifact_issue, inspect_tavern_artifacts
 
 
@@ -39,7 +41,17 @@ def prepare_card_assets(directory: Path, card_id: str) -> dict:
         except (CardError, ModuleLinkError) as exc:
             issues.append({'kind': 'opening', 'id': page.url, 'message': str(exc)})
     scripts = [s for s in card.scripts if s.enabled and (s.issue is None or s.issue in RETRYABLE_MODULE_ISSUES)]
-    if scripts:
+    if author := pinned_card_author(card):
+        # The fixed core and helper dependencies are assembled locally. Cache
+        # only the exact helper declaration needed by this profile.
+        try:
+            if cached_pinned_helper(directory, card_id) is None:
+                helper = load(PINNED_HELPER, lambda: save_discovered_module(directory, card_id, PINNED_HELPER), 'script')
+                if helper is not None:
+                    helper_text(helper)
+        except CardScriptError as exc:
+            issues.append({'kind': 'script', 'id': author.id, 'name': author.name, 'message': str(exc)})
+    elif scripts:
         remote = module_sources(directory, card_id)
         raw = original_card(directory, card_id)
         for script in scripts:

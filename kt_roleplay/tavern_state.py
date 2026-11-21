@@ -75,6 +75,8 @@ class TavernSession(Arguments):
     mvu_public: list[str] = Field(default_factory=list)
     header_pins: list[str] = Field(default_factory=list)
     mvu_legacy: bool = False
+    pinned_mvu: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    pinned_mvu_issue: str | None = Field(default=None, exclude_if=lambda value: value is None)
     lore_activation: dict[Literal["lore", "worldbook"], dict[str, int]] = Field(default_factory=dict)
     gameplay_pack: GameplayPack | None = None
     legacy_plugins: list[str] = Field(default_factory=list)

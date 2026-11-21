@@ -102,6 +102,12 @@ kt web --host 127.0.0.1 --port 8000
 
 支持 MagVarUpdate 常见的字面量 `<UpdateVariable>` 子集：每行一条 `_.set('路径', 新值)`、`_.set('路径', 旧值, 新值)` 或 `_.add('路径', 数值差)`；路径是已有对象的点分路径，参数只允许字面量，可带行末注释。提供旧值时必须与当前状态一致。有效 `[InitVar]` 卡的开场尾部若有更新块，开局时只应用一次，不把控制块显示成剧情；无效整批跳过并提示。剧情中若卡有对应更新说明，由插件自带的 `rp_apply_mvu_update` 接收整块并复用同一状态校验，不自动扫描普通对话。同一更新块也可使用 `<JSONPatch>` 及其 JSON 数组：支持对已有值 `test` 和同类型 `replace`，以及通过 JSON Pointer 对数组插入（含 `/-` 追加）和删除。字面命令可用 `items[0]` 一类下标。操作顺序生效，任一操作失败时整批不写；对象增删、`move`／`copy`、表达式和未知命令不支持。
 
+### 固定版 MagVarUpdate（实验性）
+
+当卡同时声明受支持的 MagVarUpdate 核心入口和 StageDog 的 MVU Zod schema，要求 JSONPatch 且没有其他启用的伴随脚本时，启用兼容脚本的新局可使用固定版 `0a730cd4`。需要字面 `_.set`／`_.add` 结算的卡继续使用旧路径。先按下文安装可选 Node 依赖，再点「准备卡片资源」：不会下载浮动的 MagVarUpdate 核心，而是准备经核对的 `mvu_zod.js` 固定版本。此方案不按卡名启用，不改卡片原件，已有酒馆不会自动切换。
+
+该路径在隔离计算进程中读取有效的静态 `[InitVar]`，并调用卡作者的 schema；游玩时用 `rp_apply_mvu_update` 接收 `<UpdateVariable>` 内的字面 `<JSONPatch>`，支持 `add`、`replace`、`remove`，可编辑作者 schema 允许的对象成员。作者拒绝任一操作则整批不存，保留上一版状态。初始化不可用时，默认仍可用文字开局并查看诊断。这里只接变量计算，不加载原版作者菜单、任意动态导入，也不是完整的 MVU Helper。
+
 ### 酒馆卡片脚本（实验性）
 
 可识别 `TavernHelper_scripts` 与 `tavern_helper.scripts` 的本地脚本声明；导入不会执行脚本。新酒馆默认运行卡片已启用、具备可用 `[InitVar]` 的兼容脚本。在角色库可改全局默认，只影响此后新开的酒馆；开局时可跟随默认，也可为这一局明确开启或关闭。既有局通过 `role` 面板更改自己的开关，并可以点击当前脚本公开的按钮。宿主若没有可用的持久会话回合号，脚本不能启用，已有许可也不会开放按钮或 Tool。新局启用后可运行一次开场事件；在已经开局的会话中开启不重放开场。玩家输入及最终回复按 KT 对话回合去重；工具续轮不重跑同一阶段，历史改写或分叉不会回滚脚本已写入的变量。支持 `eventOn`、`getVariables`、`replaceVariables`、`updateVariablesWith` 及 `getButtonEvent` / `eventOnButton`；`rp_run_card_script` 只接收本局登记的 ID 和 JSON 参数。只把当前会话的 MVU 副本交给有时间和内存上限的独立 JS 进程，变量更新整批校验。不会给脚本提供文件、网络、浏览器 DOM、其他会话或宿主 Tool；完整 Tavern Helper、EJS 和斜杠命令链仍不支持。此模式适合确认来源的卡，不等同于操作系统级沙箱或原样运行所有卡。
