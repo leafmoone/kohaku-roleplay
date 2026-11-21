@@ -1,0 +1,12 @@
+{
+  "loading": "Loading progress clock…",
+  "inactive": "Bind a card that uses this progress clock to track it here.",
+  "loadFailed": "Could not load the progress clock.",
+  "advanceFailed": "Could not advance the progress clock. Refreshed current state.",
+  "advance": "Advance +1",
+  "advancing": "Advancing…",
+  "complete": "Complete",
+  "refresh": "Refresh",
+  "retry": "Retry",
+  "progressText": "{filled} / {segments}"
+}

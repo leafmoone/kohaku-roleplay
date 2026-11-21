@@ -1,0 +1,12 @@
+{
+  "loading": "正在加载进度时钟…",
+  "inactive": "绑定启用此进度时钟的角色卡后，将在此显示进度。",
+  "loadFailed": "无法加载进度时钟状态。",
+  "advanceFailed": "推进进度时钟失败，已从当前会话刷新状态。",
+  "advance": "推进一格",
+  "advancing": "推进中…",
+  "complete": "已完成",
+  "refresh": "刷新",
+  "retry": "重试",
+  "progressText": "{filled} / {segments}"
+}
