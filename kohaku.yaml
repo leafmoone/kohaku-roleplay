@@ -19,8 +19,6 @@ ui:
   i18n: {en: ui/i18n/en.json, zh-CN: ui/i18n/zh-CN.json}
   handler: kt_roleplay.catalog:CardCatalog
   api: kt_roleplay.launch:router
-  messageBodies:
-    - {id: mes-text, label: Roleplay Message Options, owner: 'plugin:roleplay', maxHeight: 360}
   contributes:
     - {kind: settings, id: library, label: Roleplay Cards, owner: package, icon: i-carbon-user-avatar}
     - {kind: tab, id: studio, label: Roleplay Library, owner: package, icon: i-carbon-book}

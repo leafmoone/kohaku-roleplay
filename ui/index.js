@@ -2,7 +2,6 @@ import { defineExtension } from "@kohakuterrarium/ui-sdk";
 
 import { CardLibraryView } from "./src/CardLibraryView.js";
 import { ChoiceBlock } from "./src/ChoiceBlock.js";
-import { MessageBodySlot } from "./src/MessageBodySlot.js";
 import { RoleplayDockPanel } from "./src/RoleplayDockPanel.js";
 import { RoleplayMiniPanel } from "./src/RoleplayMiniPanel.js";
 import { WorldbookLibraryView } from "./src/WorldbookLibraryView.js";
@@ -44,5 +43,4 @@ export default defineExtension((kt) => {
   kt.registerPanel("roleplay", RoleplaySurface);
   kt.registerPanel("gameplay", RoleplayMiniSurface);
   kt.registerMessageRenderer("choices", ChoiceBlock);
-  kt.registerMessageBody?.("mes-text", MessageBodySlot);
 });

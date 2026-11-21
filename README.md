@@ -4,7 +4,7 @@
 
 ## 使用
 
-在插件仓库执行 `kt install .` 复制安装到 KT 2.2.2，再重新启动目标 Studio；已具备 `kohaku.yaml` 中的 Python 依赖时可用 `--no-deps` 离线安装。开发时可用 `kt install . -e --no-deps` 做 editable 安装；仅在工作区专属虚拟环境和 `KT_CONFIG_DIR` 下做开发验证，不要将测试卡装入日用 KT。
+在插件仓库执行 `kt install .` 复制安装到原版 KT 2.2.2（无需宿主补丁），再重新启动目标 Studio；已具备 `kohaku.yaml` 中的 Python 依赖时可用 `--no-deps` 离线安装。开发时可用 `kt install . -e --no-deps` 做 editable 安装；仅在工作区专属虚拟环境和 `KT_CONFIG_DIR` 下做开发验证，不要将测试卡装入日用 KT。
 
 `0.5.0` 新增酒馆原生玩法 Tool、字面量 MVU 更新和多项世界书规则。升级时先停止目标 Studio，再在同一 KT 配置下按同名包更新，重启后从 History 恢复旧会话；不要清空 KT 配置目录或角色库。已保存的会话不会重放开场或改写原有世界书快照。
 
@@ -145,12 +145,6 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 旧卡如果用仅显示、仅作用于助理文本的 `regex_scripts`，把开场中的一个字面标记替换为完整围栏 HTML，KT 可识别这类页面；识别时不运行脚本、不应用其他通用正则替换，也不把 HTML 发给模型。显式 CHARX 网页优先。旧卡页面只读，`card_web_panel` 额外返回 `legacyMarker` 及 `legacyOpening`（开场消息编号 `0` 和发布当时的 `data.stat_data`）。若后续一条已完成的助理回复含同一标记，还返回最近一份 `legacyLatest`（编号是本面板内的会话回合号，不是酒馆的任意楼层索引）。对声明了可识别的 MagVarUpdate `beta` 模块与 `<StatusPlaceHolderImpl/>` 页面的新酒馆，若已开启兼容脚本且 MVU 已初始化，则参照[上游状态栏触发规则](https://github.com/MagicalAstrogy/MagVarUpdate/blob/d03b7dc8a6ebf9bd611c7e2dc91f3b35462deebc/src/function/update_variables.ts#L1672-L1768)，完整回复无需由模型输出该标记也可更新页面快照，即使变量未改变。KT 只保存快照和原回复，不把标记加进会话正文、不下载或执行上游模块；其他卡仍要求显式标记。两份快照都只含玩家当前选择公开的路径；继续对话的当前值不会冒充当时值。流式片段、模型工具调用和回放不产生快照。浏览器只收到玩家选中的开场或最新快照；`getCurrentMessageId()` 和 `getChatMessages(该编号)` 只读该份。缺 `delta_data` 时不伪造变更。其他历史楼层、`display_data` / `delta_data`、整个酒馆页面或通用浏览器 API 不在此兼容范围。
 
-可信宿主组件可用 `card_web_message_anchor` 传入本局 `panelScope` 和 `legacyLatest.message_id`，查询本局当前分支的已完成旧网页回复。仅支持宿主提供按 agent 限量读取的 `recent_agent_events`，且持久 `processing_end` 明确标记成功的版本。成功返回 `{anchor: {turn, branchId, eventId, roundStartEventId}}`；生成开始、规范回复和成功终止必须各有正整数物理 ID，且严格按此顺序。宿主按这些持久事件定位，不按正文或回合号猜测；正在生成、回复已过期、旧存档缺分支或未在最近 128 条本 agent 事件内确认完成时，返回 `{anchor: null}`。原版 KT 2.2.2 不提供该能力，旧快照照常显示。该版可选用[持久消息定位源码补丁](compat/kohakuterrarium-v2.2.2/README.md#已完成消息的只读定位)。这是宿主侧只读接口，不传给作者 iframe，不开放聊天记录、草稿或 DOM 写入。
-
-新局所选远程开场从本地资源成功离线链接后，默认具备 `mes-text-v1` 兼容能力，不另做开局授权。接口可显式传 `legacyMessageSlot: null` 关闭。`card_web_message_offer({locator})` 只为当前、已完成且有合法选项的行返回 `{offer: {mode, panelScope}}`，不读取网页到客户端；不符合条件时返回 `{offer: null}`。完整助理回复含唯一且非空的 `<roleplay_options>…</roleplay_options>` 时，可信 owner 可用 `card_web_message_slot({panelScope, locator})` 取该行的一份已批准网页和消息快照。`locator` 必须按上式精确匹配当前成功分支的全部四个字段；没有可确认的当前锚点或定位已过期时返回 `{slot: null}`，参数缺失或作用域错误则拒绝请求。scope、分支和两个物理事件 ID 不应进入作者框；快照里的 `message_id` 只是兼容层的回合号，用于作者代码访问这一份消息。另已开启 `enableOpeningMvuRead` 时才带玩家选中的公开变量。读取接口本身不运行作者脚本；使用[可选正文宿主补丁](compat/kohakuterrarium-v2.2.2/README.md#助理回复正文的作者选项)时，KT 才在该回复正文里自动挂载隔离作者页。不开放真实宿主 DOM。
-
-可信 owner 的 `card_web_message_option({panelScope, locator, optionIndex})` 可为当前消息核对一条选项并返回待展示的纯文本 `{draft: {label, text}}`。只认该成功回复中合法选项块的本地零基索引（最多八项，每行 `名称: 内容` 或 `名称：内容`）；识别 `「…」`／`${…}` 仅去除外层字符，不求值。过期行返回 `{draft: null}`，非法索引或调用方传来的任意文本拒绝。调用不会写草稿、发消息、推进回合或结算；宿主不得把展示候选文本说成已发送。
-
 对于用 `$('body').load(...)` 加载外部 HTTPS 网页的旧开场，KT 可识别这一类原作者声明。卡库的「准备卡片资源」可以在导入时使用，也可以在选中已入库的卡后使用。它调用 `prepare_card_assets({id})` 一次准备兼容开场页及卡片启用脚本的静态依赖，不运行脚本；只预览、直接入库或直接开局不会触发下载。回执分别列出 `modules`、`openingPage`、`openingPlan` 和 `issues`。已保存的完整 URL 原样复用；个别下载失败时仍保存其他可用依赖，重试在同一卡片补缺，不会重复导入。原有单项接口留给诊断和旧客户端。
 
 目录 owner 的 `preview_card_dependencies` 可列出一个符合条件的 `remoteOpeningPage`（`title`、`marker`、`url`），不会下载。只有单独明确确认，才可通过 `confirm_card_opening_page` 传入已入库的 `id` 和完全一致的 `url`，取得 `{openingPage: {url, size}}`。来源限公网 HTTPS 443，路径不得含 `.`／`..` 路径段，不跟重定向；响应限无压缩的 UTF-8 `text/html`，最多 256 KiB。副本按卡保存，详情的 `remoteOpeningPage.snapshot` 可检查是否保存；再次确认已保存的入口直接返回同一份副本。确认不改原卡，不下载页面引用的其他资源，也不会运行网页。此前已入库但缺这份元数据的原件需重新导入。
@@ -187,6 +181,16 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 [StageDog《呕吐内心的少女》实测开场](compat/stagedog-opening.md) 列出原卡玩法、角色库审批前提、可信开局参数，以及未验证浮动链接和其它作者脚本的边界。
 
+### 回复中的原生选项
+
+卡作者可以在角色指令或世界书中约定：需要提供行动时，让模型在回复末尾输出一个完整的 `kt_roleplay.choices` 代码块，例如：
+
+```kt_roleplay.choices
+{"prompt":"现在怎么做？","options":[{"label":"进入档案室","text":"我趁守卫转身走进档案室。"},"留在门外观察"]}
+```
+
+原版 KT 使用 Roleplay 的选项组件显示按钮；点击会把 `text` 作为一条玩家消息发出，玩家也可自由输入。字符串选项的显示和发送文本相同。旧卡若输出 `<roleplay_options>`，把卡面的输出约定改成上面的格式即可；插件不再把作者网页嵌入聊天回复，也不会自动转换旧格式。作者独立网页仍可从 `role` 或 `Play` 打开。
+
 ### 酒馆原生面板
 
 在 `data.extensions["kohaku-roleplay"].panels` 声明一组面板；每项有唯一 `id`、显示用 `label` 和 `type`。状态由 KT 的本局字段更新，面板只负责呈现，不自行推进剧情。
@@ -219,7 +223,7 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 - `kohaku.yaml`：KT 包清单；`creatures/rp_agent/`：单 agent 酒馆配置与角色行为。
 - `kt_roleplay/`：后端，含卡片解析、素材库、人物形象/游玩投影和世界书筛选；`card_state.py` 定义卡片状态协议，`state_tool.py` 提供酒馆更新工具，`mvu.py` / `mvu_tool.py` 负责静态初值与本局原生更新工具，`panels.py` 投影酒馆原生面板，`novel.py` / `scene_tools.py` / `recovery.py` 处理小说裁定、分发回报与中断恢复。
 - `kt_roleplay/card_editor.py`：在原格式上另存卡片；`charx.py`：读取归档及本地媒体；`portraits.py` / `portrait_library.py`：处理嵌入的本地图片、公开状态映射与立绘副本。
-- [`compat/kohakuterrarium-v2.2.2/`](compat/kohakuterrarium-v2.2.2/README.md)：可选的 KohakuTerrarium 消息定位宿主源码补丁与上游许可证；[`compat/stagedog-opening.md`](compat/stagedog-opening.md)：实测旧作的开场兼容说明。
+- [`compat/stagedog-opening.md`](compat/stagedog-opening.md)：实测旧作的开场兼容说明。
 - `package.json` / `package-lock.json`：卡片模块离线链接器的一次性 Node.js 安装声明；`kt_roleplay/module_*.py`、`script_dependencies.py` 和 `link_card_module.mjs` 负责检查、保存与链接。
 - [原生玩法最小示例：物资登记员](examples/native-ledger.json)：可直接在角色库导入并开酒馆。无需卡片 JS、MVU 或 Node。查看 `state` 如何声明库存、核对结果和任务状态，再看 `panels` 如何引用它们。点击「核对清单」只发送所示玩家输入；由玩法工具记录动作，面板读取结果，不靠按钮直接改存档。
 - `kt_roleplay/opening_page_library.py`：已确认外部开场入口和模块缓存、依赖诊断；`ui/src/CardWebPanel.js`：在酒馆 Dock 挂载隔离的本局作者页。

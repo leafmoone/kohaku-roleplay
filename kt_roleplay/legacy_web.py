@@ -3,7 +3,6 @@
 import json
 import re
 from collections.abc import Callable
-from typing import TypedDict
 from urllib.parse import urlsplit
 
 from kohakuterrarium.modules.output.base import BaseOutputModule
@@ -170,108 +169,8 @@ class LegacyReplyState(BaseModel):
     turn: int
     text: str
     values: dict[str, JsonValue]
-    branch: int | None = None
-
-
-class LegacyMessageAnchor(TypedDict):
-    turn: int
-    branchId: int
-    eventId: int
-    roundStartEventId: int
-
-
-LEGACY_MESSAGE_EVENT_LIMIT = 128
-LEGACY_MESSAGE_SLOT = 'mes-text-v1'
-_MESSAGE_ID_MAX = 2**53 - 1
-
-
-class LegacyMessageLocator(BaseModel):
-    model_config = ConfigDict(strict=True, extra='forbid')
-    turn: int = Field(ge=1, le=_MESSAGE_ID_MAX)
-    branchId: int = Field(ge=1, le=_MESSAGE_ID_MAX)
-    eventId: int = Field(ge=1, le=_MESSAGE_ID_MAX)
-    roundStartEventId: int = Field(ge=1, le=_MESSAGE_ID_MAX)
-
-    @model_validator(mode='after')
-    def _physical_order(self) -> 'LegacyMessageLocator':
-        if self.roundStartEventId >= self.eventId:
-            raise ValueError('The message must follow its physical round start')
-        return self
-
-
-def _legacy_slot_block(text: str) -> str | None:
-    # The public adapter targets an explicit author options block, never generic prose.
-    prefix, start, tail = text.partition('<roleplay_options>')
-    content, end, suffix = tail.partition('</roleplay_options>')
-    if (not start or not end or '<roleplay_options>' in content or '<roleplay_options>' in suffix
-            or '</roleplay_options>' in prefix or '</roleplay_options>' in suffix):
-        return None
-    return content.strip() or None
-
-
-def has_legacy_message_slot(text: str) -> bool:
-    return _legacy_slot_block(text) is not None
-
-
-def legacy_slot_options(text: str) -> list[dict[str, str]]:
-    block = _legacy_slot_block(text)
-    if block is None:
-        return []
-    lines = block.splitlines()
-    if lines[0].startswith('```'):
-        if lines[-1] != '```' or len(lines) < 3:
-            return []
-        lines = lines[1:-1]
-    options: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for line in lines:
-        if not line.strip():
-            continue
-        parts = re.split(r'[:：]', line, maxsplit=1)
-        if len(parts) != 2 or len(options) >= 8:
-            return []
-        label, draft = (part.strip() for part in parts)
-        if draft.startswith('${') and draft.endswith('}'):
-            draft = draft[2:-1].strip()
-        elif draft.startswith('「') and draft.endswith('」'):
-            draft = draft[1:-1].strip()
-        if not 0 < len(label) <= 80 or label in seen or not 0 < len(draft) <= 1000:
-            return []
-        seen.add(label)
-        options.append({'label': label, 'text': draft})
-    return options
-
-
-def completed_legacy_message_anchor(reply: LegacyReplyState, events: list[dict]) -> LegacyMessageAnchor | None:
-    """Match success, canonical message and round start in one namespace-local window."""
-    branch = reply.branch
-    if branch is None or not 1 <= branch <= _MESSAGE_ID_MAX or not 1 <= reply.turn <= _MESSAGE_ID_MAX:
-        return None
-    terminal = None
-    anchor = None
-    for event in events[:LEGACY_MESSAGE_EVENT_LIMIT]:
-        turn, event_branch = event.get('turn_index'), event.get('branch_id')
-        if turn != reply.turn or event_branch != branch:
-            continue
-        if type(turn) is not int or type(event_branch) is not int:
-            return None
-        kind, key = event.get('type'), event.get('event_id')
-        if kind == 'processing_end':
-            if (terminal is not None or event.get('completed') is not True
-                    or type(key) is not int or not 1 <= key <= _MESSAGE_ID_MAX):
-                return None
-            terminal = key
-        elif kind == 'assistant_message':
-            start = event.get('round_start_event_id')
-            if (terminal is None or anchor or _assistant_reply_text(event.get('message')) != reply.text
-                    or type(key) is not int or type(start) is not int or not 0 < start < key < terminal):
-                return None
-            anchor = LegacyMessageAnchor(turn=reply.turn, branchId=branch, eventId=key, roundStartEventId=start)
-        elif kind == 'assistant_round_start':
-            return anchor if anchor and type(key) is int and key == anchor['roundStartEventId'] else None
-        elif kind in ('processing_start', 'user_message', 'processing_error', 'interrupt'):
-            return None
-    return None
+    # Retired inline locator metadata: accepted in existing saves only.
+    branch: int | None = Field(default=None, exclude=True)
 
 
 class OpeningCounterGrant(BaseModel):
@@ -311,7 +210,8 @@ class LegacyOpeningState(BaseModel):
     mvu_read_enabled: bool = False
     counter: OpeningCounterGrant | None = None
     counter_revision: int = 0
-    message_slot_enabled: bool = False
+    # Read old saves without ever enabling or saving the retired inline slot.
+    message_slot_enabled: bool = Field(default=False, exclude=True)
 
 
 def selected_message_values(values: dict[str, JsonValue], selected: list[str]) -> dict[str, JsonValue]:
