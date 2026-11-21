@@ -9,7 +9,14 @@ import { WorldbookLibraryView } from "./src/WorldbookLibraryView.js";
 const SettingsLibrary = {
   name: "RoleplaySettingsLibrary",
   components: { CardLibraryView },
-  template: `<CardLibraryView mode="settings" />`,
+  template: `
+    <div class="ktrp-stack">
+      <CardLibraryView mode="settings" />
+      <p class="ktrp-muted" data-testid="kt-rp-kt-attribution">
+        Built for <a href="https://github.com/Kohaku-Lab/KohakuTerrarium" target="_blank" rel="noopener noreferrer">KohakuTerrarium</a>
+      </p>
+    </div>
+  `,
 };
 
 const StudioLibraryTab = {

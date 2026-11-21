@@ -1,6 +1,9 @@
 name: kohaku-roleplay
 version: 0.5.0
-description: Tavern character cards and session-scoped roleplay for KohakuTerrarium.
+description: >-
+  Tavern character cards and session-scoped roleplay for KohakuTerrarium
+  (https://github.com/Kohaku-Lab/KohakuTerrarium).
+  Licensed under the KohakuTerrarium License v1.0.
 python_dependencies:
   - 'regex>=2024.11.6'
   - 'quickjs-ng>=0.18,<0.19'

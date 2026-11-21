@@ -1,6 +1,10 @@
 # kohaku-roleplay
 
-面向 KohakuTerrarium 桌面单用户的酒馆角色卡扩展，目标兼容 KT v2.2.2。已有 creature 的形象挂载、单 agent 酒馆和逐角色 agent 小说使用同一素材库；剧情与人物经历只属于当前会话。
+面向 [KohakuTerrarium](https://github.com/Kohaku-Lab/KohakuTerrarium) 桌面单用户的独立酒馆角色卡扩展，目标兼容 KT v2.2.2。已有 creature 的形象挂载、单 agent 酒馆和逐角色 agent 小说使用同一素材库；剧情与人物经历只属于当前会话。
+
+## 许可证与署名
+
+本插件的原创部分采用 [KohakuTerrarium License v1.0](LICENSE)，即上游的定制许可证，包含命名和可见署名要求，并非标准 Apache-2.0。上游项目与插件的署名见 [NOTICE](NOTICE)。第三方代码和素材仍按各自的许可处理；Git 历史中的旧宿主补丁沿用其当时附带的上游许可证和署名，不随本次声明改变。
 
 ## 使用
 
@@ -14,9 +18,31 @@
 
 开发时可用 `kt install . -e --no-deps` 做 editable 安装；仅在隔离虚拟环境和 `KT_CONFIG_DIR` 下做验证，不要将测试卡装入日用 KT。
 
-### 会话与升级
+### 部署和验收
 
-`0.5.0` 新增酒馆原生玩法 Tool、字面量 MVU 更新和多项世界书规则。升级时先停止目标 Studio，再在同一 KT 配置下按同名包更新，重启后从 History 恢复旧会话；不要清空 KT 配置目录或角色库。已保存的会话不会重放开场或改写原有世界书快照。
+本插件安装在使用原版 **KT 2.2.2** 的桌面单用户环境中，无需单独部署一个 Roleplay 服务。使用桌面应用时，安装后重启应用即可；在命令行运行 Studio 时，可用下面的方式检查包并启动本机网页（在与安装相同的环境和 `KT_CONFIG_DIR` 下运行）：
+
+```sh
+kt extension info kohaku-roleplay
+kt web --host 127.0.0.1 --port 8000
+```
+
+在浏览器打开终端打印的地址。部署后可以这样检查：
+
+1. 从「新建标签」打开 **Roleplay Library**，确认角色库和 **Worldbook Library** 能加载。若菜单没有入口，先确认安装和启动用的是同一 KT 环境及配置目录，再重启 Studio、刷新网页。
+2. 导入 [物资登记员](examples/native-ledger.json) 开一局。聊天应只出现一条开场白；在 **Play** 中能看到「核对清单」，从 **role** 能打开完整设置。验证模型回合时需要配置可用模型；这些入口和开场本身不需要 Node.js。
+
+### 升级和回退
+
+升级前先停止 Studio，备份 KT 配置目录（默认 `~/.kohakuterrarium`，或 `KT_CONFIG_DIR` 指定的位置）。若用 `KT_SESSION_DIR` 另设了会话目录，也一并备份。使用同名包更新：本地复制安装从新版本源目录重新执行 `kt install .`；从 Git URL 安装且未固定版本，可用 `kt update kohaku-roleplay`。不要清空角色库或会话库。
+
+更新后在 **History** 恢复旧会话，核对历史、已选世界书和玩法状态；不需要重新导卡或重开旧局。已有存档不会重放开场或改写原有世界书快照。若需要回退，先停 Studio、保留升级后的数据，再使用之前的包版本和相应备份；不要用旧备份直接覆盖新进度。
+
+### 安装渠道
+
+上述本地安装不依赖市场。发布到公开 Git 仓库后，也可直接用 `kt install <公开 Git 仓库 URL>` 安装。只有在 [TerrariumMarket](https://github.com/Kohaku-Lab/TerrariumMarket) 收录后，才可用 `kt install @kohaku-roleplay`；以市场索引为准。发布与上架规则见 [KT 包指南](https://github.com/Kohaku-Lab/KohakuTerrarium/blob/v2.2.2/docs/zh-CN/guides/packages.md) 和 [市场投稿指南](https://github.com/Kohaku-Lab/TerrariumMarket/blob/main/CONTRIBUTING.md)。
+
+### 日常使用
 
 - 角色库：在 Studio 的「新建标签」菜单打开 **Roleplay Library**，也可从设置里的 **Roleplay Cards** 跳转到该标签页。导入并选中卡片后，使用顶部的开局按钮。
 - 会话界面：从聊天工具栏打开 **Play** 小浮窗，查看公开状态和常用操作。桌面默认在聊天区右上角，拖动窗口把手可移动位置，拖右下角可调整宽高，也可一键放大／还原；窄屏可在同一抽屉切换半屏和大屏。长状态可展开阅读，已准备好的作者网页可在小窗打开，调整窗口不会重载网页。工具栏的 **role** 人像图标是独立入口，保留完整配置、世界书、诊断和作者网页。两个入口都不占会话标题栏，也不需要把 **role** 固定到侧边。开局可选主开场或备选开场，正文只在聊天中发布，不在开局表单或会话面板重复展示。未加载 `roleplay` 的 creature 不会应用角色卡。
