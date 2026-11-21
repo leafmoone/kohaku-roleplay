@@ -17,7 +17,8 @@ from .mvu_legacy import split_opening
 from .mvu_settlement import settle_mvu_candidate
 from .opening_mvu_schema import OpeningSchemaSnapshot, derive_opening_schema, link_opening_schema
 from .opening_page_library import CALLBACK_RUNTIME, cached_opening_panel
-from .pinned_mvu import calculate_pinned_mvu, compile_pinned_mvu, initializer_entries, pinned_card_author
+from .pinned_mvu import (PinnedHelperMissing, calculate_pinned_mvu, compile_pinned_mvu,
+                         initializer_entries, pinned_card_author)
 from .pinned_mvu_setup import SETUP_MARKER, setup_projection
 from .pinned_mvu_status import STATUS_MARKER
 from .portraits import rules_for
@@ -88,9 +89,13 @@ async def prepare_tavern_opening(
                         and card_scripts_default(directory))
     if authored and authored.schema_grant:
         enable_requested = False  # The declared schema owns this opening's narrow settlement path.
+    setup_requested = card.web_panel is None and SETUP_MARKER in opening
+    can_run_scripts = bool(enable_requested and script_host_ok and mvu and mvu.values)
+    scheme = pinned_card_author(card) if not choice.openingMvuCounter and (can_run_scripts or setup_requested) else None
     pinned_mvu = pinned_mvu_issue = None
-    if enable_requested and script_host_ok and mvu and mvu.values:
-        if not choice.openingMvuCounter and (scheme := pinned_card_author(card)) is not None:
+    missing_helper = False
+    if can_run_scripts:
+        if scheme is not None:
             try:
                 if mvu.issues:
                     raise CardScriptError('The fixed MVU profile needs valid static [InitVar] entries')
@@ -102,6 +107,7 @@ async def prepare_tavern_opening(
                 if choice.enableCardScripts:
                     raise OwnerArgumentError(str(exc)) from exc
                 pinned_mvu_issue = str(exc)
+                missing_helper = isinstance(exc, PinnedHelperMissing)
         else:
             scripts = await to_thread(link_card_scripts, directory, choice.cardId, scripts)
         ensure_current()
@@ -128,11 +134,24 @@ async def prepare_tavern_opening(
     web_panel, legacy_state, web_panel_issue = card.web_panel, None, None
     if web_panel is None:
         setup = None
-        if pinned_mvu and mvu and choice.enableOpeningModules and SETUP_MARKER in opening:
-            setup = next((row for row in card.legacy_mvu_setups if row.marker == SETUP_MARKER), None)
-            if not setup or not setup_projection(mvu.values):
-                setup = None
-                web_panel_issue = 'The author character setup needs a supported HTML template and initialized setup fields.'
+        if setup_requested:
+            template = next((row for row in card.legacy_mvu_setups if row.marker == SETUP_MARKER), None)
+            if not choice.enableOpeningModules:
+                web_panel_issue = 'setup_disabled'
+            elif not template or not scheme or not mvu or not mvu.values or mvu.issues.get('invalid_initializer'):
+                web_panel_issue = 'setup_unsupported'
+            elif not script_host_ok:
+                web_panel_issue = 'setup_runtime_unavailable'
+            elif not enable_requested:
+                web_panel_issue = 'setup_disabled'
+            elif missing_helper:
+                web_panel_issue = 'setup_resources_missing'
+            elif pinned_mvu is None:
+                web_panel_issue = 'setup_runtime_unavailable'
+            elif not setup_projection(mvu.values):
+                web_panel_issue = 'setup_unsupported'
+            else:
+                setup = template
         # The fixed status template never receives an opening-write scope,
         # including for alternate greetings and previously imported rows.
         rule = setup or next((row for row in card.legacy_web_rules if row.marker in opening

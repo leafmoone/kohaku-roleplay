@@ -1000,17 +1000,20 @@ export const CardWebPanel = {
         hasPinnedStatusMeta.value,
     );
 
+    const ISSUE_MESSAGE_KEYS = new Map([
+      ["entry_unconfirmed", "cardWebIssueEntryUnconfirmed"],
+      ["entry_needs_resources", "cardWebIssueEntryNeedsResources"],
+      ["entry_unsupported", "cardWebIssueEntryUnsupported"],
+      ["setup_resources_missing", "cardWebIssueSetupResourcesMissing"],
+      ["setup_disabled", "cardWebIssueSetupDisabled"],
+      ["setup_unsupported", "cardWebIssueSetupUnsupported"],
+      ["setup_runtime_unavailable", "cardWebIssueSetupRuntimeUnavailable"],
+      ["setup_not_in_save", "cardWebIssueSetupNotInSave"],
+    ]);
+
     function issueMessage(code) {
-      if (code === "entry_unconfirmed") {
-        return t("cardWebIssueEntryUnconfirmed");
-      }
-      if (code === "entry_needs_resources") {
-        return t("cardWebIssueEntryNeedsResources");
-      }
-      if (code === "entry_unsupported") {
-        return t("cardWebIssueEntryUnsupported");
-      }
-      return code;
+      const key = ISSUE_MESSAGE_KEYS.get(code);
+      return key ? t(key) : code;
     }
 
     function clearLoadedPayloadAndSnapshotState({ keepPayloadCache = false } = {}) {

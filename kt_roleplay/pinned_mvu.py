@@ -89,10 +89,14 @@ def cached_pinned_helper(directory: Path, card_id: str) -> str | None:
     return None
 
 
+class PinnedHelperMissing(CardScriptError):
+    """The fixed MVU runtime needs its prepared helper."""
+
+
 def compile_pinned_mvu(directory: Path, card_id: str, author: CardScript) -> str:
     helper = cached_pinned_helper(directory, card_id)
     if helper is None:
-        raise CardScriptError('Prepare card resources before running its MVU Zod schema')
+        raise PinnedHelperMissing('Prepare card resources before running its MVU Zod schema')
     node = shutil.which('node')
     if node is None:
         raise CardScriptError('The fixed MVU linker requires Node.js and the locked npm dependencies')

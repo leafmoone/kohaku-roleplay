@@ -52,6 +52,9 @@ class Play(Arguments):
         return self
 
 
+SetupPanelIssue = Literal['setup_resources_missing', 'setup_disabled', 'setup_unsupported', 'setup_runtime_unavailable']
+
+
 class TavernSession(Arguments):
     cardId: str
     card: CardFields
@@ -84,7 +87,7 @@ class TavernSession(Arguments):
     legacy_plugins: list[str] = Field(default_factory=list)
     web_panel: WebPanel | None = None
     web_panel_ready: bool = True
-    web_panel_issue: OpeningPageIssue | None = None
+    web_panel_issue: OpeningPageIssue | SetupPanelIssue | None = None
     legacy_opening_web: LegacyOpeningState | None = None
     legacy_reply_web: LegacyReplyState | None = None
     opening_schema: OpeningSchemaSnapshot | None = None

@@ -48,7 +48,7 @@ from .opening_mvu_schema import OpeningSchemaSnapshot, derive_opening_schema, wi
 from .panels import ChoicePanel, InventoryPanel, QuestPanel, public_panels
 from .paths import library_dir
 from .pinned_mvu import calculate_pinned_mvu
-from .pinned_mvu_setup import MvuSetupWrite, setup_preserved, setup_projection, setup_update
+from .pinned_mvu_setup import SETUP_MARKER, MvuSetupWrite, setup_preserved, setup_projection, setup_update
 from .projections import Persona, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
 from .worldbook import TEMPLATE_BOOK_BUDGET, read_worldbook
 from .worldbook_library import WorldbookNotFound, snapshot_detail, worldbook_for_play
@@ -594,6 +594,10 @@ class RoleplayPlugin(BasePlugin):
                 view['webPanel']['pinnedMvuStatus'] = status
         elif play.web_panel_issue is not None:
             view['webPanelIssue'] = play.web_panel_issue
+        elif play.web_panel is None and SETUP_MARKER in play.greeting:
+            greetings = [play.card.first_mes, *play.card.alternate_greetings]
+            if 0 <= play.greetingIndex < len(greetings) and SETUP_MARKER in greetings[play.greetingIndex]:
+                view['webPanelIssue'] = 'setup_not_in_save'
         if play.opening_gameplay_issue:
             view['openingGameplayIssue'] = play.opening_gameplay_issue
         if play.scripts and play.pinned_mvu is None:
