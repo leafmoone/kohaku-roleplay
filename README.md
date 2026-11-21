@@ -112,6 +112,8 @@ kt web --host 127.0.0.1 --port 8000
 
 使用新版插件新开局时，如果卡还带受支持的 `<StatusPlaceHolderImpl/>`，可在 `role` 另开只读状态栏，不进入聊天正文。已有酒馆不补挂新面板。初版支持作者的概览与物品列表：状态随本局结算更新，只传可显示的属性、世界时间地点及物品名和数量。不支持状态页编辑、装备结算、升级页、外部图片下载、任意动态导入或完整 MVU Helper。
 
+已在原版 KohakuTerrarium 2.2.2 和 Chrome 验证两份未改原卡：ArtificRealm v1.0.1 走完 `role` 内的作者建角、聊天行动、变量结算、原状态栏更新和同一 SQLite 存档恢复；[《平然世界》作者公开版 `0ce1aa2`](https://github.com/yjlovegy/pingran-world-card/tree/0ce1aa279b1e492c3c52a9d28bba75f48282d936/cards/%E5%B9%B3%E7%84%B6%E4%B8%96%E7%95%8C) 验证了文字开局、聊天行动推动 `世界.当前场景`、坏批不写、恢复后继续结算以及原 JSON 原样导出。第二张卡的作者网页未纳入验收。两次测试都用本机固定模型响应检验真实工具链，不代表任意模型都能正确生成更新。
+
 ### 酒馆卡片脚本（实验性）
 
 可识别 `TavernHelper_scripts` 与 `tavern_helper.scripts` 的本地脚本声明；导入不会执行脚本。新酒馆默认运行卡片已启用、具备可用 `[InitVar]` 的兼容脚本。在角色库可改全局默认，只影响此后新开的酒馆；开局时可跟随默认，也可为这一局明确开启或关闭。既有局通过 `role` 面板更改自己的开关，并可以点击当前脚本公开的按钮。宿主若没有可用的持久会话回合号，脚本不能启用，已有许可也不会开放按钮或 Tool。新局启用后可运行一次开场事件；在已经开局的会话中开启不重放开场。玩家输入及最终回复按 KT 对话回合去重；工具续轮不重跑同一阶段，历史改写或分叉不会回滚脚本已写入的变量。支持 `eventOn`、`getVariables`、`replaceVariables`、`updateVariablesWith` 及 `getButtonEvent` / `eventOnButton`；`rp_run_card_script` 只接收本局登记的 ID 和 JSON 参数。只把当前会话的 MVU 副本交给有时间和内存上限的独立 JS 进程，变量更新整批校验。不会给脚本提供文件、网络、浏览器 DOM、其他会话或宿主 Tool；完整 Tavern Helper、EJS 和斜杠命令链仍不支持。此模式适合确认来源的卡，不等同于操作系统级沙箱或原样运行所有卡。
