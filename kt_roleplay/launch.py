@@ -13,7 +13,8 @@ from kohakuterrarium.terrarium import LocalTerrariumService, TerrariumService
 from .cast import CastMember, cast_recipe
 from .gameplay_pack import GameplayPackUnavailable, tavern_creature
 from .library import CardNotFound, get_card
-from .runtime import Arguments, Play, RoleplayPlugin, library_dir, resolve_tavern_worldbook
+from .paths import library_dir
+from .runtime import Arguments, Play, RoleplayPlugin, resolve_tavern_worldbook
 from .worldbook_library import WorldbookNotFound
 from .portraits import rules_for
 

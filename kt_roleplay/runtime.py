@@ -3,7 +3,6 @@
 from asyncio import current_task, to_thread
 from collections.abc import Callable
 import json
-from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
@@ -19,7 +18,6 @@ from kohakuterrarium.core.conversation.elide import TOOL_FEEDBACK_KIND, estimate
 from kohakuterrarium.llm.message import UserMessage
 from kohakuterrarium.modules.plugin.base import BasePlugin, PluginBlockError, PluginContext, ToolVisibility
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError, OwnerForbiddenError
-from kohakuterrarium.utils.config_dir import config_dir
 
 from .card_scripts import CardScript, script_fingerprint, visible_script_buttons
 from .card_web import WebPanel
@@ -52,6 +50,7 @@ from .opening_mvu_schema import (OpeningSchemaGrant, OpeningSchemaSnapshot, deri
                                  link_opening_schema, with_opening_schema_output)
 from .opening_page_library import CALLBACK_RUNTIME, OpeningPageIssue, OpeningPageRuntime, cached_opening_panel
 from .panels import ChoicePanel, InventoryPanel, NativePanel, QuestPanel, public_panels
+from .paths import library_dir
 from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
 from .worldbook import TEMPLATE_BOOK_BUDGET, read_worldbook
 from .worldbook_library import WorldbookNotFound, WorldbookReference, default_worldbook_for_play, snapshot_detail, worldbook_for_play
@@ -159,10 +158,6 @@ class TavernSession(Arguments):
     opening_gameplay_issue: str | None = None
     scripts: list[CardScript] = Field(default_factory=list)
     script_state: SessionScripts = Field(default_factory=lambda: SessionScripts(clock="turn"))
-
-
-def library_dir() -> Path:
-    return config_dir() / "kohaku-roleplay"
 
 
 WorldbookSnapshot = tuple[WorldbookReference | None, LoreBook | None]

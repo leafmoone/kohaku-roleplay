@@ -19,7 +19,7 @@ from .module_library import snapshot_modules
 from .opening_page_library import (opening_module_dependencies, opening_module_plan,
                                    opening_page_dependencies, snapshot_opening_module, snapshot_opening_page)
 from .portrait_library import PortraitCopy, portrait_draft, save_portraits_copy
-from .runtime import library_dir
+from .paths import library_dir
 from .script_dependencies import script_dependencies
 from .tavern_artifacts import inspect_tavern_artifacts
 from .tavern_extension_manifest import inspect_tavern_extension
