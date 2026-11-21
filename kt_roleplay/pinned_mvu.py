@@ -18,6 +18,7 @@ from .module_library import module_sources
 from .mvu import _json_mapping, array_index, existing_key, is_initializer, validate_updated_values
 from .mvu_legacy import _body, _MAX_COMMANDS, _PATCH, split_opening
 from .mvu_patch import json_equal
+from .pinned_mvu_worker import _HOST_GLOBALS
 from .script_dependencies import scan_modules
 from .script_values import CardScriptError, assert_js_numbers
 
@@ -186,12 +187,16 @@ def calculate_pinned_mvu(code: str, entries: list[dict[str, str]], values: dict[
     try:
         result = subprocess.run([sys.executable, '-I', '-B', str(worker)], input=payload, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, env=env, timeout=3)
-        answer = json.loads(result.stdout) if result.returncode == 0 else None
+        answer = json.loads(result.stdout) if result.returncode == 0 and result.stdout else None
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
         raise CardScriptError('The fixed MVU worker failed; nothing was saved') from exc
     if not isinstance(answer, dict) or answer.get('status') != 'ok' or not isinstance(answer.get('values'), dict):
         if isinstance(answer, dict) and answer.get('status') == 'rejected':
             raise CardScriptError('The author MVU schema rejected the update; nothing was saved')
+        if isinstance(answer, dict) and answer.get('status') == 'unsupported_host':
+            name = answer.get('name')
+            if isinstance(name, str) and name in _HOST_GLOBALS:
+                raise CardScriptError(f'The card MVU script requires the host interface {name!r}, which is not available in the fixed runtime; no variable changes were saved')
         raise CardScriptError('The fixed MVU worker did not return a valid candidate; nothing was saved')
     candidate = answer['values']
     assert_js_numbers(candidate)
