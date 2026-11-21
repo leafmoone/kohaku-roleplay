@@ -50,6 +50,8 @@ def pinned_author(scripts: list[CardScript]) -> CardScript | None:
 
 
 def pinned_card_author(card: 'ParsedCard') -> CardScript | None:
+    if card.script_projection_complete is not True:
+        return None
     author = pinned_author(card.scripts)
     if author is None or (card.opening_gameplay and card.opening_gameplay.counter):
         return None

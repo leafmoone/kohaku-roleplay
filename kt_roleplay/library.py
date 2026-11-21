@@ -92,6 +92,10 @@ def get_card(directory: Path, key: str, *, with_scripts: bool = False) -> Parsed
             missing.update({'legacy_mvu_setups', 'legacy_mvu_status'} - card.model_fields_set)
         if any('buttons_enabled' not in script.model_fields_set for script in card.scripts):
             missing.add('scripts')
+        if card.script_projection_complete is None:
+            from .pinned_mvu import pinned_author
+            if 'scripts' in missing or pinned_author(card.scripts):
+                missing.update({'scripts', 'script_projection_complete'})
     if 'legacy_remote_opening' not in card.model_fields_set:
         missing.add('legacy_remote_opening')
     if missing == {'scripts'}:

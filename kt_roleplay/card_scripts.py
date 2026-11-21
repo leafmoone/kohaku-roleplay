@@ -34,15 +34,33 @@ class CardScript(BaseModel):
         return view
 
 
-def inspect_card_scripts(extensions: dict | None) -> list[CardScript]:
+def _card_script_rows(extensions: dict | None) -> list:
     if not isinstance(extensions, dict):
         return []
-    helper = extensions.get("tavern_helper")
-    raw = helper.get("scripts") if isinstance(helper, dict) else None
-    if not isinstance(raw, list):
-        raw = extensions.get("TavernHelper_scripts")
-    if not isinstance(raw, list):
-        return []
+    helper = extensions.get('tavern_helper')
+    rows = helper.get('scripts') if isinstance(helper, dict) else None
+    if not isinstance(rows, list):
+        rows = extensions.get('TavernHelper_scripts')
+    return rows if isinstance(rows, list) else []
+
+
+def script_projection_complete(extensions: dict | None) -> bool:
+    # A strict engine profile must account for all enabled author scripts,
+    # including entries the bounded legacy execution/list view did not project.
+    for index, item in enumerate(_card_script_rows(extensions)):
+        if not isinstance(item, dict):
+            continue
+        data = item.get('value', item)
+        if not isinstance(data, dict) or data.get('enabled') is not True:
+            continue
+        if (index >= _MAX_SCRIPTS or item.get('type', data.get('type', 'script')) != 'script'
+                or not isinstance(data.get('content'), str)):
+            return False
+    return True
+
+
+def inspect_card_scripts(extensions: dict | None) -> list[CardScript]:
+    raw = _card_script_rows(extensions)
     result = []
     seen = set()
     for index, item in enumerate(raw[:_MAX_SCRIPTS]):

@@ -23,7 +23,7 @@ from .panels import NativePanel, read_panels
 from .portraits import PortraitAsset, PortraitRule, read_portraits
 from .scene_media import read_scene_media
 from .worldbook import read_worldbook
-from .card_scripts import CardScript, inspect_card_scripts
+from .card_scripts import CardScript, inspect_card_scripts, script_projection_complete
 
 CARD_EXTENSION_NOTICE = 'Original card extensions are preserved. Supported card scripts can run when enabled for the session.'
 OLD_EXTENSION_NOTICES = frozenset({
@@ -84,6 +84,7 @@ class ParsedCard(BaseModel):
     native_panels: list[NativePanel] = Field(default_factory=list)
     invalid_native_panels: int = 0
     scripts: list[CardScript] = Field(default_factory=list)
+    script_projection_complete: bool | None = None
     gameplay_pack: GameplayPack | None = None
     web_panel: WebPanel | None = None
     legacy_web_rules: list[LegacyWebRule] = Field(default_factory=list)
@@ -236,7 +237,8 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
     card = ParsedCard(version=version, fields=fields, book=book, warnings=warnings,
                       portrait=portrait, state_fields=definitions, portraits=portraits, source_format=fmt,
                       native_panels=panels, invalid_native_panels=bad_panels,
-                      scripts=inspect_card_scripts(extensions), gameplay_pack=pack, legacy_web_rules=legacy_web,
+                      scripts=inspect_card_scripts(extensions), script_projection_complete=script_projection_complete(extensions),
+                      gameplay_pack=pack, legacy_web_rules=legacy_web,
                        legacy_mvu_setups=legacy_mvu_setups, legacy_mvu_status=legacy_mvu_status,
                       legacy_remote_opening=remote_opening, opening_gameplay=opening_gameplay)
     if book is not None:
