@@ -15,6 +15,7 @@ from .mvu import MvuInit
 from .opening_mvu_schema import OpeningSchemaGrant, OpeningSchemaSnapshot
 from .opening_page_library import CALLBACK_RUNTIME, OpeningPageIssue, OpeningPageRuntime
 from .panels import NativePanel
+from .pinned_mvu_status import StatusPanel
 from .portraits import PortraitRule
 from .projections import Player
 from .script_session import SessionScripts
@@ -77,6 +78,7 @@ class TavernSession(Arguments):
     mvu_legacy: bool = False
     pinned_mvu: str | None = Field(default=None, exclude_if=lambda value: value is None)
     pinned_mvu_issue: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    pinned_mvu_status: StatusPanel | None = Field(default=None, exclude_if=lambda value: value is None)
     lore_activation: dict[Literal["lore", "worldbook"], dict[str, int]] = Field(default_factory=dict)
     gameplay_pack: GameplayPack | None = None
     legacy_plugins: list[str] = Field(default_factory=list)

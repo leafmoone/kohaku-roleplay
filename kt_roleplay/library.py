@@ -88,9 +88,8 @@ def get_card(directory: Path, key: str, *, with_scripts: bool = False) -> Parsed
     missing = set()
     if with_scripts:
         missing = {'scripts', 'web_panel', 'legacy_web_rules'} - card.model_fields_set
-        if ('legacy_mvu_setups' not in card.model_fields_set and any(
-                SETUP_MARKER in line for line in [card.fields.first_mes, *card.fields.alternate_greetings])):
-            missing.add('legacy_mvu_setups')
+        if any(SETUP_MARKER in line for line in [card.fields.first_mes, *card.fields.alternate_greetings]):
+            missing.update({'legacy_mvu_setups', 'legacy_mvu_status'} - card.model_fields_set)
         if any('buttons_enabled' not in script.model_fields_set for script in card.scripts):
             missing.add('scripts')
     if 'legacy_remote_opening' not in card.model_fields_set:

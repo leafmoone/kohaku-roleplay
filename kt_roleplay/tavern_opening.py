@@ -19,6 +19,7 @@ from .opening_mvu_schema import OpeningSchemaSnapshot, derive_opening_schema, li
 from .opening_page_library import CALLBACK_RUNTIME, cached_opening_panel
 from .pinned_mvu import calculate_pinned_mvu, compile_pinned_mvu, initializer_entries, pinned_card_author
 from .pinned_mvu_setup import SETUP_MARKER, setup_projection
+from .pinned_mvu_status import STATUS_MARKER
 from .portraits import rules_for
 from .projections import expand
 from .script_session import SessionScripts, approved
@@ -132,7 +133,10 @@ async def prepare_tavern_opening(
             if not setup or not setup_projection(mvu.values):
                 setup = None
                 web_panel_issue = 'The author character setup needs a supported HTML template and initialized setup fields.'
-        rule = setup or next((row for row in card.legacy_web_rules if row.marker in opening), None)
+        # The fixed status template never receives an opening-write scope,
+        # including for alternate greetings and previously imported rows.
+        rule = setup or next((row for row in card.legacy_web_rules if row.marker in opening
+                              and not (card.legacy_mvu_status and row.marker == STATUS_MARKER)), None)
         marker, mvu_read_enabled = None, False
         if rule is not None:
             web_panel, marker, web_panel_issue = rule.panel, rule.marker, None
@@ -206,6 +210,7 @@ async def prepare_tavern_opening(
         native_panels=card.native_panels, invalid_native_panels=card.invalid_native_panels,
         mvu=mvu, mvu_public=mvu_public, mvu_legacy=legacy_mvu or pinned_mvu is not None,
         pinned_mvu=pinned_mvu, pinned_mvu_issue=pinned_mvu_issue,
+        pinned_mvu_status=card.legacy_mvu_status if legacy_state and legacy_state.pinned_setup else None,
         gameplay_pack=card.gameplay_pack, web_panel=web_panel, web_panel_ready=web_panel is None,
         web_panel_issue=web_panel_issue, legacy_opening_web=legacy_state, scripts=scripts,
         script_state=script_state, opening_schema=schema, opening_gameplay_issue=opening_gameplay_issue,

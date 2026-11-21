@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError
 
@@ -22,6 +23,13 @@ WEB_ACTIONS = frozenset({'card_web_panel', 'card_web_state', 'card_web_gameplay'
                          'card_web_mvu_counter', 'card_web_mvu_setup'})
 
 
+def pinned_status_view(play: TavernSession) -> dict | None:
+    if not (play.pinned_mvu_status and play.pinned_mvu and play.mvu and play.web_panel_ready):
+        return None
+    return {'title': play.pinned_mvu_status.panel.title,
+            'data': {'stat_data': play.pinned_mvu_status.project(play.mvu.values)}}
+
+
 async def call_web_panel(plugin: RoleplayPlugin, action: str, args: dict[str, object]) -> dict:
     record = plugin._record()
     play = TavernSession.model_validate(record) if record is not None else None
@@ -29,8 +37,14 @@ async def call_web_panel(plugin: RoleplayPlugin, action: str, args: dict[str, ob
     if play is None or play.web_panel is None or not play.web_panel_ready or not scope:
         raise OwnerArgumentError('This tavern has no ready card web panel')
     if action == 'card_web_panel':
+        if args == {'target': 'status'}:
+            if not (status := pinned_status_view(play)):
+                raise OwnerArgumentError('This tavern has no supported author status panel')
+            # A status mount has no redeemable gameplay or setup scope.
+            return {**play.pinned_mvu_status.panel.model_dump(), 'panelScope': uuid4().hex,
+                    'pinnedMvuStatus': {'data': status['data']}}
         if args:
-            raise OwnerArgumentError('The card web panel does not take arguments')
+            raise OwnerArgumentError('Choose the opening web panel or its author status view')
         panel = {**play.web_panel.model_dump(), 'panelScope': scope}
         if legacy := play.legacy_opening_web:
             if legacy.pinned_setup and play.pinned_mvu and play.mvu and (projected := setup_projection(play.mvu.values)):

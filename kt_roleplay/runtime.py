@@ -59,7 +59,7 @@ from .recovery import resume_scene
 from .tavern_opening import SCRIPT_CLOCK_UNAVAILABLE, WorldbookSnapshot, card_scripts_unavailable, prepare_tavern_opening
 from .tavern_media import attach_scene_image, save_scene_image, scene_image, without_scene_images
 from .tavern_state import Arguments, Play, TavernSession
-from .tavern_web import WEB_ACTIONS, call_web_panel
+from .tavern_web import WEB_ACTIONS, call_web_panel, pinned_status_view
 
 
 logger = logging.getLogger(__name__)
@@ -590,6 +590,8 @@ class RoleplayPlugin(BasePlugin):
                 view['webPanel']['source'] = 'legacyOpening'
                 if play.legacy_reply_web is not None:
                     view['webPanel']['latestMessageId'] = play.legacy_reply_web.turn
+            if status := pinned_status_view(play):
+                view['webPanel']['pinnedMvuStatus'] = status
         elif play.web_panel_issue is not None:
             view['webPanelIssue'] = play.web_panel_issue
         if play.opening_gameplay_issue:

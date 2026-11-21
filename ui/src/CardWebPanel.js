@@ -67,17 +67,30 @@ function normalizePinnedMvuSetup(rawSetup) {
   };
 }
 
+function normalizePinnedMvuStatus(rawStatus) {
+  if (!rawStatus || typeof rawStatus !== "object" || Array.isArray(rawStatus)) return null;
+  const statData = rawStatus.data?.stat_data;
+  if (!isNonEmptyPlainObject(statData)) return null;
+  return {
+    data: { stat_data: statData },
+  };
+}
+
 function buildAuthorPreheatScript(bootData) {
   // Never serialize both legacyOpening and legacyLatest into the author frame:
   // only serialize the single selected message snapshot (or null for CHARX native web panels).
-  const singleMessage = bootData.isLegacyOpening
-    ? bootData.selectedLegacyMessage || null
-    : null;
-  const pinnedMvuSetupCap = bootData.isLegacyOpening
-    ? normalizePinnedMvuSetup(bootData.pinnedMvuSetup)
-    : null;
+  const pinnedMvuStatusCap = normalizePinnedMvuStatus(bootData.pinnedMvuStatus);
+  const singleMessage =
+    !pinnedMvuStatusCap && bootData.isLegacyOpening
+      ? bootData.selectedLegacyMessage || null
+      : null;
+  const pinnedMvuSetupCap =
+    !pinnedMvuStatusCap && bootData.isLegacyOpening
+      ? normalizePinnedMvuSetup(bootData.pinnedMvuSetup)
+      : null;
   const hasSelectedStatData = isNonEmptyPlainObject(singleMessage?.data?.stat_data);
   const mvuReadCap =
+    !pinnedMvuStatusCap &&
     !pinnedMvuSetupCap &&
     bootData.isLegacyOpening &&
     hasSelectedStatData &&
@@ -94,6 +107,7 @@ function buildAuthorPreheatScript(bootData) {
     playerName: typeof bootData.playerName === "string" ? bootData.playerName : "Player",
     characterName: typeof bootData.characterName === "string" ? bootData.characterName : "",
     selectedLegacyMessage: singleMessage,
+    ...(pinnedMvuStatusCap ? { pinnedMvuStatus: pinnedMvuStatusCap } : {}),
     ...(pinnedMvuSetupCap ? { pinnedMvuSetup: pinnedMvuSetupCap } : {}),
     ...(mvuReadCap ? { legacyMvuRead: mvuReadCap } : {}),
     ...(mvuCounterCap ? { legacyMvuCounter: mvuCounterCap } : {}),
@@ -593,6 +607,94 @@ if (
   lockGlobal("insertOrAssignVariables", insertOrAssignVariablesSetupFacade);
 }
 
+let updatePinnedStatusStatData = null;
+
+if (
+  BOOT.pinnedMvuStatus &&
+  BOOT.pinnedMvuStatus.data &&
+  BOOT.pinnedMvuStatus.data.stat_data
+) {
+  const _ReflectOwnKeys = Reflect.ownKeys;
+  const _getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  const _getProtoOf = Object.getPrototypeOf;
+  const _ObjectProto = Object.prototype;
+  const _ArrayIsArray = Array.isArray;
+  const _hasOwn =
+    typeof Object.hasOwn === "function"
+      ? Object.hasOwn
+      : Function.prototype.call.bind(_ObjectProto.hasOwnProperty);
+  const _jsonParse = JSON.parse;
+  const _jsonStringify = JSON.stringify;
+
+  let _statusStatDataJson = _jsonStringify(BOOT.pinnedMvuStatus.data.stat_data);
+
+  updatePinnedStatusStatData = function(nextStatData) {
+    if (!nextStatData || typeof nextStatData !== "object" || _ArrayIsArray(nextStatData)) {
+      return;
+    }
+    const nextJson = _jsonStringify(nextStatData);
+    if (typeof nextJson === "string") {
+      _statusStatDataJson = nextJson;
+    }
+  };
+
+  const validateStatusReadOption = function(option) {
+    if (option === undefined) return;
+    if (!option || typeof option !== "object" || _ArrayIsArray(option)) {
+      throw new Error("getVariables option must be undefined or { type: 'chat' }");
+    }
+    const proto = _getProtoOf(option);
+    if (proto !== _ObjectProto && proto !== null) {
+      throw new Error("getVariables option must be a plain object");
+    }
+    const ownKeys = _ReflectOwnKeys(option);
+    if (ownKeys.length !== 1 || ownKeys[0] !== "type") {
+      throw new Error("Only chat-scoped getVariables({ type: 'chat' }) is supported");
+    }
+    const desc = _getOwnPropDesc(option, "type");
+    if (!desc || !desc.enumerable || !_hasOwn(desc, "value") || desc.value !== "chat") {
+      throw new Error("Only chat-scoped getVariables({ type: 'chat' }) is supported");
+    }
+  };
+
+  const getVariablesStatusFacade = function getVariables(option) {
+    validateStatusReadOption(option);
+    return { stat_data: _jsonParse(_statusStatDataJson) };
+  };
+
+  const mvuStatusSubset = Object.freeze({
+    mode: "mvu-status-v1",
+    readOnly: true,
+    getMvuData: getVariablesStatusFacade
+  });
+
+  const waitGlobalInitializedStatusFacade = function waitGlobalInitialized(name) {
+    if (name === "Mvu") {
+      return Promise.resolve(mvuStatusSubset);
+    }
+    return Promise.reject(
+      new Error("Global is not available in KT read-only status sandbox: " + String(name))
+    );
+  };
+
+  const lockStatusGlobal = function(name, value) {
+    try {
+      Object.defineProperty(window, name, {
+        value: value,
+        configurable: false,
+        enumerable: true,
+        writable: false
+      });
+    } catch (_e) {
+      window[name] = value;
+    }
+  };
+  lockStatusGlobal("getCurrentMessageId", function getCurrentMessageId() { return -1; });
+  lockStatusGlobal("getVariables", getVariablesStatusFacade);
+  lockStatusGlobal("Mvu", mvuStatusSubset);
+  lockStatusGlobal("waitGlobalInitialized", waitGlobalInitializedStatusFacade);
+}
+
 window.substitudeMacros = function substitudeMacros(text) {
   if (typeof text !== "string") return String(text ?? "");
   const user = typeof BOOT.playerName === "string" && BOOT.playerName ? BOOT.playerName : "Player";
@@ -612,6 +714,10 @@ window.addEventListener("message", function(ev) {
   if (ev.source !== window.parent) return;
   const d = ev.data;
   if (!d || typeof d !== "object" || d.__ktrpBridge !== "outer-to-inner") return;
+  if (d.type === "status-data-push" && typeof updatePinnedStatusStatData === "function") {
+    updatePinnedStatusStatData(d.statData);
+    return;
+  }
   if (d.type === "rpc-reply" && typeof d.reqId === "number") {
     const entry = pending.get(d.reqId);
     if (!entry) return;
@@ -755,6 +861,14 @@ window.addEventListener("message", function(ev) {
   if (ev.source === window.parent && d.__ktrpHostBridge === "host-to-outer") {
     if (d.mountToken !== MOUNT_TOKEN) return;
     if (innerFrame.contentWindow) {
+      if (d.type === "status-data-push") {
+        innerFrame.contentWindow.postMessage({
+          __ktrpBridge: "outer-to-inner",
+          type: "status-data-push",
+          statData: d.statData
+        }, "*");
+        return;
+      }
       innerFrame.contentWindow.postMessage({
         __ktrpBridge: "outer-to-inner",
         type: "rpc-reply",
@@ -810,9 +924,11 @@ export const CardWebPanel = {
     const activeSelectedMessageId = ref(null);
     const activeCounterGrant = ref(null);
     const activePinnedMvuSetup = ref(null);
+    const activePinnedMvuStatus = ref(null);
     const hasLegacyLatest = ref(false);
     const latestTurnNumber = ref(null);
     const cachedPanelPayload = ref(null);
+    const cachedStatusPayload = ref(null);
     const outerSrcdoc = ref("");
     const outerFrameRef = ref(null);
 
@@ -824,16 +940,33 @@ export const CardWebPanel = {
         props.webPanelMeta?.source === "legacyOpening",
     );
 
+    const hasPinnedStatusMeta = computed(() =>
+      Boolean(normalizePinnedMvuStatus(props.webPanelMeta?.pinnedMvuStatus)),
+    );
+
+    const pinnedStatusTitle = computed(() => {
+      const title = props.webPanelMeta?.pinnedMvuStatus?.title;
+      return typeof title === "string" && title.trim() ? title.trim() : "StatusMenu";
+    });
+
     const canSwitchLegacySnapshot = computed(
       () =>
         isOpen.value &&
         !loading.value &&
-        Boolean(cachedPanelPayload.value) &&
+        Boolean(cachedPanelPayload.value || cachedStatusPayload.value) &&
         isLegacyOpening.value &&
         Boolean(
           hasLegacyLatest.value ||
             Number.isInteger(props.webPanelMeta?.latestMessageId),
         ),
+    );
+
+    const canSwitchPinnedStatus = computed(
+      () =>
+        isOpen.value &&
+        !loading.value &&
+        Boolean(cachedPanelPayload.value || cachedStatusPayload.value) &&
+        hasPinnedStatusMeta.value,
     );
 
     function issueMessage(code) {
@@ -849,15 +982,21 @@ export const CardWebPanel = {
       return code;
     }
 
-    function clearLoadedPayloadAndSnapshotState() {
+    function clearLoadedPayloadAndSnapshotState({ keepPayloadCache = false } = {}) {
       activeMountToken.value = "";
       activePanelScope.value = "";
-      cachedPanelPayload.value = null;
+      if (!keepPayloadCache) {
+        cachedPanelPayload.value = null;
+        cachedStatusPayload.value = null;
+      }
       activeSelectedMessageId.value = null;
       activeCounterGrant.value = null;
       activePinnedMvuSetup.value = null;
-      hasLegacyLatest.value = false;
-      latestTurnNumber.value = null;
+      activePinnedMvuStatus.value = null;
+      if (!keepPayloadCache) {
+        hasLegacyLatest.value = false;
+        latestTurnNumber.value = null;
+      }
       outerSrcdoc.value = "";
     }
 
@@ -878,25 +1017,40 @@ export const CardWebPanel = {
     function mountFromPayload(payload, preferredTarget) {
       const seq = ++mountSeq;
       const token = `${props.scopeKey}::${props.mvuPublicSignature}::mount::${seq}::${Date.now()}`;
+      const isStatusTarget = preferredTarget === "status";
+      const liveMetaStatus = normalizePinnedMvuStatus(props.webPanelMeta?.pinnedMvuStatus);
+      const pinnedMvuStatus = isStatusTarget
+        ? liveMetaStatus || normalizePinnedMvuStatus(payload.pinnedMvuStatus)
+        : null;
       const isLegacy =
-        Boolean(payload.legacyOpening) || props.webPanelMeta?.source === "legacyOpening";
+        !isStatusTarget &&
+        (Boolean(payload.legacyOpening) || props.webPanelMeta?.source === "legacyOpening");
       const latestMsg =
-        payload.legacyLatest && typeof payload.legacyLatest === "object"
+        !isStatusTarget &&
+        payload.legacyLatest &&
+        typeof payload.legacyLatest === "object"
           ? payload.legacyLatest
           : null;
       const openingMsg =
-        payload.legacyOpening && typeof payload.legacyOpening === "object"
+        !isStatusTarget &&
+        payload.legacyOpening &&
+        typeof payload.legacyOpening === "object"
           ? payload.legacyOpening
           : null;
 
-      hasLegacyLatest.value = Boolean(latestMsg);
-      latestTurnNumber.value =
-        latestMsg && Number.isInteger(latestMsg.message_id)
-          ? latestMsg.message_id
-          : null;
+      if (!isStatusTarget) {
+        hasLegacyLatest.value = Boolean(latestMsg);
+        latestTurnNumber.value =
+          latestMsg && Number.isInteger(latestMsg.message_id)
+            ? latestMsg.message_id
+            : null;
+      }
 
-      const resolvedTarget =
-        preferredTarget === "opening" || !latestMsg ? "opening" : "latest";
+      const resolvedTarget = isStatusTarget
+        ? "status"
+        : preferredTarget === "opening" || !latestMsg
+          ? "opening"
+          : "latest";
       activeSnapshotTarget.value = resolvedTarget;
 
       // Strictly choose a single snapshot for the author frame: never pass both!
@@ -913,6 +1067,7 @@ export const CardWebPanel = {
         singleSelectedMessage?.data?.stat_data,
       );
       const legacyMvuRead =
+        !pinnedMvuStatus &&
         !pinnedMvuSetup &&
         isLegacy &&
         selectedHasStatData &&
@@ -932,10 +1087,19 @@ export const CardWebPanel = {
           : null;
       activeCounterGrant.value = legacyMvuCounter;
       activePinnedMvuSetup.value = pinnedMvuSetup;
+      activePinnedMvuStatus.value = pinnedMvuStatus;
       activePanelScope.value = String(payload.panelScope);
       activeMountToken.value = token;
-      activeTitle.value = String(payload.title || props.webPanelMeta?.title || "");
-      activeSource.value = isLegacy ? "legacyOpening" : "charx";
+      activeTitle.value = String(
+        payload.title ||
+          (isStatusTarget ? pinnedStatusTitle.value : props.webPanelMeta?.title) ||
+          "",
+      );
+      activeSource.value = isStatusTarget
+        ? "pinnedStatus"
+        : isLegacy
+          ? "legacyOpening"
+          : "charx";
 
       outerSrcdoc.value = buildOuterSandboxSrcdoc(payload.html, {
         mountToken: token,
@@ -943,6 +1107,7 @@ export const CardWebPanel = {
         playerName: props.playerName || "Player",
         characterName: props.characterName || "",
         selectedLegacyMessage: singleSelectedMessage,
+        pinnedMvuStatus,
         pinnedMvuSetup,
         legacyMvuRead,
         legacyMvuCounter,
@@ -950,8 +1115,17 @@ export const CardWebPanel = {
     }
 
     function selectLegacySnapshot(target) {
-      if (target !== "opening" && target !== "latest") return;
+      if (target !== "opening" && target !== "latest" && target !== "status") return;
       if (!isOpen.value || loading.value) return;
+      if (target === "status") {
+        if (!hasPinnedStatusMeta.value) return;
+        if (cachedStatusPayload.value) {
+          mountFromPayload(cachedStatusPayload.value, "status");
+        } else {
+          openOrReloadPanel("status");
+        }
+        return;
+      }
       userPinnedOpening.value = target === "opening";
       const metaLatestId = props.webPanelMeta?.latestMessageId;
       const needsFetchForLatest =
@@ -968,18 +1142,23 @@ export const CardWebPanel = {
 
     async function openOrReloadPanel(preferredTarget = "latest") {
       if (!props.webPanelMeta || !props.owner) return;
+      const isStatusRequest =
+        preferredTarget === "status" && hasPinnedStatusMeta.value;
       const scopeSnap = props.scopeKey;
       const mvuSigSnap = props.mvuPublicSignature;
       const seq = ++mountSeq;
 
-      // Immediately invalidate any previous frame, cached payload, snapshot controls, and in-flight requests
-      clearLoadedPayloadAndSnapshotState();
+      // Immediately invalidate any previous frame, snapshot controls, and in-flight requests
+      clearLoadedPayloadAndSnapshotState({ keepPayloadCache: true });
       isOpen.value = true;
       loading.value = true;
       error.value = "";
 
       try {
-        const res = await props.owner.call("card_web_panel", {});
+        const res = await props.owner.call(
+          "card_web_panel",
+          isStatusRequest ? { target: "status" } : {},
+        );
         if (
           seq !== mountSeq ||
           props.scopeKey !== scopeSnap ||
@@ -991,12 +1170,17 @@ export const CardWebPanel = {
         if (!res || typeof res !== "object" || typeof res.html !== "string" || !res.panelScope) {
           throw new Error("Invalid card web panel payload");
         }
-        cachedPanelPayload.value = res;
-        const target =
-          preferredTarget === "opening" || preferredTarget === "latest"
-            ? preferredTarget
-            : "latest";
-        mountFromPayload(res, target);
+        if (isStatusRequest) {
+          cachedStatusPayload.value = res;
+          mountFromPayload(res, "status");
+        } else {
+          cachedPanelPayload.value = res;
+          const target =
+            preferredTarget === "opening" || preferredTarget === "latest"
+              ? preferredTarget
+              : "latest";
+          mountFromPayload(res, target);
+        }
       } catch (err) {
         if (
           seq === mountSeq &&
@@ -1007,7 +1191,7 @@ export const CardWebPanel = {
           error.value = err?.message || String(err);
         }
       } finally {
-        if (seq === mountSeq || cachedPanelPayload.value) {
+        if (seq === mountSeq || cachedPanelPayload.value || cachedStatusPayload.value) {
           loading.value = false;
         }
       }
@@ -1065,6 +1249,11 @@ export const CardWebPanel = {
         action !== "card_web_mvu_setup"
       ) {
         replyToOuter(false, null, "Unsupported card web action");
+        return;
+      }
+
+      if (activeSnapshotTarget.value === "status" || activePinnedMvuStatus.value) {
+        replyToOuter(false, null, "The author status panel is read-only");
         return;
       }
 
@@ -1330,7 +1519,7 @@ export const CardWebPanel = {
     );
 
     // When legacyLatest updates while the panel is open:
-    // - If the user explicitly pinned Opening (#0), keep showing Opening (#0) and just mark Latest available;
+    // - If the user explicitly pinned Opening (#0) or Status, keep the active view;
     // - Otherwise, follow the new Latest turn snapshot automatically.
     watch(
       () => props.webPanelMeta?.latestMessageId,
@@ -1340,12 +1529,64 @@ export const CardWebPanel = {
           isOpen.value &&
           !loading.value &&
           isLegacyOpening.value &&
+          activeSnapshotTarget.value !== "status" &&
           !userPinnedOpening.value &&
           nextId !== latestTurnNumber.value
         ) {
           openOrReloadPanel("latest");
         }
       },
+    );
+
+    // When trusted pinnedMvuStatus.data updates while the status panel is mounted,
+    // push plain JSON over the isolated relay without reloading the iframe.
+    watch(
+      () => props.webPanelMeta?.pinnedMvuStatus?.data?.stat_data,
+      (nextStatData) => {
+        if (!isNonEmptyPlainObject(nextStatData)) return;
+        let plainStatData = null;
+        try {
+          plainStatData = JSON.parse(JSON.stringify(nextStatData));
+        } catch (_e) {
+          return;
+        }
+        if (!isNonEmptyPlainObject(plainStatData)) return;
+        if (cachedStatusPayload.value && typeof cachedStatusPayload.value === "object") {
+          cachedStatusPayload.value = {
+            ...cachedStatusPayload.value,
+            pinnedMvuStatus: {
+              data: { stat_data: plainStatData },
+            },
+          };
+        }
+        const tokenSnap = activeMountToken.value;
+        const panelScopeSnap = activePanelScope.value;
+        const frameWin = outerFrameRef.value?.contentWindow;
+        if (
+          !isOpen.value ||
+          loading.value ||
+          activeSnapshotTarget.value !== "status" ||
+          !activePinnedMvuStatus.value ||
+          !tokenSnap ||
+          !panelScopeSnap ||
+          !frameWin
+        ) {
+          return;
+        }
+        activePinnedMvuStatus.value = {
+          data: { stat_data: plainStatData },
+        };
+        frameWin.postMessage(
+          {
+            __ktrpHostBridge: "host-to-outer",
+            mountToken: tokenSnap,
+            type: "status-data-push",
+            statData: plainStatData,
+          },
+          "*",
+        );
+      },
+      { deep: true },
     );
 
     return {
@@ -1358,6 +1599,8 @@ export const CardWebPanel = {
       activeTitle,
       activeSnapshotTarget,
       canSwitchLegacySnapshot,
+      canSwitchPinnedStatus,
+      pinnedStatusTitle,
       outerSrcdoc,
       outerFrameRef,
       issueMessage,
@@ -1375,23 +1618,33 @@ export const CardWebPanel = {
       <div class="ktrp-row-between ktrp-web-panel-toolbar" data-testid="kt-rp-web-panel-toolbar">
         <div class="ktrp-inline-actions">
           <strong class="ktrp-box-head" data-testid="kt-rp-web-panel-title">
-            {{ webPanelMeta?.title || activeTitle || t('cardWebPanelDefaultTitle') }}
+            {{ activeTitle || webPanelMeta?.title || t('cardWebPanelDefaultTitle') }}
           </strong>
         </div>
 
         <div v-if="webPanelMeta" class="ktrp-inline-actions">
-          <ActionButton
-            v-if="!isOpen"
-            size="sm"
-            variant="primary"
-            :disabled="loading"
-            data-testid="kt-rp-web-panel-open-btn"
-            @click="openOrReloadPanel('latest')"
-          >
-            {{ t('cardWebPanelOpenBtn') }}
-          </ActionButton>
+          <template v-if="!isOpen">
+            <ActionButton
+              size="sm"
+              variant="primary"
+              :disabled="loading"
+              data-testid="kt-rp-web-panel-open-btn"
+              @click="openOrReloadPanel('latest')"
+            >
+              {{ t('cardWebPanelOpenBtn') }}
+            </ActionButton>
+            <ActionButton
+              v-if="webPanelMeta.pinnedMvuStatus"
+              size="sm"
+              :disabled="loading"
+              data-testid="kt-rp-web-panel-open-status-btn"
+              @click="openOrReloadPanel('status')"
+            >
+              {{ pinnedStatusTitle }}
+            </ActionButton>
+          </template>
           <template v-else>
-            <template v-if="canSwitchLegacySnapshot">
+            <template v-if="canSwitchLegacySnapshot || canSwitchPinnedStatus">
               <ActionButton
                 size="sm"
                 :variant="activeSnapshotTarget === 'opening' ? 'primary' : 'default'"
@@ -1402,6 +1655,7 @@ export const CardWebPanel = {
                 {{ t('cardWebPanelSnapshotOpeningBtn') }}
               </ActionButton>
               <ActionButton
+                v-if="canSwitchLegacySnapshot"
                 size="sm"
                 :variant="activeSnapshotTarget === 'latest' ? 'primary' : 'default'"
                 :disabled="loading || !canSwitchLegacySnapshot"
@@ -1409,6 +1663,16 @@ export const CardWebPanel = {
                 @click="selectLegacySnapshot('latest')"
               >
                 {{ t('cardWebPanelSnapshotLatestBtn') }}
+              </ActionButton>
+              <ActionButton
+                v-if="canSwitchPinnedStatus"
+                size="sm"
+                :variant="activeSnapshotTarget === 'status' ? 'primary' : 'default'"
+                :disabled="loading || !canSwitchPinnedStatus"
+                data-testid="kt-rp-web-panel-snapshot-status-btn"
+                @click="selectLegacySnapshot('status')"
+              >
+                {{ pinnedStatusTitle }}
               </ActionButton>
             </template>
             <ActionButton

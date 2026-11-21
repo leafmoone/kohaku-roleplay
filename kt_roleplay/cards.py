@@ -17,6 +17,7 @@ from .charx import CardMedia, inspect_charx_media, is_charx, open_charx, read_ch
 from .errors import CardError
 from .gameplay_pack import GameplayPack
 from .legacy_web import LegacyRemoteOpening, LegacyWebRule, opening_web_rules
+from .pinned_mvu_status import STATUS_MARKER, StatusPanel, status_panel
 from .lore import LoreBook
 from .panels import NativePanel, read_panels
 from .portraits import PortraitAsset, PortraitRule, read_portraits
@@ -87,6 +88,7 @@ class ParsedCard(BaseModel):
     web_panel: WebPanel | None = None
     legacy_web_rules: list[LegacyWebRule] = Field(default_factory=list)
     legacy_mvu_setups: list[LegacyWebRule] = Field(default_factory=list)
+    legacy_mvu_status: StatusPanel | None = None
     legacy_remote_opening: LegacyRemoteOpening | None = None
     opening_gameplay: AuthorOpeningGameplay | None = None
 
@@ -212,6 +214,12 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
     openings = [fields.first_mes, *fields.alternate_greetings]
     legacy_web, remote_opening = opening_web_rules(extensions, openings, warnings)
     legacy_mvu_setups, _ = opening_web_rules(extensions, openings, warnings, setup_only=True)
+    legacy_mvu_status = None
+    if legacy_mvu_setups:
+        # A fixed-profile status document is declared for assistant display, not necessarily the opening.
+        status_rules, _ = opening_web_rules(extensions, [STATUS_MARKER], [])
+        if len(status_rules) == 1:
+            legacy_mvu_status = status_panel(status_rules[0].panel)
     opening_gameplay = None
     if 'openingGameplay' in namespace:
         try:
@@ -229,7 +237,7 @@ def _parse_document(version: Literal[1, 2, 3], data: dict, portrait: bytes | Non
                       portrait=portrait, state_fields=definitions, portraits=portraits, source_format=fmt,
                       native_panels=panels, invalid_native_panels=bad_panels,
                       scripts=inspect_card_scripts(extensions), gameplay_pack=pack, legacy_web_rules=legacy_web,
-                       legacy_mvu_setups=legacy_mvu_setups,
+                       legacy_mvu_setups=legacy_mvu_setups, legacy_mvu_status=legacy_mvu_status,
                       legacy_remote_opening=remote_opening, opening_gameplay=opening_gameplay)
     if book is not None:
         _ = card.lore
