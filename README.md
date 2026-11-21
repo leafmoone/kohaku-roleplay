@@ -275,7 +275,7 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 
 ### 给其他卡提供独立玩法包
 
-[进度时钟包](examples/progress-clock/kohaku.yaml)是单独安装的 KT 原生包，不是卡片脚本。用普通 KT 安装流程安装 `examples/progress-clock/` 后，从角色库分别导入[档案室](examples/archive-survey.json)和[渡船](examples/ferry-crossing.json)即可开局；两张卡分别配置四格和三格时钟。它们使用同一个工具，但进度按会话保存。导卡不安装包，也不执行包代码；缺包或版本不匹配时仍可保留和导出卡，开局会解释缺什么。原生包拥有宿主插件权限，只安装你信任的包。
+[进度时钟包](examples/progress-clock/kohaku.yaml)是单独安装的 KT 原生包，不是卡片脚本。用普通 KT 安装流程安装 `examples/progress-clock/` 后，从角色库分别导入[档案室](examples/archive-survey.json)和[渡船](examples/ferry-crossing.json)即可开局；两张卡分别配置四格和三格时钟。更新独立包后，从聊天工具栏打开 **Clock** 小面板，点「推进一格」直接保存本局进度，不发送聊天、不调用模型；满格后不能再推进。旧局可从历史恢复，已保存的进度继续有效，两张卡的进度互不影响。导卡不安装包，也不执行包代码；缺包或版本不匹配时仍可保留和导出卡，开局会解释缺什么。原生包拥有宿主插件权限，只安装你信任的包。
 
 卡在 `data.extensions["kohaku-roleplay"].gameplayPack` 声明 `name`、准确 `version`（`x.y.z`）以及可选 JSON `settings`，不能指定模块或工具名。独立包在自己的 `kohaku.yaml` 将 `creatures/rp_tavern` 声明为 `{name: rp_tavern, roleplay_pack: true}`。该 creature 加载 tavern 模式的 `roleplay` 和与包同名的规则插件；规则插件通过 `validate_roleplay_settings(settings)` 检查设置，开局后从 `roleplay.gameplay_settings(包名)` 读取本局副本。工具沿用 KT `contribute_tools`；需要向此酒馆公开的工具名由插件的 `roleplay_tool_names` 给出，前缀为 `rp_pack_<包名，连字符改为下划线>_`。首次约定一张卡只选择一个玩法包，不动态加载代码或自动解决包依赖。
 
@@ -289,6 +289,7 @@ CHARX 作者可在 `data.extensions["kohaku-roleplay"].webPanel` 声明 `{"title
 - [原生玩法最小示例：物资登记员](examples/native-ledger.json)：可直接在角色库导入并开酒馆。无需卡片 JS、MVU 或 Node。查看 `state` 如何声明库存、核对结果和任务状态，再看 `panels` 如何引用它们。点击「核对清单」只发送所示玩家输入；由玩法工具记录动作，面板读取结果，不靠按钮直接改存档。
 - `kt_roleplay/opening_page_library.py`：已确认外部开场入口和模块缓存、依赖诊断；`ui/src/CardWebPanel.js`：在酒馆 Dock 挂载隔离的本局作者页。
 - `ui/`：KT UI SDK 扩展，包含角色库、卡片编辑、会话侧栏、行动选项与语言资源。
+- [`examples/progress-clock/`](examples/progress-clock/)：独立玩法包示例，含规则工具、本局存档和自己的 `Clock` 小面板。
 
 ## 兼容范围
 
