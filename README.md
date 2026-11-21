@@ -4,7 +4,17 @@
 
 ## 使用
 
-在插件仓库执行 `kt install .` 复制安装到原版 KT 2.2.2（无需宿主补丁），再重新启动目标 Studio；已具备 `kohaku.yaml` 中的 Python 依赖时可用 `--no-deps` 离线安装。开发时可用 `kt install . -e --no-deps` 做 editable 安装；仅在工作区专属虚拟环境和 `KT_CONFIG_DIR` 下做开发验证，不要将测试卡装入日用 KT。
+### 快速开始
+
+1. 在原版 **KohakuTerrarium 2.2.2** 所用的环境中，进入本插件仓库并执行 `kt install .`，然后重新启动目标 Studio。无需修改 KT 或重建 KT 前端。已具备 `kohaku.yaml` 里的 Python 依赖时，可加 `--no-deps` 离线安装。
+2. 在 Studio 的「新建标签」菜单打开 **Roleplay Library**，导入 [物资登记员](examples/native-ledger.json)，选卡并开始酒馆。这个示例不需要 Node.js、卡片脚本或外部资源。聊天回复若提供原生选项，可以直接点击，也可以自行输入。
+3. 从聊天工具栏打开 **Play** 查看当前状态和常用动作；要调角色、世界书或查看诊断，打开独立的 **role**。
+
+可选 Node.js 工具只用于特定旧卡的离线网页／模块链接，不是插件安装或原生选项的前提。三种模式和组件的关系见[插件架构](docs/architecture.md)。
+
+开发时可用 `kt install . -e --no-deps` 做 editable 安装；仅在隔离虚拟环境和 `KT_CONFIG_DIR` 下做验证，不要将测试卡装入日用 KT。
+
+### 会话与升级
 
 `0.5.0` 新增酒馆原生玩法 Tool、字面量 MVU 更新和多项世界书规则。升级时先停止目标 Studio，再在同一 KT 配置下按同名包更新，重启后从 History 恢复旧会话；不要清空 KT 配置目录或角色库。已保存的会话不会重放开场或改写原有世界书快照。
 

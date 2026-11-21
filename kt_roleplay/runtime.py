@@ -11,102 +11,55 @@ from kohakuterrarium.modules.output.event import OutputEvent
 from kohakuterrarium.core.events import TriggerEvent
 from kohakuterrarium.modules.tool.base import ToolContext
 from kohakuterrarium.terrarium.tools.context import resolve_group_context, resolve_group_target
-from pydantic import TypeAdapter
-
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
+from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 from kohakuterrarium.core.conversation.elide import TOOL_FEEDBACK_KIND, estimate_message_tokens
 from kohakuterrarium.llm.message import UserMessage
 from kohakuterrarium.modules.plugin.base import BasePlugin, PluginBlockError, PluginContext, ToolVisibility
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError, OwnerForbiddenError
 
-from .card_scripts import CardScript, script_fingerprint, visible_script_buttons
-from .card_web import WebPanel
-from .cards import CardError, CardFields
-from .charx import CardMedia
+from .card_scripts import script_fingerprint, visible_script_buttons
+from .cards import CardError
 from .cast import NovelBinding
 from .errors import SettlementRejected
-from .gameplay_pack import GameplayPack, GameplayPackUnavailable, pack_settings, pack_tools, tavern_creature
-from .gameplay import Action, Actions, PlayActions, apply_actions, apply_field_changes
+from .gameplay_pack import GameplayPackUnavailable, pack_settings, pack_tools, tavern_creature
+from .gameplay import Action, PlayActions, apply_actions, apply_field_changes
 from .header_summary import MAX_HEADER_PINS, header_summary
-from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, LegacyWebRequest, configured_plugins, request_plugin
-from .legacy_web import (LegacyOpeningState, LegacyReplyCapture, LegacyReplyState, OpeningCounterGrant, OpeningCounterWrite,
-                         has_mvu_status_adapter, legacy_web_message, mvu_reply_has_body, selected_message_values)
+from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, configured_plugins, request_plugin
+from .legacy_web import (LegacyReplyCapture, LegacyReplyState, OpeningCounterWrite,
+                         legacy_web_message, mvu_reply_has_body, selected_message_values)
 from .novel import Outcome, SceneError, Story
-from .card_state import FieldUpdate, StateField, Value, model_fields, public_fields
+from .card_state import FieldUpdate, model_fields, public_fields
 from .state_tool import SetCardState
-from .portraits import PortraitRule, chosen_key, rules_for
+from .portraits import chosen_key
 from .library_view import card_detail, cards_view, media_summary, media_view, portrait_view
-from .library import CardNotFound, card_scripts_default, get_card
-from .module_linker import RETRYABLE_MODULE_ISSUES, ModuleLinkError, link_card_scripts
-from .lore import LoreBook, active_entries
+from .library import CardNotFound, get_card
+from .module_linker import RETRYABLE_MODULE_ISSUES, link_card_scripts
+from .lore import active_entries
 from .lore_regex import MatchBudget
 from .lore_templates import render_templates
 from .lore_timing import LoreTiming
-from .mvu import MvuChange, MvuInit, apply_changes, inspect_initializers, is_initializer, public_options, public_values
-from .mvu_legacy import apply_literal_update, split_opening
+from .mvu import MvuChange, apply_changes, public_options, public_values
+from .mvu_legacy import apply_literal_update
 from .mvu_patch import json_equal
 from .mvu_tool import ApplyMvuUpdate, UpdateMvu
-from .opening_mvu_schema import (OpeningSchemaGrant, OpeningSchemaSnapshot, derive_opening_schema,
-                                 link_opening_schema, with_opening_schema_output)
-from .opening_page_library import CALLBACK_RUNTIME, OpeningPageIssue, OpeningPageRuntime, cached_opening_panel
-from .panels import ChoicePanel, InventoryPanel, NativePanel, QuestPanel, public_panels
+from .opening_mvu_schema import OpeningSchemaSnapshot, derive_opening_schema, with_opening_schema_output
+from .panels import ChoicePanel, InventoryPanel, QuestPanel, public_panels
 from .paths import library_dir
-from .projections import Persona, Player, expand, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
+from .projections import Persona, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
 from .worldbook import TEMPLATE_BOOK_BUDGET, read_worldbook
-from .worldbook_library import WorldbookNotFound, WorldbookReference, default_worldbook_for_play, snapshot_detail, worldbook_for_play
+from .worldbook_library import WorldbookNotFound, snapshot_detail, worldbook_for_play
 from .scene_tools import ingest_report
-from .script_session import ScriptSession, SessionScripts, approved, settled_mvu_scripts, upgrade_button_receipts, upgrade_script_clock
+from .script_session import ScriptSession, approved, settled_mvu_scripts, upgrade_button_receipts, upgrade_script_clock
 from .script_tool import CardScriptError, RunCardScript, run_mvu_update
 from .recovery import resume_scene
-
-
-_SCRIPT_CLOCK_UNAVAILABLE = "Card scripts require a KT host with a persisted conversation turn counter"
-
-
-class Arguments(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
+from .tavern_opening import SCRIPT_CLOCK_UNAVAILABLE, WorldbookSnapshot, card_scripts_unavailable, prepare_tavern_opening
+from .tavern_state import Arguments, Play, TavernSession
+from .tavern_web import WEB_ACTIONS, call_web_panel
 
 
 class Attach(Arguments):
     cardId: str
     persona: Persona
-
-
-class Play(Arguments):
-    cardId: str
-    player: Player
-    greetingIndex: int = Field(ge=0)
-    worldbookId: str | None = Field(default=None, min_length=1)
-    enableCardScripts: bool = False
-    enableOpeningModules: bool = True
-    openingPageRuntime: OpeningPageRuntime | None = None
-    enableOpeningMvuRead: bool = False
-    openingMvuCounter: OpeningCounterGrant | None = None
-    openingMvuSchema: OpeningSchemaGrant | None = None
-
-    @model_validator(mode='after')
-    def _opening_runtime_consent(self) -> 'Play':
-        if self.openingPageRuntime is not None and not self.enableOpeningModules:
-            raise ValueError('An opening-page runtime requires opening modules to be enabled')
-        if self.enableOpeningMvuRead and self.openingPageRuntime != CALLBACK_RUNTIME:
-            raise ValueError('Opening-page MVU reads require the tavern-page-callbacks-v1 runtime')
-        if self.openingMvuCounter is not None and not self.enableOpeningMvuRead:
-            raise ValueError('An opening counter requires explicit opening-page MVU read permission')
-        if self.openingMvuSchema and (not self.openingMvuCounter or self.enableCardScripts
-                                      or 'enableCardScripts' not in self.model_fields_set):
-            raise ValueError('The opening schema needs a counter and explicit enableCardScripts: false')
-        return self
-
-
-def _card_scripts_unavailable(scripts: list[CardScript], mvu: MvuInit | None) -> OwnerArgumentError:
-    detail = ", ".join(f"{script.id}: {script.issue}" for script in scripts if script.enabled and script.issue)
-    if not mvu or not mvu.values:
-        message = "Card scripts need non-empty variables from a valid [InitVar] entry"
-    elif detail:
-        message = "No enabled card script can run"
-    else:
-        message = "This card has no enabled compatible scripts"
-    return OwnerArgumentError(f"{message} ({detail})" if detail else message)
 
 
 class Notes(Arguments):
@@ -120,53 +73,6 @@ class MvuSelection(Arguments):
 class PanelSelection(Arguments):
     panelId: str
     index: int = Field(ge=0)
-
-
-class TavernSession(Arguments):
-    cardId: str
-    card: CardFields
-    player: Player
-    greeting: str
-    greetingIndex: int = 0
-    openingSent: bool = False
-    hasPortrait: bool = False
-    portrait_rules: list[PortraitRule] = Field(default_factory=list)
-    state_fields: list[StateField] = Field(default_factory=list)
-    values: dict[str, Value] = Field(default_factory=dict)
-    lore: LoreBook | None
-    worldbook: LoreBook | None = None
-    worldbookRef: WorldbookReference | None = None
-    notes: str
-    media: list[CardMedia] = Field(default_factory=list)
-    media_issues: dict[str, int] = Field(default_factory=dict)
-    scene_media_rules: list[PortraitRule] = Field(default_factory=list)
-    native_panels: list[NativePanel] = Field(default_factory=list)
-    invalid_native_panels: int = 0
-    mvu: MvuInit | None = None
-    mvu_public: list[str] = Field(default_factory=list)
-    header_pins: list[str] = Field(default_factory=list)
-    mvu_legacy: bool = False
-    lore_activation: dict[Literal["lore", "worldbook"], dict[str, int]] = Field(default_factory=dict)
-    gameplay_pack: GameplayPack | None = None
-    legacy_plugins: list[str] = Field(default_factory=list)
-    web_panel: WebPanel | None = None
-    web_panel_ready: bool = True
-    web_panel_issue: OpeningPageIssue | None = None
-    legacy_opening_web: LegacyOpeningState | None = None
-    legacy_reply_web: LegacyReplyState | None = None
-    opening_schema: OpeningSchemaSnapshot | None = None
-    opening_gameplay_issue: str | None = None
-    scripts: list[CardScript] = Field(default_factory=list)
-    script_state: SessionScripts = Field(default_factory=lambda: SessionScripts(clock="turn"))
-
-
-WorldbookSnapshot = tuple[WorldbookReference | None, LoreBook | None]
-
-
-def resolve_tavern_worldbook(choice: Play) -> WorldbookSnapshot:
-    if "worldbookId" not in choice.model_fields_set:
-        return default_worldbook_for_play(library_dir(), choice.cardId)
-    return worldbook_for_play(library_dir(), choice.worldbookId) if choice.worldbookId is not None else (None, None)
 
 
 def _text(message: dict[str, object]) -> str:
@@ -421,7 +327,7 @@ class RoleplayPlugin(BasePlugin):
         if self.mode != "tavern" or (record := self._record()) is None:
             raise CardScriptError("Card scripts are only available in an active tavern")
         if self._script_turn_index() is None:
-            raise CardScriptError(_SCRIPT_CLOCK_UNAVAILABLE)
+            raise CardScriptError(SCRIPT_CLOCK_UNAVAILABLE)
         return record, TavernSession.model_validate(record)
 
     async def invoke_card_script(self, script_id: str, args: JsonValue) -> None:
@@ -652,7 +558,7 @@ class RoleplayPlugin(BasePlugin):
             view['openingGameplayIssue'] = play.opening_gameplay_issue
         if play.scripts:
             host_ok = self._script_turn_index() is not None
-            issues = play.script_state.issues if host_ok else {**play.script_state.issues, "$host": _SCRIPT_CLOCK_UNAVAILABLE}
+            issues = play.script_state.issues if host_ok else {**play.script_state.issues, "$host": SCRIPT_CLOCK_UNAVAILABLE}
             runnable = {s.id for s in approved(play.scripts, play.script_state)} if host_ok else set()
             views = [s.view() if s.id not in runnable else {
                 **s.view(), 'buttons': visible_script_buttons(s, play.script_state.appended_buttons.get(s.id, [])),
@@ -707,53 +613,8 @@ class RoleplayPlugin(BasePlugin):
                 return self.ui_state()
             if action == "cards" and self.mode in ("persona", "tavern"):
                 return cards_view(library_dir())
-            if action in ('card_web_panel', 'card_web_state', 'card_web_gameplay', 'card_web_plugin_request',
-                          'card_web_mvu_counter') and self.mode == 'tavern':
-                record = self._record()
-                play = TavernSession.model_validate(record) if record is not None else None
-                if play is None or play.web_panel is None or not play.web_panel_ready or not self._web_panel_scope:
-                    raise OwnerArgumentError('This tavern has no ready card web panel')
-                if action == 'card_web_panel':
-                    if args:
-                        raise OwnerArgumentError('The card web panel does not take arguments')
-                    panel = {**play.web_panel.model_dump(), 'panelScope': self._web_panel_scope}
-                    if legacy := play.legacy_opening_web:
-                        panel['legacyOpening'] = self._opening_web_message(play, legacy.values)
-                        panel['legacyMarker'] = legacy.marker
-                        if self._opening_counter_value(play) is not None and play.mvu and legacy.counter:
-                            panel['legacyOpening'] = self._opening_web_message(play, play.mvu.values)
-                            panel['legacyMvuCounter'] = {'messageId': 0, **legacy.counter.model_dump(),
-                                                         'revision': legacy.counter_revision}
-                        if latest := play.legacy_reply_web:
-                            panel['legacyLatest'] = legacy_web_message(latest.turn, latest.text, latest.values, play.mvu_public)
-                        if legacy.mvu_read_enabled and any(
-                            panel[key]['data']['stat_data'] for key in ('legacyOpening', 'legacyLatest') if key in panel
-                        ):
-                            panel['legacyMvuRead'] = {'mode': 'kt-message-stat-data-v1'}
-                    return panel
-                if args.get('panelScope') != self._web_panel_scope:
-                    raise OwnerArgumentError('The card web panel session changed; open the panel again')
-                payload = {key: value for key, value in args.items() if key != 'panelScope'}
-                if action == 'card_web_mvu_counter':
-                    return await self._write_opening_counter(OpeningCounterWrite.model_validate(payload), self._web_panel_scope)
-                if action == 'card_web_plugin_request':
-                    call = LegacyWebRequest.model_validate(payload).to_plugin_request()
-                    if play.legacy_opening_web is not None and call.method != 'GET':
-                        raise OwnerArgumentError('The legacy opening page is read-only')
-                    return await self._request_legacy_plugin(call, self._web_panel_scope)
-                if action == 'card_web_gameplay':
-                    if play.legacy_opening_web is not None:
-                        raise OwnerArgumentError('The legacy opening page is read-only')
-                    agent = self.binding.host_agent if self.binding else None
-                    if agent and agent.is_processing:
-                        raise OwnerArgumentError('Wait for this tavern before using a card web action')
-                    self.apply_gameplay_actions(Actions.model_validate(payload).actions)
-                    play = TavernSession.model_validate(self._record())
-                elif payload:
-                    raise OwnerArgumentError('The card web state does not take arguments')
-                return {'fields': public_fields(play.state_fields, play.values),
-                        'panels': public_panels(play.native_panels, play.state_fields, play.values),
-                        'mvu': public_values(play.mvu.values, play.mvu_public) if play.mvu else []}
+            if action in WEB_ACTIONS and self.mode == 'tavern':
+                return await call_web_panel(self, action, args)
             if action == "worldbook_slot_detail" and self.mode == "tavern" and (record := self._record()) is not None:
                 slot = args.get("slot")
                 if set(args) != {"slot"} or slot not in ("embedded", "attached"):
@@ -794,10 +655,10 @@ class RoleplayPlugin(BasePlugin):
                 if args['enabled'] and play.opening_schema:
                     raise OwnerArgumentError('This opening schema profile runs separately from ordinary card scripts')
                 if args["enabled"] and self._script_turn_index() is None:
-                    raise OwnerArgumentError(_SCRIPT_CLOCK_UNAVAILABLE)
+                    raise OwnerArgumentError(SCRIPT_CLOCK_UNAVAILABLE)
                 if args["enabled"]:
                     if not play.mvu or not play.mvu.values:
-                        raise _card_scripts_unavailable(play.scripts, play.mvu)
+                        raise card_scripts_unavailable(play.scripts, play.mvu)
                     if not approved(play.scripts, play.script_state) and any(
                             s.enabled and not s.module and (s.issue is None or s.issue in RETRYABLE_MODULE_ISSUES)
                             for s in play.scripts):
@@ -812,7 +673,7 @@ class RoleplayPlugin(BasePlugin):
                     if not any(s.enabled and not s.issue for s in play.scripts):
                         self._save(play.model_dump())
                         self.ui_emit("state", self.ui_state())
-                        raise _card_scripts_unavailable(play.scripts, play.mvu)
+                        raise card_scripts_unavailable(play.scripts, play.mvu)
                 consent = script_fingerprint(play.scripts) if args["enabled"] else None
                 permission = play.script_state.model_copy(update={'approved': consent})
                 if consent != play.script_state.approved:
@@ -920,150 +781,16 @@ class RoleplayPlugin(BasePlugin):
                     if not callable(validate):
                         raise OwnerArgumentError(f'Start this card with the {pack.name} gameplay creature')
                     validate(pack.model_copy(deep=True).settings)
-                greetings = [card.fields.first_mes, *card.fields.alternate_greetings]
-                if choice.greetingIndex >= len(greetings):
-                    raise OwnerArgumentError("Opening index is out of range")
-                book_ref, book = prepared_worldbook if prepared_worldbook is not None else resolve_tavern_worldbook(choice)
-                lore = card.lore
-                mvu = inspect_initializers(card.book)
-                if mvu is not None and lore is not None:
-                    lore = lore.model_copy(update={"entries": [
-                        entry.model_copy(update={"enabled": False}) if is_initializer(entry.comment, entry.name) else entry
-                        for entry in lore.entries
-                    ]})
-                opening = greetings[choice.greetingIndex]
-                legacy_mvu = False
-                block = None
-                if mvu is not None and mvu.values:
-                    prose, block = split_opening(opening)
-                    directions = [card.fields.mes_example, card.fields.system_prompt, card.fields.post_history_instructions]
-                    if lore is not None:
-                        directions.extend(entry.content for entry in lore.entries if entry.enabled)
-                    legacy_mvu = block is not None or any(
-                        "<UpdateVariable>" in text and ("_." in text or "<JSONPatch>" in text) for text in directions
-                    )
-                    if block is not None:
-                        opening = prose
-                authored = card.opening_gameplay
-                if (authored is not None and (authored.greetingIndex != choice.greetingIndex or not choice.enableOpeningModules
-                        or {'enableOpeningMvuRead', 'openingMvuCounter', 'openingMvuSchema', 'openingPageRuntime'} & choice.model_fields_set
-                        or (authored.schema_grant is not None and choice.enableCardScripts))):
-                    authored = None
-                script_host_ok = self._script_turn_index() is not None
-                scripts = card.scripts
-                enable_requested = (choice.enableCardScripts if "enableCardScripts" in choice.model_fields_set
-                                    else script_host_ok and bool(mvu and mvu.values) and any(s.enabled for s in scripts)
-                                    and card_scripts_default(library_dir()))
-                if authored and authored.schema_grant:
-                    enable_requested = False  # The declared schema owns this opening's narrow settlement path.
-                if enable_requested and script_host_ok and mvu and mvu.values:
-                    scripts = await to_thread(link_card_scripts, library_dir(), choice.cardId, scripts)
-                    check_opening_target()
-                script_card_ok = bool(mvu and mvu.values and any(s.enabled and not s.issue for s in scripts))
-                if choice.enableCardScripts and not script_host_ok:
-                    raise OwnerArgumentError(_SCRIPT_CLOCK_UNAVAILABLE)
-                if choice.enableCardScripts and not script_card_ok:
-                    raise _card_scripts_unavailable(scripts, mvu)
-                enable_scripts = enable_requested and script_host_ok and script_card_ok
-                script_state = SessionScripts(clock="turn", approved=script_fingerprint(scripts) if enable_scripts else None,
-                                              button_receipts_current=True)
-                if block is not None:
-                    try:
-                        if enable_scripts:
-                            values, notices, added = await to_thread(run_mvu_update, approved(scripts, script_state), mvu.values,
-                                                                     block, script_state.appended_buttons)
-                            script_state = settled_mvu_scripts(script_state, notices, added)
-                        else:
-                            values = apply_literal_update(mvu.values, block)
-                        mvu = mvu.model_copy(update={'values': values})
-                    except (ValueError, RecursionError):
-                        mvu = mvu.model_copy(update={'issues': {**mvu.issues, 'invalid_opening_update': 1}})
-                    check_opening_target()
-                opening_gameplay_issue = None
-                web_panel, legacy_state, web_panel_issue = card.web_panel, None, None
-                if web_panel is None:
-                    rule = next((row for row in card.legacy_web_rules if row.marker in opening), None)
-                    marker, mvu_read_enabled = None, False
-                    if rule is not None:
-                        web_panel, marker = rule.panel, rule.marker
-                    elif (remote := card.legacy_remote_opening) is not None and remote.marker in opening:
-                        web_panel, web_panel_issue, _ = await to_thread(
-                            cached_opening_panel, library_dir(), choice.cardId, remote,
-                            allow_modules=choice.enableOpeningModules,
-                            runtime=CALLBACK_RUNTIME if authored else choice.openingPageRuntime,
-                            require_linked=choice.enableOpeningMvuRead or authored is not None,
-                        )
-                        check_opening_target()
-                        if authored and web_panel is None and web_panel_issue != 'entry_unconfirmed':
-                            opening_gameplay_issue = 'The declared opening gameplay is unavailable; using the ordinary opening page when possible.'
-                            authored = None
-                            web_panel, web_panel_issue, _ = await to_thread(
-                                cached_opening_panel, library_dir(), choice.cardId, remote, allow_modules=True,
-                            )
-                            check_opening_target()
-                        marker = remote.marker
-                        mvu_read_enabled = choice.enableOpeningMvuRead
-                    if web_panel is not None and marker is not None:
-                        legacy_state = LegacyOpeningState(marker=marker, values={},
-                                                          mvu_status_adapter=has_mvu_status_adapter(marker, card.scripts),
-                                                          mvu_read_enabled=mvu_read_enabled)
-                if counter := choice.openingMvuCounter:
-                    if not legacy_state or not legacy_state.mvu_read_enabled or not mvu or counter.current(mvu.values) is None:
-                        raise OwnerArgumentError('Choose an existing initialized integer in the linked opening for this counter')
-                    legacy_state = legacy_state.model_copy(update={'counter': counter})
-                schema = None
-                mvu_public: list[str] = []
-                if authored and legacy_state:
-                    paths = [json.dumps(path, ensure_ascii=False) for path in authored.publicPaths]
-                    try:
-                        values = mvu.values if mvu else {}
-                        if not set(paths) <= {item['id'] for item in public_options(values)}:
-                            raise CardError('The opening gameplay public paths are not initialized')
-                        if authored.counter and authored.counter.current(values) is None:
-                            raise CardError('The opening gameplay counter is not an initialized integer in its range')
-                        if grant := authored.schema_grant:
-                            target = values
-                            for part in grant.outputPath[:-1]:
-                                target = target.get(part) if isinstance(target, dict) else None
-                            if not isinstance(target, dict) or grant.outputPath[-1] in target:
-                                raise CardError('The opening schema needs a new derived field in the existing state')
-                            code = await to_thread(link_opening_schema, library_dir(), choice.cardId, card.scripts, grant)
-                            source = selected_message_values(values, paths)
-                            value = await to_thread(derive_opening_schema, code, source, grant)
-                            schema = OpeningSchemaSnapshot(grant=grant, code=code, value=value, input_ids=paths)
-                    except (CardError, CardScriptError, ModuleLinkError) as exc:
-                        opening_gameplay_issue = str(exc)
-                    else:
-                        mvu_public = paths
-                        legacy_state = legacy_state.model_copy(update={'mvu_read_enabled': True, 'counter': authored.counter})
-                    check_opening_target()
-                if grant := choice.openingMvuSchema:
-                    if mvu is None or legacy_state is None:
-                        raise OwnerArgumentError('The schema needs an initialized linked opening')
-                    try:
-                        code = await to_thread(link_opening_schema, library_dir(), choice.cardId, card.scripts, grant)
-                    except ModuleLinkError as exc:
-                        raise OwnerArgumentError(f'Opening MVU schema: {exc}') from exc
-                    value = await to_thread(derive_opening_schema, code, mvu.values, grant)
-                    check_opening_target()
-                    schema = OpeningSchemaSnapshot(grant=grant, code=code, value=value)
-                play = TavernSession(cardId=choice.cardId, card=card.fields, player=choice.player,
-                                     greeting=expand(opening, card.fields.name, choice.player.name, ""),
-                                     lore=lore, worldbook=book, worldbookRef=book_ref, notes="", greetingIndex=choice.greetingIndex, hasPortrait=card.portrait is not None,
-                                     portrait_rules=rules_for(card.portraits), state_fields=card.state_fields,
-                                     media=card.media, media_issues=card.media_issues,
-                                     scene_media_rules=card.scene_media_rules, native_panels=card.native_panels,
-                                     invalid_native_panels=card.invalid_native_panels, mvu=mvu, mvu_public=mvu_public, mvu_legacy=legacy_mvu,
-                                     gameplay_pack=card.gameplay_pack, web_panel=web_panel, web_panel_ready=web_panel is None,
-                                     web_panel_issue=web_panel_issue, legacy_opening_web=legacy_state,
-                                     scripts=scripts, script_state=script_state, opening_schema=schema,
-                                     opening_gameplay_issue=opening_gameplay_issue)
+                play, enable_scripts = await prepare_tavern_opening(
+                    library_dir(), choice, card, prepared_worldbook=prepared_worldbook,
+                    has_script_clock=lambda: self._script_turn_index() is not None, ensure_current=check_opening_target,
+                )
                 self._save(play.model_dump())
                 if enable_scripts:
                     await self._scripts.fire("opening", sequence=0)
-                changes = {'web_panel_ready': True} if web_panel is not None else {}
+                changes = {'web_panel_ready': True} if play.web_panel is not None else {}
                 if play.greeting:
-                    if legacy_state is not None:
+                    if legacy_state := play.legacy_opening_web:
                         opening_play = TavernSession.model_validate(self._record())
                         if opening_play.mvu is not None:
                             changes['legacy_opening_web'] = legacy_state.model_copy(update={'values': opening_play.mvu.values})

@@ -14,7 +14,9 @@ from .cast import CastMember, cast_recipe
 from .gameplay_pack import GameplayPackUnavailable, tavern_creature
 from .library import CardNotFound, get_card
 from .paths import library_dir
-from .runtime import Arguments, Play, RoleplayPlugin, resolve_tavern_worldbook
+from .runtime import RoleplayPlugin
+from .tavern_opening import resolve_tavern_worldbook
+from .tavern_state import Arguments, Play
 from .worldbook_library import WorldbookNotFound
 from .portraits import rules_for
 
@@ -47,7 +49,7 @@ async def start_tavern(body: Play, host: StudioDep) -> dict[str, str]:
     if body.greetingIndex > len(card.fields.alternate_greetings):
         raise HTTPException(422, "Opening index is out of range")
     try:
-        book = resolve_tavern_worldbook(body)
+        book = resolve_tavern_worldbook(library_dir(), body)
     except WorldbookNotFound as exc:
         raise HTTPException(404, "The selected worldbook is no longer in the library") from exc
     try:
