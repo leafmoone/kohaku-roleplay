@@ -364,23 +364,27 @@ class RoleplayPlugin(BasePlugin):
         self._save(play.model_copy(update={"values": values}).model_dump())
         self.ui_emit("state", self.ui_state())
 
-    async def apply_mvu_changes(self, changes: list[MvuChange]) -> None:
-        await self._update_mvu(changes)
+    async def apply_mvu_changes(self, changes: list[MvuChange]) -> bool:
+        return await self._update_mvu(changes)
 
-    async def apply_mvu_legacy(self, update: str) -> None:
-        await self._update_mvu(update)
+    async def apply_mvu_legacy(self, update: str) -> bool:
+        return await self._update_mvu(update)
 
-    async def _update_mvu(self, update: str | list[MvuChange]) -> None:
+    async def _update_mvu(self, update: str | list[MvuChange]) -> bool:
         async with self._scripts.lock:
-            await self._settle_mvu(update)
+            return await self._settle_mvu(update)
 
-    async def _settle_mvu(self, update: str | list[MvuChange]) -> None:
+    async def _settle_mvu(self, update: str | list[MvuChange]) -> bool:
+        """Settle a batch and report whether the saved MVU values changed."""
         if self.mode != "tavern" or (record := self._record()) is None:
             raise SceneError("Bind a card in a tavern session before changing variables")
         play = TavernSession.model_validate(record)
         settled = await self._prepare_mvu_update(play, record, update)
-        if play.pinned_mvu is not None and play.mvu and settled.mvu and json_equal(play.mvu.values, settled.mvu.values):
-            return
+        before = play.mvu.values if play.mvu is not None else None
+        after = settled.mvu.values if settled.mvu is not None else None
+        changed = not json_equal(before, after)
+        if play.pinned_mvu is not None and not changed:
+            return False
         legacy = play.legacy_opening_web
         if legacy and legacy.counter and play.mvu and settled.mvu and self._script_turn_index() == 0:
             # Integer eligibility is stricter than Python's numeric equality (35 == 35.0).
@@ -397,6 +401,7 @@ class RoleplayPlugin(BasePlugin):
                         raise SceneError('The opening changed while applying the schema')
         self._save(settled.model_dump())
         self.ui_emit('state', self.ui_state())
+        return changed
 
     async def _prepare_mvu_update(self, play: TavernSession, record: dict, update: str | list[MvuChange]) -> TavernSession:
         if play.mvu is None or not play.mvu.values or (isinstance(update, str) and not play.mvu_legacy):

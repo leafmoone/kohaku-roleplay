@@ -14,8 +14,17 @@ class MvuChanges(BaseModel):
 
 
 class MvuHost(Protocol):
-    async def apply_mvu_changes(self, changes: list[MvuChange]) -> None: ...
-    async def apply_mvu_legacy(self, update: str) -> None: ...
+    async def apply_mvu_changes(self, changes: list[MvuChange]) -> bool: ...
+    async def apply_mvu_legacy(self, update: str) -> bool: ...
+
+
+def _mvu_result(changed: bool, saved: str) -> ToolResult:
+    status = 'changed' if changed else 'unchanged'
+    output = saved if changed else 'The update was accepted, but no MVU variable values changed.'
+    return ToolResult(
+        output=f'{output} Continue the story without repeating the update.',
+        metadata={'session_metadata': {'kt_roleplay.mvu_outcome': status}},
+    )
 
 
 class UpdateMvu(BaseTool):
@@ -35,8 +44,8 @@ class UpdateMvu(BaseTool):
         return MvuChanges.model_json_schema()
 
     async def _execute(self, args: dict) -> ToolResult:
-        await self.host.apply_mvu_changes(MvuChanges.model_validate(args).changes)
-        return ToolResult(output="Updated session variables. Continue the story without repeating the update.")
+        changed = await self.host.apply_mvu_changes(MvuChanges.model_validate(args).changes)
+        return _mvu_result(changed, 'Updated session variables.')
 
 
 class MvuLegacyArgs(BaseModel):
@@ -57,5 +66,5 @@ class ApplyMvuUpdate(UpdateMvu):
         return MvuLegacyArgs.model_json_schema()
 
     async def _execute(self, args: dict) -> ToolResult:
-        await self.host.apply_mvu_legacy(MvuLegacyArgs.model_validate(args).update)
-        return ToolResult(output="Applied the literal update to this session. Continue the story without repeating it.")
+        changed = await self.host.apply_mvu_legacy(MvuLegacyArgs.model_validate(args).update)
+        return _mvu_result(changed, 'Applied the literal update to this session.')
