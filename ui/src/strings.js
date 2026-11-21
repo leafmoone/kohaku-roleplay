@@ -1,4 +1,44 @@
+import { shallowRef, watch } from "vue";
 import { useExtension, useLocale } from "@kohakuterrarium/ui-sdk";
+
+const chineseBundles = new WeakMap();
+
+function chineseBundleFor(kt) {
+  let entry = chineseBundles.get(kt);
+  if (!entry) {
+    entry = { bundle: shallowRef(null), inFlight: null };
+    chineseBundles.set(kt, entry);
+  }
+  return entry;
+}
+
+function loadChineseBundle(kt, entry) {
+  if (entry.bundle.value || entry.inFlight || typeof kt.assetUrl !== "function") return;
+  const sentinel = typeof kt.t === "function" ? kt.t("importCard") : "";
+  if (sentinel && sentinel !== "importCard" && sentinel !== EN_FALLBACK.importCard) return;
+  // The desktop launch gate requires its same-origin cookie for extension assets.
+  // Share one request per extension handle; never send credentials cross-origin.
+  entry.inFlight = (async () => {
+    const response = await fetch(kt.assetUrl("i18n/zh-CN.json"), {
+      credentials: "same-origin",
+      signal: globalThis.AbortSignal?.timeout?.(8000),
+    });
+    if (!response.ok) throw new Error(`Roleplay locale: HTTP ${response.status}`);
+    const bundle = await response.json();
+    if (!bundle || typeof bundle !== "object" || Array.isArray(bundle)) {
+      throw new Error("Invalid Roleplay locale bundle");
+    }
+    entry.bundle.value = Object.fromEntries(
+      Object.entries(bundle).filter(([, value]) => typeof value === "string"),
+    );
+  })()
+    .catch(() => {
+      // Keep the English fallback; a later locale switch or remount can retry.
+    })
+    .finally(() => {
+      entry.inFlight = null;
+    });
+}
 
 const EN_FALLBACK = {
   library: "Roleplay Cards",
@@ -515,8 +555,8 @@ function interpolate(template, params = {}) {
 }
 
 /**
- * Returns a reactive translation function backed by `kt.t()`,
- * falling back cleanly to English defaults if a bundle is not loaded.
+ * Reactively translates using the authenticated Chinese asset when requested,
+ * then the SDK bundle and English defaults if a bundle is not loaded.
  */
 export function useRoleplayText() {
   const locale = useLocale();
@@ -526,8 +566,21 @@ export function useRoleplayText() {
   } catch {
     kt = null;
   }
+  const chinese = kt ? chineseBundleFor(kt) : null;
+  if (chinese) {
+    watch(
+      () => locale.value,
+      (value) => {
+        if (value === "zh-CN") loadChineseBundle(kt, chinese);
+      },
+      { immediate: true },
+    );
+  }
   return (key, params = {}) => {
-    void locale.value;
+    if (locale.value === "zh-CN" && chinese) {
+      const translated = chinese.bundle.value?.[key];
+      if (typeof translated === "string") return interpolate(translated, params);
+    }
     if (kt && typeof kt.t === "function") {
       const resolved = kt.t(key, params);
       if (resolved && resolved !== key) return resolved;
