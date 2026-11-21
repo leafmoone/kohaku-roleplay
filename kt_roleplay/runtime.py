@@ -40,8 +40,8 @@ from .lore import active_entries
 from .lore_regex import MatchBudget
 from .lore_templates import render_templates
 from .lore_timing import LoreTiming
-from .mvu import MvuChange, apply_changes, public_options, public_values
-from .mvu_legacy import apply_literal_update
+from .mvu import MvuChange, public_options, public_values
+from .mvu_settlement import settle_mvu_candidate
 from .mvu_patch import json_equal
 from .mvu_tool import ApplyMvuUpdate, UpdateMvu
 from .opening_mvu_schema import OpeningSchemaSnapshot, derive_opening_schema, with_opening_schema_output
@@ -51,8 +51,8 @@ from .projections import Persona, insert_depth_lore, persona_context, render_tav
 from .worldbook import TEMPLATE_BOOK_BUDGET, read_worldbook
 from .worldbook_library import WorldbookNotFound, snapshot_detail, worldbook_for_play
 from .scene_tools import ingest_report
-from .script_session import ScriptSession, approved, settled_mvu_scripts, upgrade_button_receipts, upgrade_script_clock
-from .script_tool import CardScriptError, RunCardScript, run_mvu_update
+from .script_session import ScriptSession, approved, upgrade_button_receipts, upgrade_script_clock
+from .script_tool import CardScriptError, RunCardScript
 from .recovery import resume_scene
 from .tavern_opening import SCRIPT_CLOCK_UNAVAILABLE, WorldbookSnapshot, card_scripts_unavailable, prepare_tavern_opening
 from .tavern_media import attach_scene_image, save_scene_image, scene_image, without_scene_images
@@ -401,19 +401,11 @@ class RoleplayPlugin(BasePlugin):
             scripts = approved(play.scripts, state) if self._script_turn_index() is not None else []
             # An old diagnostic is not proof of absent listeners: re-probe unknown registrations.
             scripts = [s for s in scripts if state.mvu_listeners.get(s.id, True)]
-            if scripts:
-                wire = update if isinstance(update, str) else [change.model_dump() for change in update]
-                values, notices, added = await to_thread(run_mvu_update, scripts, play.mvu.values, wire, state.appended_buttons)
-                if self._record() != record:
-                    raise ValueError('The tavern changed during the MVU update; try again')
-                state = settled_mvu_scripts(state, notices, added)
-            elif isinstance(update, str):
-                values = apply_literal_update(play.mvu.values, update)
-            else:
-                values = apply_changes(play.mvu.values, update)
+            mvu, state = await settle_mvu_candidate(play.mvu, state, update, scripts)
+            if scripts and self._record() != record:
+                raise ValueError('The tavern changed during the MVU update; try again')
         except ValueError as exc:
             raise SceneError(str(exc)) from exc
-        mvu = play.mvu.model_copy(update={"values": values})
         return play.model_copy(update={'mvu': mvu, 'script_state': state})
 
     async def _derive_opening_schema(self, play: TavernSession, schema: OpeningSchemaSnapshot) -> TavernSession:

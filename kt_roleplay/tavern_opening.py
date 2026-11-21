@@ -13,13 +13,14 @@ from .library import card_scripts_default
 from .lore import LoreBook
 from .module_linker import ModuleLinkError, link_card_scripts
 from .mvu import MvuInit, inspect_initializers, is_initializer, public_options
-from .mvu_legacy import apply_literal_update, split_opening
+from .mvu_legacy import split_opening
+from .mvu_settlement import settle_mvu_candidate
 from .opening_mvu_schema import OpeningSchemaSnapshot, derive_opening_schema, link_opening_schema
 from .opening_page_library import CALLBACK_RUNTIME, cached_opening_panel
 from .portraits import rules_for
 from .projections import expand
-from .script_session import SessionScripts, approved, settled_mvu_scripts
-from .script_tool import CardScriptError, run_mvu_update
+from .script_session import SessionScripts, approved
+from .script_tool import CardScriptError
 from .tavern_state import Play, TavernSession
 from .worldbook_library import WorldbookReference, default_worldbook_for_play, worldbook_for_play
 
@@ -97,13 +98,8 @@ async def prepare_tavern_opening(
                                   button_receipts_current=True)
     if block is not None:
         try:
-            if enable_scripts:
-                values, notices, added = await to_thread(run_mvu_update, approved(scripts, script_state), mvu.values,
-                                                         block, script_state.appended_buttons)
-                script_state = settled_mvu_scripts(script_state, notices, added)
-            else:
-                values = apply_literal_update(mvu.values, block)
-            mvu = mvu.model_copy(update={'values': values})
+            listeners = approved(scripts, script_state) if enable_scripts else []
+            mvu, script_state = await settle_mvu_candidate(mvu, script_state, block, listeners)
         except (ValueError, RecursionError):
             mvu = mvu.model_copy(update={'issues': {**mvu.issues, 'invalid_opening_update': 1}})
         ensure_current()
