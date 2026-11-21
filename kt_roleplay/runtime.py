@@ -3,6 +3,7 @@
 from asyncio import current_task, to_thread
 from collections.abc import Callable
 import json
+import logging
 from typing import Literal
 from uuid import uuid4
 
@@ -13,7 +14,8 @@ from kohakuterrarium.modules.tool.base import ToolContext
 from kohakuterrarium.terrarium.tools.context import resolve_group_context, resolve_group_target
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 from kohakuterrarium.core.conversation.elide import TOOL_FEEDBACK_KIND, estimate_message_tokens
-from kohakuterrarium.llm.message import UserMessage
+from kohakuterrarium.llm.message import ImagePart, UserMessage
+from kohakuterrarium.parsing import is_action_event, parse_full
 from kohakuterrarium.modules.plugin.base import BasePlugin, PluginBlockError, PluginContext, ToolVisibility
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError, OwnerForbiddenError
 
@@ -53,8 +55,12 @@ from .script_session import ScriptSession, approved, settled_mvu_scripts, upgrad
 from .script_tool import CardScriptError, RunCardScript, run_mvu_update
 from .recovery import resume_scene
 from .tavern_opening import SCRIPT_CLOCK_UNAVAILABLE, WorldbookSnapshot, card_scripts_unavailable, prepare_tavern_opening
+from .tavern_media import attach_scene_image, save_scene_image, scene_image, without_scene_images
 from .tavern_state import Arguments, Play, TavernSession
 from .tavern_web import WEB_ACTIONS, call_web_panel
+
+
+logger = logging.getLogger(__name__)
 
 
 class Attach(Arguments):
@@ -572,8 +578,9 @@ class RoleplayPlugin(BasePlugin):
         if selected is not None:
             view.update(hasPortrait=True, portraitKey=selected)
         if play.scene_media_rules:
-            selected_scene = chosen_key(play.scene_media_rules, play.state_fields, play.values)
-            view["sceneMediaKey"] = selected_scene or next((asset.key for asset in play.media if asset.kind == "icon"), None)
+            selected_scene = scene_image(play)
+            view["sceneMediaKey"] = selected_scene.key if selected_scene else next(
+                (asset.key for asset in play.media if asset.kind == "icon"), None)
         visible = public_fields(play.state_fields, play.values)
         if visible:
             view["stateFields"] = visible
@@ -825,14 +832,35 @@ class RoleplayPlugin(BasePlugin):
         self.ui_emit("state", view)
         return view
 
+    async def _tavern_scene_image(self) -> ImagePart | None:
+        binding = self.binding
+        store = binding.session_store if binding is not None else None
+        record = self._record() if self.mode == "tavern" and store is not None else None
+        if not record or not record.get("scene_media_rules"):
+            return None
+        play = TavernSession.model_validate(record)
+        if (scene := scene_image(play)) is None:
+            return None
+        try:
+            image = await to_thread(save_scene_image, library_dir(), play.cardId, scene, store)
+        except (CardError, CardNotFound, OSError, ValueError) as exc:
+            logger.warning("Could not attach a Roleplay scene image: %s", exc)
+            return None
+        if self.binding is binding and binding.session_store is store and self._record() == record:
+            return image
+        return None
+
     async def publish_opening(self, text: str) -> None:
-        if self.binding is None or self.binding.controller is None:
+        binding = self.binding
+        if binding is None or binding.controller is None:
             raise OwnerArgumentError("Publishing requires a live controller")
-        controller = self.binding.controller
-        agent = self.binding.host_agent
+        controller, agent, store = binding.controller, binding.host_agent, binding.session_store
         history = getattr(agent, "_session_output", None)
+        image = await self._tavern_scene_image()
+        if self.binding is not binding or binding.controller is not controller or binding.session_store is not store:
+            raise OwnerArgumentError("The session changed before publishing its opening")
         if history is None:
-            await self._publish_assistant(controller, text)
+            await self._publish_assistant(controller, text, image=image)
             return
 
         # KT 2.2.2 treats every live text frame as model streaming, and a
@@ -840,20 +868,26 @@ class RoleplayPlugin(BasePlugin):
         # Persist the opening first, then refresh attached chats as already idle.
         from kohakuterrarium.studio.attach._event_stream import StreamOutput
 
-        await self.binding.emit(OutputEvent(type="assistant_round_start"))
+        await binding.emit(OutputEvent(type="assistant_round_start"))
         message = controller.conversation.append("assistant", text)
         await history.emit(OutputEvent(type="text", content=text))
-        await self.binding.emit(OutputEvent(type="assistant_message", payload={"message": message.to_dict()}))
+        if image is not None:
+            # Like the opening text, persist it and let the idle refresh load
+            # the whole row rather than synthesize a live model turn.
+            await history.emit(attach_scene_image(message, image))
+        await binding.emit(OutputEvent(type="assistant_message", payload={"message": message.to_dict()}))
         await history.drain()
         if not agent.is_processing:
             for output in agent.output_router._secondary_outputs:
                 if isinstance(output, StreamOutput):
                     output._put({"type": "idle"})
 
-    async def _publish_assistant(self, controller, text: str) -> None:
+    async def _publish_assistant(self, controller, text: str, *, image: ImagePart | None = None) -> None:
         await self.binding.emit(OutputEvent(type="assistant_round_start"))
         message = controller.conversation.append("assistant", text)
         await self.binding.emit(OutputEvent(type="text", content=text))
+        if image is not None:
+            await self.binding.emit(attach_scene_image(message, image))
         await self.binding.emit(OutputEvent(type="assistant_message", payload={"message": message.to_dict()}))
 
     def _script_turn_index(self) -> int | None:
@@ -870,14 +904,30 @@ class RoleplayPlugin(BasePlugin):
         return (self.binding.controller, turn) if turn else None
 
     async def post_llm_call(self, messages: list[dict], response: str, usage: dict, **kwargs: object) -> None:
-        active = self._script_turn()
-        if active is None or not response.strip():
+        binding = self.binding
+        if self.mode != "tavern" or binding is None or binding.controller is None or not response.strip():
             return
-        controller, turn = active
+        controller = binding.controller
         message = controller._completed_assistant_message
         history = controller.conversation.get_messages()
-        if message is not None and history and history[-1] is message and not message.tool_calls:
-            await self._scripts.fire("assistant", sequence=turn, args={"text": response[:900]})
+        if message is None or not history or history[-1] is not message or message.tool_calls:
+            return
+        if (active := self._script_turn()) is not None:
+            await self._scripts.fire("assistant", sequence=active[1], args={"text": response[:900]})
+
+        record = self._record()
+        if not record or not record.get("scene_media_rules") or controller._interrupted:
+            return
+        # Native calls are present on the message; text-mode calls are encoded
+        # in the prose. Neither an intermediate call nor an aborted reply gets CG.
+        if not controller._is_native_mode and any(
+            is_action_event(event) for event in parse_full(message.get_text_content(), controller._parser_config)
+        ):
+            return
+        image = await self._tavern_scene_image()
+        if (image is not None and self.binding is binding and not controller._interrupted
+                and controller._completed_assistant_message is message):
+            await binding.emit(attach_scene_image(message, image))
 
     async def pre_llm_call(self, messages: list[dict], **kwargs: object) -> list[dict] | None:
         if (active := self._script_turn()) is not None:
@@ -896,6 +946,7 @@ class RoleplayPlugin(BasePlugin):
             content = persona_context(Attach.model_validate(record).persona)
         else:
             play = TavernSession.model_validate(record)
+            messages = without_scene_images(messages)
             history = [_text(m) for m in messages if m.get("role") in ("user", "assistant")]
             sources = {kind: book for kind, book in (("lore", play.lore), ("worldbook", play.worldbook)) if book is not None}
             books = list(sources.values())
