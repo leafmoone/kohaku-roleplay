@@ -37,6 +37,7 @@ export function usePlayWindow(rootElRef) {
   const hasCustomGeometry = ref(false);
 
   let hostSection = null;
+  let hostHeader = null;
   let phoneSheet = null;
   let boundsContainer = null;
   let preMaximizeRect = null;
@@ -50,11 +51,14 @@ export function usePlayWindow(rootElRef) {
     phoneSheet = el.closest(PHONE_SHEET_SELECTOR);
     isPhone.value = Boolean(phoneSheet && !hostSection);
     if (hostSection) {
+      hostHeader = hostSection.querySelector(":scope > header");
       const floatAnchor = hostSection.parentElement?.parentElement;
       boundsContainer =
         floatAnchor?.parentElement ||
         hostSection.closest('[data-test="v2-chat-tab"]') ||
         document.documentElement;
+    } else {
+      hostHeader = null;
     }
   }
 
@@ -379,6 +383,18 @@ export function usePlayWindow(rootElRef) {
     startPointerInteraction("move", event);
   }
 
+  function onHostHeaderPointerDown(event) {
+    const target = event?.target;
+    if (
+      target &&
+      typeof target.closest === "function" &&
+      target.closest('button, a, input, select, textarea, [role="button"], [contenteditable]')
+    ) {
+      return;
+    }
+    startMove(event);
+  }
+
   function startResize(event) {
     startPointerInteraction("resize", event);
   }
@@ -393,6 +409,9 @@ export function usePlayWindow(rootElRef) {
 
   onMounted(() => {
     resolveHostContainers();
+    if (hostHeader && typeof hostHeader.addEventListener === "function") {
+      hostHeader.addEventListener("pointerdown", onHostHeaderPointerDown);
+    }
     syncExpansionAttributes();
     window.addEventListener("resize", clampExistingOnViewportChange);
     if (typeof ResizeObserver === "function" && boundsContainer) {
@@ -405,6 +424,10 @@ export function usePlayWindow(rootElRef) {
 
   onBeforeUnmount(() => {
     stopActiveDrag();
+    if (hostHeader && typeof hostHeader.removeEventListener === "function") {
+      hostHeader.removeEventListener("pointerdown", onHostHeaderPointerDown);
+    }
+    hostHeader = null;
     window.removeEventListener("resize", clampExistingOnViewportChange);
     if (resizeObserver) {
       resizeObserver.disconnect();

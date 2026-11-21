@@ -977,6 +977,20 @@ section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"] {
   width: min(26rem, calc(100vw - 2rem));
 }
 
+section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"] > header {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"] > header:active {
+  cursor: grabbing;
+}
+
+section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"] > header button {
+  cursor: pointer;
+}
+
 section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"] > header button.i-carbon-side-panel-open {
   display: none !important;
 }
