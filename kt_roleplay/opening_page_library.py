@@ -12,7 +12,7 @@ from .cards import ParsedCard, parse_card
 from .errors import CardError
 from .legacy_web import LegacyRemoteOpening
 from .library import CardNotFound, _open, _open_readonly, get_card
-from .module_download import _module_target, download_opening_html
+from .module_download import _module_target, download_opening_html, exact_module_path
 from .module_library import confirmed_module_bytes, module_snapshot_locks
 from .module_linker import ModuleLinkError, _bundle
 from .script_dependencies import ModuleReference, scan_modules
@@ -68,8 +68,6 @@ _JS_TYPES = {
 }
 _MAX_PAGE_REFERENCES = 32
 _DNS_LABEL = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?')
-_MODULE_PATH = re.compile(r"(?:[A-Za-z0-9._~!$&()*+,;=:@/-]|%[0-9A-Fa-f]{2})*")
-_MODULE_QUERY = re.compile(r"(?:[A-Za-z0-9._~!$&()*+,;=:@/?-]|%[0-9A-Fa-f]{2})*")
 
 
 class _EntryResources(HTMLParser):
@@ -337,7 +335,7 @@ def _exact_opening_module_target(url: str) -> bool:
                 or parts.netloc.lower() not in (host, host + ':443')):
             return False
         if (_has_dot_segment(parts.path) or '//' in parts.path or (url.endswith('?') and not parts.query)
-                or not _MODULE_PATH.fullmatch(parts.path) or not _MODULE_QUERY.fullmatch(parts.query)):
+                or not exact_module_path(parts.path, parts.query)):
             return False
         return target == (parts.path or '/') + (f'?{parts.query}' if parts.query else '')
     except (CardError, ValueError):
@@ -357,7 +355,7 @@ def _opening_module_url(parent: str, ref: ModuleReference) -> str | None:
         elif spec.startswith(('/', './', '../')) and not spec.startswith('//') and not relative.netloc:
             # Resolve only explicit paths. Python's urljoin also treats raw
             # semicolons as path parameters, unlike the browser's URL parser.
-            if (not _MODULE_PATH.fullmatch(relative.path) or not _MODULE_QUERY.fullmatch(relative.query)
+            if (not exact_module_path(relative.path, relative.query)
                     or ';' in relative.path or '//' in relative.path
                     or any(part.lower().replace('%2e', '.') in ('.', '..')
                                                     and part not in ('.', '..') for part in relative.path.split('/'))):

@@ -6,20 +6,41 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from .card_scripts import CardScript
 from .errors import CardError
 from .library import CardNotFound, original_card
+from .module_download import _module_target, exact_module_path
 from .module_library import PackagedModuleMissing, module_sources, read_packaged_module
 from .script_dependencies import scan_modules
 
+# Older saves may have stored now-supported root paths as dependency_unsupported.
 RETRYABLE_MODULE_ISSUES = frozenset({"module_dependency", "dependency_missing", "dependency_unapproved_transitive",
-                                    "module_linker_unavailable", "module_link_failed"})
+                                    "module_linker_unavailable", "module_link_failed", "dependency_unsupported"})
 
 
 class ModuleLinkError(ValueError):
     pass
+
+
+def _root_module_url(parent: str, spec: str) -> str:
+    """Resolve a root path on a cached HTTPS module, never on an inline card or archive."""
+    if (not parent.lower().startswith('https://') or not spec.startswith('/') or spec.startswith('//')
+            or '\\' in spec or '#' in spec):
+        raise ModuleLinkError('dependency_unsupported')
+    try:
+        parts = urlsplit(spec)
+        # Do not cache paths the browser might normalize to a different target.
+        if (not exact_module_path(parts.path, parts.query) or '//' in parts.path or ';' in parts.path
+                or (spec.endswith('?') and not parts.query)
+                or any(segment.lower().replace('%2e', '.') in ('.', '..') for segment in parts.path.split('/'))):
+            raise ValueError
+        url = urljoin(parent, spec)
+        _module_target(url)
+    except ValueError as exc:
+        raise ModuleLinkError('dependency_unsupported') from exc
+    return url
 
 
 def _virtual_graph(entry: str, remote: dict[str, bytes], original: bytes, *,
@@ -30,16 +51,26 @@ def _virtual_graph(entry: str, remote: dict[str, bytes], original: bytes, *,
     edges: list[dict[str, int]] = []
     for i, js in enumerate(code):
         refs, syntax_error, truncated = scan_modules(js)
-        if syntax_error or truncated or any(ref["kind"] == "unsupported" or ref["specifier"] is None for ref in refs):
+        if syntax_error or truncated:
             raise ModuleLinkError("dependency_unsupported")
+        if any(ref['dynamic'] for ref in refs):
+            raise ModuleLinkError('dependency_dynamic_import')
         scope = {}
+        targets = {}
         for ref in refs:
             spec = ref["specifier"]
             if spec is None:
                 raise ModuleLinkError("dependency_unsupported")
             parent = names[i]
-            if ref["kind"] == "https" or parent.lower().startswith("https://"):
-                name = urljoin(parent, spec) if ref["kind"] == "relative" else spec
+            if ref['kind'] == 'unsupported':
+                name = _root_module_url(parent, spec)
+            elif ref['kind'] == 'relative' and parent.lower().startswith('https://'):
+                name = urljoin(parent, spec)
+            else:
+                name = spec
+            targets[spec] = name
+        for spec, name in targets.items():
+            if name.lower().startswith('https://'):
                 data = remote.get(name)
                 if data is None and prepare is not None:
                     data = prepare(name)

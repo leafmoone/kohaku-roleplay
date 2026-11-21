@@ -2,6 +2,7 @@
 
 from http.client import HTTPException, HTTPSConnection
 from ipaddress import ip_address
+import re
 import socket
 import ssl
 from time import monotonic
@@ -12,6 +13,13 @@ from .errors import CardError
 _DOWNLOAD_SECONDS = 6
 _PLAIN_MEDIA = frozenset({"application/javascript", "application/ecmascript", "text/javascript",
                           "text/ecmascript", "text/plain"})
+_MODULE_PATH = re.compile(r"(?:[A-Za-z0-9._~!$&()*+,;=:@/-]|%[0-9A-Fa-f]{2})*")
+_MODULE_QUERY = re.compile(r"(?:[A-Za-z0-9._~!$&()*+,;=:@/?-]|%[0-9A-Fa-f]{2})*")
+
+
+def exact_module_path(path: str, query: str) -> bool:
+    """Use spellings the browser and downloader send without re-encoding."""
+    return bool(_MODULE_PATH.fullmatch(path) and _MODULE_QUERY.fullmatch(query))
 
 
 class _ModuleConnection(HTTPSConnection):

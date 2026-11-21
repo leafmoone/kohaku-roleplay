@@ -47,7 +47,7 @@ def prepare_card_assets(directory: Path, card_id: str) -> dict:
                 _virtual_graph(script.content, remote, raw, prepare=lambda url: load(
                     url, lambda: save_discovered_module(directory, card_id, url), 'script'))
             except (CardError, ModuleLinkError) as exc:
-                issues.append({'kind': 'script', 'id': script.id, 'message': str(exc)})
+                issues.append({'kind': 'script', 'id': script.id, 'name': script.name, 'message': str(exc)})
     artifacts = inspect_tavern_artifacts(card.book)
     issues.extend({'kind': 'runtime', 'id': item['id'] or item['kind'], 'message': artifact_issue(item)}
                   for item in artifacts)
