@@ -49,7 +49,9 @@ from .panels import ChoicePanel, InventoryPanel, QuestPanel, public_panels
 from .paths import library_dir
 from .pinned_mvu import calculate_pinned_mvu
 from .pinned_mvu_setup import SETUP_MARKER, MvuSetupWrite, setup_preserved, setup_projection, setup_update
-from .projections import Persona, insert_depth_lore, persona_context, render_tavern_text, story_context, tavern_outlets
+from .projections import (
+    Persona, insert_depth_lore, insert_roleplay_context, mount_persona, render_tavern_text, story_context, tavern_outlets,
+)
 from .worldbook import TEMPLATE_BOOK_BUDGET, read_worldbook
 from .worldbook_library import WorldbookNotFound, snapshot_detail, worldbook_for_play
 from .scene_tools import ingest_report
@@ -992,7 +994,7 @@ class RoleplayPlugin(BasePlugin):
         elif record is None:
             return None
         elif self.mode == "persona":
-            content = persona_context(Attach.model_validate(record).persona)
+            return mount_persona(messages, Attach.model_validate(record).persona)
         else:
             play = TavernSession.model_validate(record)
             messages = without_scene_images(messages)
@@ -1092,5 +1094,4 @@ class RoleplayPlugin(BasePlugin):
                 if self.binding.get_state("loreView") != lore_view:
                     self.binding.set_state("loreView", lore_view)
                     self.ui_emit("state", self.ui_state())
-        index = next((i for i, message in enumerate(messages) if message.get("role") not in ("system", "developer")), len(messages))
-        return [*messages[:index], {"role": "user", "content": content}, *messages[index:]]
+        return insert_roleplay_context(messages, content)
