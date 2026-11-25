@@ -11,6 +11,7 @@ from kohakuterrarium.modules.tool.base import (
     ToolResult,
 )
 from kohakuterrarium.terrarium.tools.context import (
+    compute_group,
     resolve_group_context,
     resolve_group_target,
 )
@@ -75,6 +76,15 @@ class SceneTool(BaseTool):
         return self.arguments.model_json_schema()
 
 
+def resolve_story_director(group):
+    directors = [node for node in compute_group(group).values()
+                 if node.is_privileged and (plugin := node.agent.plugins.get_plugin("roleplay")) is not None
+                 and plugin.mode == "novel"]
+    if len(directors) != 1:
+        raise SceneError("The graph must contain one privileged novel director")
+    return directors[0]
+
+
 async def send_story_message(context: ToolContext, channel: str, value: dict[str, object]) -> None:
     result = await SendChannelTool().execute({"channel": channel, "message": json.dumps(value, ensure_ascii=False)}, context)
     if not result.success:
@@ -136,7 +146,7 @@ class ReportScene(SceneTool):
     async def _execute(self, args: dict, context: ToolContext) -> ToolResult:
         report = Report.model_validate(args)
         group = resolve_group_context(context, require_privileged=False)
-        root = resolve_group_target(group, "root")
+        root = resolve_story_director(group)
         _listeners(context, "report_to_root", {root.creature_id})
         director = root.agent.plugins.get_plugin("roleplay")
         director.watch_reports(context)

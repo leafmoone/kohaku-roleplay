@@ -3,12 +3,10 @@
 import json
 from asyncio import to_thread
 from pathlib import Path
-from uuid import uuid4
 
-import yaml
 from kohakuterrarium.modules.tool.base import ToolContext, ToolResult
 from kohakuterrarium.terrarium.creature.ops import wire_creature_on_engine
-from kohakuterrarium.terrarium.tools.context import compute_group, resolve_group_context
+from kohakuterrarium.terrarium.tools.context import resolve_group_context
 
 from .cards import CardFields
 from .cast import (
@@ -17,10 +15,13 @@ from .cast import (
     initialize_npc,
     member_from_card,
     npc_spec,
+    taken_actor_names,
+    unique_actor_name,
+    write_recipe,
 )
 from .library import get_card, import_card
 from .library_view import cards_view
-from .novel import Key, SceneError, StoryModel, sheet_from_fields
+from .novel import Key, SceneError, Story, StoryModel, sheet_from_fields
 from .paths import library_dir
 from .scene_tools import SceneTool
 
@@ -58,28 +59,9 @@ def search_cards(directory: Path, query: str, in_cast: set[str]) -> list[dict[st
     return found
 
 
-async def spawn_member(host, context: ToolContext, member: CastMember, book: WorldbookSnapshot | None) -> CastMember:
-    host.require_open_scene()
-    group = resolve_group_context(context)
-    root, engine = group.caller, group.engine
-    binding = host.binding
-    if binding is None or root.agent is not binding.host_agent or binding.session_store is None:
-        raise SceneError("Only this novel's director can add a cast member")
-    graph_id = root.graph_id
-    taken = {*group.graph.channels, *(node.name for node in compute_group(group).values())}
-    story = host.story()
-    index = len(story.cast) + 1
-    while f"npc_{index}" in taken or f"npc_{index}" in story.cast:
-        index += 1
-    actor = f"npc_{index}"
-    member = member.model_copy(update={"actor": actor})
-    story = story.model_copy(update={"cast": [*story.cast, actor], "sheets": {
-        **story.sheets, actor: sheet_from_fields(member.state_fields, {}),
-    }})
-    directory = library_dir() / "recipes"
-    directory.mkdir(parents=True, exist_ok=True)
-    recipe = directory / f"{uuid4().hex}.yaml"
-    recipe.write_text(yaml.safe_dump(npc_spec(actor), sort_keys=False), encoding="utf-8")
+async def add_cast_node(engine, root, binding, member: CastMember, story: Story):
+    actor, graph_id = member.actor, root.graph_id
+    recipe = write_recipe(library_dir() / "recipes", npc_spec(actor))
     npc = None
     channel_created = False
     try:
@@ -93,6 +75,32 @@ async def spawn_member(host, context: ToolContext, member: CastMember, book: Wor
         for node, channel, direction in ((root, actor, "send"), (root, actor, "listen"), (npc, actor, "listen"),
                                          (npc, "report_to_root", "send")):
             wire_creature_on_engine(engine, graph_id, node.creature_id, channel, direction, enabled=True)
+    except BaseException:
+        if npc is not None:
+            await engine.remove_creature(npc.creature_id, split=False)
+        if channel_created:
+            await engine.remove_channel(graph_id, actor)
+        recipe.unlink(missing_ok=True)
+        raise
+    return npc, recipe
+
+
+async def spawn_member(host, context: ToolContext, member: CastMember, book: WorldbookSnapshot | None) -> CastMember:
+    host.require_open_scene()
+    group = resolve_group_context(context)
+    root, engine = group.caller, group.engine
+    binding = host.binding
+    if binding is None or root.agent is not binding.host_agent or binding.session_store is None:
+        raise SceneError("Only this novel's director can add a cast member")
+    graph_id = root.graph_id
+    story = host.story()
+    actor = unique_actor_name(member.card.name, taken_actor_names(group) | set(story.cast))
+    member = member.model_copy(update={"actor": actor})
+    story = story.model_copy(update={"cast": [*story.cast, actor], "sheets": {
+        **story.sheets, actor: sheet_from_fields(member.state_fields, {}),
+    }})
+    npc, recipe = await add_cast_node(engine, root, binding, member, story)
+    try:
         await engine.checkpoint_graph(graph_id)
         host.require_open_scene()
         latest = host.story()
@@ -105,10 +113,8 @@ async def spawn_member(host, context: ToolContext, member: CastMember, book: Wor
             rows.append((binding._state_key("novelWorldbooks"), [row.model_dump() for row in [*books, book]]))
         binding.session_store.state.put_many(rows)
     except BaseException:
-        if npc is not None:
-            await engine.remove_creature(npc.creature_id, split=False)
-        if channel_created:
-            await engine.remove_channel(graph_id, actor)
+        await engine.remove_creature(npc.creature_id, split=False)
+        await engine.remove_channel(graph_id, actor)
         recipe.unlink(missing_ok=True)
         raise
     host.ui_emit("state", host.ui_state())

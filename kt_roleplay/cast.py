@@ -2,10 +2,12 @@
 
 import json
 from pathlib import Path
+from unicodedata import category
 from uuid import uuid4
 
 import yaml
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError
+from kohakuterrarium.terrarium.tools.context import compute_group
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from .card_state import (
@@ -73,6 +75,29 @@ class NovelSettings(BaseModel):
                 "proseStyle": self.style.model_dump() if self.style else None}
 
 
+RESERVED_ACTORS = {PLAYER, "root", "report_to_root"}
+
+
+def clean_node_name(name: str, fallback: str) -> str:
+    clean = "".join(" " if char in "/\\" or category(char) in {"Cc", "Cs"} else char for char in name).strip()
+    return clean if clean and clean not in {".", ".."} else fallback
+
+
+def unique_actor_name(name: str, taken: set[str]) -> str:
+    base = " ".join(clean_node_name(name, "角色").split())
+    candidate = base
+    index = 2
+    while candidate in RESERVED_ACTORS or candidate in taken:
+        candidate = f"{base} ({index})"
+        index += 1
+    return candidate
+
+
+def taken_actor_names(group) -> set[str]:
+    nodes = compute_group(group)
+    return {*group.graph.channels, *nodes, *(node.name for node in nodes.values())}
+
+
 def member_from_card(actor: str, card_id: str, card: ParsedCard, note: str) -> CastMember:
     return CastMember(actor=actor, cardId=card_id, card=card.fields.model_copy(update={"first_mes": "", "alternate_greetings": []}),
                       hasPortrait=card.portrait is not None, portrait_rules=rules_for(card.portraits), state_fields=card.state_fields,
@@ -89,14 +114,17 @@ def npc_spec(actor: str) -> dict:
             "system_prompt": "Act as the character using only your own sensory cue and private experience. Return speech, attempted action and private reaction via rp_report_scene once. Do not write the reader's novel. End the turn after reporting."}
 
 
-def cast_recipe(directory: Path, members: list[CastMember]) -> Path:
+def director_recipe(directory: Path, name: str) -> Path:
+    director = {**creature_spec("novel"), "name": name}
+    director["system_prompt"] = "You are the omniscient novelist. Commit directly when no independent NPC proposal is needed. Otherwise dispatch only to characters who can perceive the scene, with a separate perceptual cue for each. End the turn while reports are missing; never invent them. When ready, commit the chapter and state changes once using rp_commit_scene; the host publishes it. Do not open another scene after a delayed notification for a finished scene. Preserve the player's agency and keep private information separate from what each character can know."
+    return write_recipe(directory, director)
+
+
+def write_recipe(directory: Path, spec: dict) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / (uuid4().hex + ".yaml")
-    director = creature_spec("novel")
-    director["system_prompt"] = "You are the omniscient novelist. Commit directly when no independent NPC proposal is needed. Otherwise dispatch only to characters who can perceive the scene, with a separate perceptual cue for each. End the turn while reports are missing; never invent them. When ready, commit the chapter and state changes once using rp_commit_scene; the host publishes it. Do not open another scene after a delayed notification for a finished scene. Preserve the player's agency and keep private information separate from what each character can know."
     with path.open("x", encoding="utf-8") as stream:
-        yaml.safe_dump({"terrarium": {"name": "Roleplay Novel", "root": director, "creatures": [npc_spec(m.actor) for m in members]}},
-                       stream, allow_unicode=True, sort_keys=False)
+        yaml.safe_dump(spec, stream, allow_unicode=True, sort_keys=False)
     return path
 
 
@@ -238,7 +266,9 @@ class NovelBinding:
                          "stateFields": public_fields(member.state_fields, values), "sheet": filter_sheet(sheet, "public").model_dump(),
                          "privateSheet": filter_sheet(sheet, "private").model_dump(), "memory": actor_memory(story, member.actor).model_dump()})
         scene = story.pending
+        context = binding.host_agent.executor._build_tool_context()
         return {"mode": "novel", "active": True, "title": settings.title, "playerMode": settings.playerMode,
+                "rootCreatureId": context.creature_id, "rootName": binding.agent_name,
                 "player": self.player(binding, story), "premise": settings.premise, "sheetHint": settings.sheetHint,
                 "narrator": {"cardId": n.cardId, "name": n.name, "isDefault": n.isDefault,
                              "portraitUrl": DEFAULT_NARRATOR_PORTRAIT_URL if n.isDefault else None} if (n := settings.narrator) else None,

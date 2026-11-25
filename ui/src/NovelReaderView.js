@@ -1,16 +1,18 @@
-import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   ActionButton,
   notify,
   openTab,
   useExtension,
   useOwner,
+  useSession,
 } from "@kohakuterrarium/ui-sdk";
 
 import {
   DEFAULT_MAX_NOVEL_MEDIA_BYTES,
   buildOffsetParagraphs,
   exportNovelMarkdown,
+  findPrivilegedRootCreature,
   normalizeWorldbookDiagnostics,
   normalizeWorldbookEntries,
   projectNovelView,
@@ -50,71 +52,92 @@ function readStoredPrefs(kt) {
   };
 }
 
-function resolveParaDomPoint(paraEl, targetContainer, targetOffset) {
-  const baseStart = Number(paraEl.getAttribute("data-para-start")) || 0;
-  let cursor = baseStart;
-  let resolved = null;
+function resolveArticleSelectionRange(articleEl, range) {
+  if (!articleEl || !range || range.collapsed) return null;
+  const paraEls = [...articleEl.querySelectorAll("[data-para-start]")];
+  if (!paraEls.length) return null;
 
-  function walk(node) {
-    if (resolved !== null) return;
-    if (node.nodeType === 3) {
-      const len = node.nodeValue ? node.nodeValue.length : 0;
-      const previewMark =
-        typeof node.parentElement?.closest === "function"
-          ? node.parentElement.closest("mark.is-preview[data-orig-start][data-orig-end]")
-          : null;
-      if (node === targetContainer) {
-        if (previewMark) {
-          const origStart = Number(previewMark.getAttribute("data-orig-start")) || cursor;
-          const origEnd = Number(previewMark.getAttribute("data-orig-end")) || origStart;
-          const ratio = len > 0 ? Math.max(0, Math.min(1, targetOffset / len)) : 0;
-          resolved = Math.round(origStart + (origEnd - origStart) * ratio);
-        } else {
-          resolved = cursor + Math.max(0, Math.min(len, targetOffset));
+  let minStart = Infinity;
+  let maxEnd = -1;
+
+  for (const paraEl of paraEls) {
+    const baseStart = Number(paraEl.getAttribute("data-para-start")) || 0;
+    let cursor = baseStart;
+
+    const visit = (node) => {
+      if (node.nodeType === 3) {
+        const len = node.nodeValue ? node.nodeValue.length : 0;
+        const previewMark =
+          typeof node.parentElement?.closest === "function"
+            ? node.parentElement.closest("mark.is-preview[data-orig-start][data-orig-end]")
+            : null;
+        if (len > 0) {
+          let c0 = 1;
+          let c1 = -1;
+          try {
+            c0 = range.comparePoint(node, 0);
+            c1 = range.comparePoint(node, len);
+          } catch {
+            c0 = 1;
+            c1 = -1;
+          }
+          if (c0 <= 0 && c1 >= 0) {
+            const localStart =
+              c0 === 0 ? 0 : Math.max(0, Math.min(len, range.startOffset));
+            const localEnd =
+              c1 === 0 ? len : Math.max(0, Math.min(len, range.endOffset));
+            if (localEnd > localStart) {
+              let spanStart;
+              let spanEnd;
+              if (previewMark) {
+                const origStart = Number(previewMark.getAttribute("data-orig-start")) || cursor;
+                const origEnd = Number(previewMark.getAttribute("data-orig-end")) || origStart;
+                spanStart = Math.round(origStart + ((origEnd - origStart) * localStart) / len);
+                spanEnd = Math.round(origStart + ((origEnd - origStart) * localEnd) / len);
+              } else {
+                spanStart = cursor + localStart;
+                spanEnd = cursor + localEnd;
+              }
+              if (spanEnd > spanStart) {
+                minStart = Math.min(minStart, spanStart);
+                maxEnd = Math.max(maxEnd, spanEnd);
+              }
+            }
+          }
+        }
+        if (!previewMark) {
+          cursor += len;
         }
         return;
       }
-      if (!previewMark) {
-        cursor += len;
-      }
-      return;
-    }
 
-    if (node.nodeType === 1) {
-      const isPreviewMark =
-        typeof node.matches === "function" &&
-        node.matches("mark.is-preview[data-orig-start][data-orig-end]");
-      if (node === targetContainer) {
-        const children = node.childNodes;
-        const clamped = Math.max(0, Math.min(children.length, targetOffset));
-        for (let i = 0; i < clamped; i += 1) {
-          walk(children[i]);
-          if (resolved !== null) return;
+      if (node.nodeType === 1) {
+        const isPreviewMark =
+          typeof node.matches === "function" &&
+          node.matches("mark.is-preview[data-orig-start][data-orig-end]");
+        for (let i = 0; i < node.childNodes.length; i += 1) {
+          visit(node.childNodes[i]);
         }
-        resolved = cursor;
-        return;
-      }
-      for (let i = 0; i < node.childNodes.length; i += 1) {
-        walk(node.childNodes[i]);
-        if (resolved !== null) return;
-      }
-      if (isPreviewMark) {
-        const origEnd = Number(node.getAttribute("data-orig-end"));
-        if (Number.isFinite(origEnd)) {
-          cursor = origEnd;
+        if (isPreviewMark) {
+          const origEnd = Number(node.getAttribute("data-orig-end"));
+          if (Number.isFinite(origEnd)) {
+            cursor = origEnd;
+          }
         }
       }
-    }
+    };
+
+    visit(paraEl);
   }
 
-  walk(paraEl);
-  return resolved !== null ? resolved : cursor;
+  return maxEnd > minStart ? { start: minStart, end: maxEnd } : null;
 }
 
 /**
- * Standalone literary Novel Reader workspace tab (`ext:kohaku-roleplay/novel-reader`).
- * Supports both direct `plugin:roleplay` owner binding (scoped/test harnesses)
- * and package-tab live session bridging across active novel terrarium graphs.
+ * Standalone literary Novel Reader workspace tab (`ext:kohaku-roleplay/novel-reader`)
+ * and full-window Teleport reader overlay.
+ * Supports both direct `plugin:roleplay` owner binding and live session bridging
+ * across custom-named privileged root creatures.
  */
 export const NovelReaderView = {
   name: "RoleplayNovelReaderView",
@@ -123,8 +146,15 @@ export const NovelReaderView = {
     PortraitFrame,
     SelectionStudioPanel,
   },
-  setup() {
+  props: {
+    fullscreen: { type: Boolean, default: false },
+    initialSessionId: { type: String, default: "" },
+    initialCreatureId: { type: String, default: "" },
+  },
+  emits: ["close-fullscreen"],
+  setup(props, { emit }) {
     const owner = useOwner("plugin:roleplay");
+    const session = useSession();
     const t = useRoleplayText();
     let kt = null;
     try {
@@ -140,9 +170,10 @@ export const NovelReaderView = {
     const fontFamily = ref(initialPrefs.fontFamily);
     const fontSize = ref(initialPrefs.fontSize);
 
-    // Live session bridge state when mounted as a package-owned workspace tab.
+    // Live session bridge state when mounted as a package-owned tab or NPC-focused overlay.
     const discoveredSessions = ref([]);
-    const activeSessionId = ref("");
+    const activeSessionId = ref(String(props.initialSessionId || ""));
+    const activeCreatureId = ref(String(props.initialCreatureId || ""));
     const bridgedState = ref(null);
     const discovering = ref(false);
     const bridgeError = ref("");
@@ -181,13 +212,25 @@ export const NovelReaderView = {
     let revisionSeq = 0;
     let ownerSocket = null;
     let pollTimer = null;
+    let selectionDebounceTimer = null;
 
-    const isDirectNovelOwner = computed(() => owner.state.value?.mode === "novel");
+    const currentScopeSessionId = computed(() => session.value?.id || "");
+    const targetOverrideMismatch = computed(
+      () =>
+        Boolean(props.initialSessionId) &&
+        Boolean(currentScopeSessionId.value) &&
+        props.initialSessionId !== currentScopeSessionId.value,
+    );
+    const isDirectNovelOwner = computed(
+      () => !targetOverrideMismatch.value && owner.state.value?.mode === "novel",
+    );
     const isPackageOwner = computed(
       () =>
         !isDirectNovelOwner.value &&
         (String(owner.owner || "").startsWith("package:") ||
-          Array.isArray(owner.state.value?.cards)),
+          Array.isArray(owner.state.value?.cards) ||
+          owner.state.value?.mode === "npc" ||
+          Boolean(props.initialSessionId)),
     );
 
     const activeRawState = computed(() => {
@@ -389,27 +432,79 @@ export const NovelReaderView = {
           : null;
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
       const range = sel.getRangeAt(0);
-      if (!stageEl.value.contains(range.commonAncestorContainer)) return;
+      const articles = [...stageEl.value.querySelectorAll("article[data-chapter-number]")];
+      const matches = [];
+      for (const articleEl of articles) {
+        const chNum = Number(articleEl.getAttribute("data-chapter-number"));
+        if (!Number.isInteger(chNum)) continue;
+        const span = resolveArticleSelectionRange(articleEl, range);
+        if (span) {
+          matches.push({ chNum, start: span.start, end: span.end, articleEl });
+        }
+      }
+      if (!matches.length) return;
+      let target = matches[0];
+      if (matches.length > 1) {
+        const startInArticle = matches.find((m) => m.articleEl.contains(range.startContainer));
+        if (!startInArticle) return;
+        target = startInArticle;
+      }
+      lockSelectionSpan(target.chNum, target.start, target.end);
+    }
 
-      const startEl =
-        range.startContainer.nodeType === 1
-          ? range.startContainer
-          : range.startContainer.parentElement;
-      const endEl =
-        range.endContainer.nodeType === 1
-          ? range.endContainer
-          : range.endContainer.parentElement;
-      const startParaEl = startEl?.closest?.("[data-para-start][data-chapter-number]");
-      const endParaEl = endEl?.closest?.("[data-para-start][data-chapter-number]");
-      if (!startParaEl || !endParaEl) return;
-
-      const chNum = Number(startParaEl.getAttribute("data-chapter-number"));
-      if (!Number.isInteger(chNum) || Number(endParaEl.getAttribute("data-chapter-number")) !== chNum) {
+    function onDocumentMouseUp(event) {
+      const target = event?.target;
+      if (
+        target &&
+        typeof target.closest === "function" &&
+        target.closest('[data-testid="kt-rp-selection-studio"]')
+      ) {
         return;
       }
-      const rawStart = resolveParaDomPoint(startParaEl, range.startContainer, range.startOffset);
-      const rawEnd = resolveParaDomPoint(endParaEl, range.endContainer, range.endOffset);
-      lockSelectionSpan(chNum, rawStart, rawEnd);
+      if (selectionDebounceTimer !== null) {
+        clearTimeout(selectionDebounceTimer);
+      }
+      selectionDebounceTimer = setTimeout(() => {
+        selectionDebounceTimer = null;
+        if (!unmounted) {
+          handleStageSelection();
+        }
+      }, 0);
+    }
+
+    function onDocumentKeyUp(event) {
+      const target = event?.target;
+      if (
+        target &&
+        typeof target.closest === "function" &&
+        target.closest('[data-testid="kt-rp-selection-studio"]')
+      ) {
+        return;
+      }
+      if (event?.key === "Shift" || String(event?.key || "").startsWith("Arrow")) {
+        handleStageSelection();
+      }
+    }
+
+    function onDocumentKeyDown(event) {
+      if (!props.fullscreen || event?.key !== "Escape") return;
+      if (selectionLock.value) {
+        clearSelectionStudio();
+        return;
+      }
+      if (rewriteDrawerOpen.value) {
+        rewriteDrawerOpen.value = false;
+        return;
+      }
+      if (inspectedWorldbook.value || worldbookError.value) {
+        closeWorldbookInspector();
+        return;
+      }
+      emit("close-fullscreen");
+    }
+
+    function closeFullscreen() {
+      emit("close-fullscreen");
     }
 
     function clearSelectionStudio() {
@@ -564,7 +659,8 @@ export const NovelReaderView = {
       }
     }
 
-    async function fetchBridgedRootState(sessionId) {
+    async function fetchBridgedRootState(sessionId, creatureId) {
+      const targetCreature = creatureId || "root";
       if (!kt?.api?.request || !sessionId) return null;
       const resp = await kt.api.request({
         method: "POST",
@@ -572,7 +668,7 @@ export const NovelReaderView = {
         data: {
           owner: "plugin:roleplay",
           session_id: sessionId,
-          creature_id: "root",
+          creature_id: targetCreature,
         },
       });
       return resp?.data?.state || null;
@@ -580,13 +676,21 @@ export const NovelReaderView = {
 
     async function refreshBridgedState() {
       const sid = activeSessionId.value;
+      const cid = activeCreatureId.value;
       if (unmounted || !sid || isDirectNovelOwner.value || !kt?.api?.request) return;
+      if (!cid) {
+        await discoverNovelSessions();
+        return;
+      }
       const seq = ++stateFetchSeq;
       try {
-        const nextState = await fetchBridgedRootState(sid);
+        const nextState = await fetchBridgedRootState(sid, cid);
         if (unmounted || seq !== stateFetchSeq || activeSessionId.value !== sid) return;
         if (nextState?.mode === "novel") {
           bridgedState.value = nextState;
+          if (typeof nextState.rootCreatureId === "string" && nextState.rootCreatureId) {
+            activeCreatureId.value = nextState.rootCreatureId;
+          }
           bridgeError.value = "";
         }
       } catch (err) {
@@ -596,8 +700,9 @@ export const NovelReaderView = {
       }
     }
 
-    function connectOwnerSocket(sessionId) {
+    function connectOwnerSocket(sessionId, creatureId) {
       closeSocket();
+      const targetCreature = creatureId || "root";
       if (
         unmounted ||
         !sessionId ||
@@ -625,7 +730,7 @@ export const NovelReaderView = {
               id: "kt-rp-reader",
               owner: "plugin:roleplay",
               session_id: sessionId,
-              creature_id: "root",
+              creature_id: targetCreature,
             }),
           );
         } catch {
@@ -652,57 +757,119 @@ export const NovelReaderView = {
       };
     }
 
+    async function fetchFullSessionDetail(listing) {
+      if (!listing || typeof listing !== "object" || !listing.session_id) return null;
+      if (Array.isArray(listing.creatures)) return listing;
+      try {
+        const resp = await kt.api.request({
+          method: "GET",
+          url: `../../sessions/active/${encodeURIComponent(listing.session_id)}`,
+        });
+        if (resp?.data && typeof resp.data === "object") {
+          return resp.data;
+        }
+      } catch {
+        // Ignore unavailable session details.
+      }
+      return null;
+    }
+
     async function discoverNovelSessions() {
       if (unmounted || isDirectNovelOwner.value || !kt?.api?.request) return;
       const seq = ++discoverSeq;
       discovering.value = true;
       bridgeError.value = "";
       try {
-        const resp = await kt.api.request({
-          method: "GET",
-          url: "../../sessions/active",
-        });
-        if (unmounted || seq !== discoverSeq) return;
-        const rows = Array.isArray(resp?.data) ? resp.data : [];
-        const candidates = rows.filter((sess) => {
-          if (!sess || typeof sess !== "object" || !sess.session_id) return false;
-          if (sess.has_root) return true;
-          const creatures = Array.isArray(sess.creatures) ? sess.creatures : [];
-          return creatures.some((c) => c?.name === "root" || c?.creature_id === "root");
-        });
+        let novelList = [];
+        const targetSid = String(props.initialSessionId || activeSessionId.value || "");
+        const targetCid = String(props.initialCreatureId || activeCreatureId.value || "");
 
-        const probed = await Promise.all(
-          candidates.map(async (sess) => {
-            try {
-              const st = await fetchBridgedRootState(sess.session_id);
-              if (st?.mode === "novel" && st?.active) {
-                return {
-                  sessionId: sess.session_id,
-                  label: st.title || sess.name || sess.session_id,
-                  state: st,
-                };
-              }
-            } catch {
-              // Ignore non-novel or unloaded root creatures.
+        if (targetSid && targetCid) {
+          try {
+            const directState = await fetchBridgedRootState(targetSid, targetCid);
+            if (directState?.mode === "novel" && directState?.active) {
+              const resolvedCid =
+                (typeof directState.rootCreatureId === "string" && directState.rootCreatureId) ||
+                targetCid;
+              activeSessionId.value = targetSid;
+              activeCreatureId.value = resolvedCid;
+              bridgedState.value = directState;
+              connectOwnerSocket(targetSid, resolvedCid);
             }
-            return null;
-          }),
-        );
-        if (unmounted || seq !== discoverSeq) return;
-        const novelList = probed.filter(Boolean);
-        discoveredSessions.value = novelList;
+          } catch {
+            // Continue with active session list discovery below.
+          }
+        }
 
-        const existing = novelList.find((item) => item.sessionId === activeSessionId.value);
-        const chosen = existing || novelList[0] || null;
-        if (chosen) {
-          const changed = activeSessionId.value !== chosen.sessionId;
+        try {
+          const resp = await kt.api.request({
+            method: "GET",
+            url: "../../sessions/active",
+          });
+          if (unmounted || seq !== discoverSeq) return;
+          const rows = Array.isArray(resp?.data) ? resp.data : [];
+          const details = await Promise.all(rows.map((sess) => fetchFullSessionDetail(sess)));
+          if (unmounted || seq !== discoverSeq) return;
+
+          const candidates = details.filter(
+            (sess) =>
+              sess &&
+              typeof sess === "object" &&
+              Boolean(sess.session_id) &&
+              Array.isArray(sess.creatures) &&
+              sess.creatures.length > 0,
+          );
+
+          const probed = await Promise.all(
+            candidates.map(async (sess) => {
+              const rootInfo = findPrivilegedRootCreature(sess.creatures);
+              const candidateCid = rootInfo.creatureId || "root";
+              try {
+                const st = await fetchBridgedRootState(sess.session_id, candidateCid);
+                if (st?.mode === "novel" && st?.active) {
+                  const resolvedCid =
+                    (typeof st.rootCreatureId === "string" && st.rootCreatureId) ||
+                    candidateCid;
+                  return {
+                    sessionId: sess.session_id,
+                    creatureId: resolvedCid,
+                    label: st.title || sess.name || sess.session_id,
+                    state: st,
+                  };
+                }
+              } catch {
+                // Ignore non-novel or unloaded root creatures.
+              }
+              return null;
+            }),
+          );
+          if (unmounted || seq !== discoverSeq) return;
+          novelList = probed.filter(Boolean);
+        } catch (listErr) {
+          if (!bridgedState.value) {
+            throw listErr;
+          }
+        }
+
+        if (unmounted || seq !== discoverSeq) return;
+        if (novelList.length) {
+          discoveredSessions.value = novelList;
+          const preferredSid = String(props.initialSessionId || activeSessionId.value || "");
+          const existing = novelList.find((item) => item.sessionId === preferredSid);
+          const chosen = existing || novelList[0];
+          const changed =
+            activeSessionId.value !== chosen.sessionId ||
+            activeCreatureId.value !== chosen.creatureId;
           activeSessionId.value = chosen.sessionId;
+          activeCreatureId.value = chosen.creatureId;
           bridgedState.value = chosen.state;
           if (changed || !ownerSocket) {
-            connectOwnerSocket(chosen.sessionId);
+            connectOwnerSocket(chosen.sessionId, chosen.creatureId);
           }
-        } else {
+        } else if (!bridgedState.value) {
+          discoveredSessions.value = [];
           activeSessionId.value = "";
+          activeCreatureId.value = "";
           bridgedState.value = null;
           closeSocket();
         }
@@ -723,6 +890,7 @@ export const NovelReaderView = {
       activeSessionId.value = nextId;
       const hit = discoveredSessions.value.find((item) => item.sessionId === nextId);
       if (hit) {
+        activeCreatureId.value = hit.creatureId || "root";
         bridgedState.value = hit.state;
       }
       inspectedWorldbook.value = null;
@@ -731,7 +899,7 @@ export const NovelReaderView = {
       selectionPreviewText.value = null;
       rewriteDrawerOpen.value = false;
       rewriteError.value = "";
-      connectOwnerSocket(nextId);
+      connectOwnerSocket(nextId, activeCreatureId.value);
       void refreshBridgedState();
     }
 
@@ -744,6 +912,7 @@ export const NovelReaderView = {
         return res;
       }
       const sid = activeSessionId.value;
+      const cid = activeCreatureId.value || "root";
       if (!kt?.api?.request || !sid) {
         throw new Error(t("novelPendingIntegration"));
       }
@@ -753,7 +922,7 @@ export const NovelReaderView = {
         data: {
           owner: "plugin:roleplay",
           session_id: sid,
-          creature_id: "root",
+          creature_id: cid,
           action,
           args,
         },
@@ -764,6 +933,21 @@ export const NovelReaderView = {
       }
       return result;
     }
+
+    watch(
+      () => [props.initialSessionId, props.initialCreatureId],
+      ([nextSid, nextCid]) => {
+        if (nextSid) {
+          activeSessionId.value = nextSid;
+        }
+        if (nextCid) {
+          activeCreatureId.value = nextCid;
+        }
+        if (!isDirectNovelOwner.value && (nextSid || isPackageOwner.value)) {
+          void discoverNovelSessions();
+        }
+      },
+    );
 
     watch(
       () => [isDirectNovelOwner.value, owner.status.value],
@@ -809,6 +993,26 @@ export const NovelReaderView = {
     if (typeof window !== "undefined") {
       window.addEventListener("focus", onVisibilityFocus);
     }
+
+    onMounted(() => {
+      if (typeof document !== "undefined") {
+        document.addEventListener("mouseup", onDocumentMouseUp);
+        document.addEventListener("keyup", onDocumentKeyUp);
+        document.addEventListener("keydown", onDocumentKeyDown);
+      }
+    });
+
+    onBeforeUnmount(() => {
+      if (selectionDebounceTimer !== null) {
+        clearTimeout(selectionDebounceTimer);
+        selectionDebounceTimer = null;
+      }
+      if (typeof document !== "undefined") {
+        document.removeEventListener("mouseup", onDocumentMouseUp);
+        document.removeEventListener("keyup", onDocumentKeyUp);
+        document.removeEventListener("keydown", onDocumentKeyDown);
+      }
+    });
 
     onUnmounted(() => {
       unmounted = true;
@@ -983,6 +1187,7 @@ export const NovelReaderView = {
     }
 
     return {
+      props,
       owner,
       t,
       tocOpen,
@@ -1040,6 +1245,7 @@ export const NovelReaderView = {
       toggleRewriteDrawer,
       selectSceneVariant,
       submitSceneRewrite,
+      closeFullscreen,
       actorDisplayName,
       formatActorsList,
       chapterHeadingLabel,
@@ -1224,6 +1430,16 @@ export const NovelReaderView = {
             @click="exportMarkdown"
           >
             {{ t('novelReaderExportMd') }}
+          </ActionButton>
+
+          <ActionButton
+            v-if="props.fullscreen"
+            size="sm"
+            variant="primary"
+            data-testid="kt-rp-reader-close-fullscreen"
+            @click="closeFullscreen"
+          >
+            {{ t('novelReaderCloseFullscreenBtn') }}
           </ActionButton>
         </div>
       </header>
@@ -1450,8 +1666,6 @@ export const NovelReaderView = {
             class="ktrp-reader-stage"
             :style="{ '--ktrp-reader-font-size': fontSize + 'px' }"
             data-testid="kt-rp-reader-stage"
-            @mouseup="handleStageSelection"
-            @keyup="handleStageSelection"
           >
             <div class="ktrp-reader-page">
               <div
@@ -1650,21 +1864,34 @@ export const NovelReaderView = {
                 </figure>
 
                 <div class="ktrp-reader-prose">
-                  <p
+                  <div
                     v-for="(para, pIdx) in chapterParagraphs(ch)"
                     :key="ch.number + '-' + para.start + '-' + pIdx"
-                    class="ktrp-reader-paragraph"
-                    :data-chapter-number="ch.number"
-                    :data-para-start="para.start"
-                    :data-para-end="para.end"
-                  ><template v-for="(seg, sIdx) in paragraphSegments(ch, para)" :key="sIdx"><mark
-                    v-if="seg.kind === 'mark'"
-                    class="ktrp-reader-selection-mark"
-                    :class="{ 'is-preview': seg.isPreview }"
-                    :data-orig-start="seg.origStart"
-                    :data-orig-end="seg.origEnd"
-                    data-testid="kt-rp-reader-selection-mark"
-                  >{{ seg.text }}</mark><template v-else>{{ seg.text }}</template></template></p>
+                    class="ktrp-reader-para-row"
+                  >
+                    <p
+                      class="ktrp-reader-paragraph ktrp-reader-para"
+                      :data-chapter-number="ch.number"
+                      :data-para-start="para.start"
+                      :data-para-end="para.end"
+                    ><template v-for="(seg, sIdx) in paragraphSegments(ch, para)" :key="sIdx"><mark
+                      v-if="seg.kind === 'mark'"
+                      class="ktrp-reader-selection-mark"
+                      :class="{ 'is-preview': seg.isPreview }"
+                      :data-orig-start="seg.origStart"
+                      :data-orig-end="seg.origEnd"
+                      data-testid="kt-rp-reader-selection-mark"
+                    >{{ seg.text }}</mark><template v-else>{{ seg.text }}</template></template></p>
+                    <button
+                      v-if="!composerLocked"
+                      type="button"
+                      class="ktrp-para-quick-select"
+                      data-testid="kt-rp-para-quick-select"
+                      @click.stop="lockSelectionSpan(ch.number, para.start, para.end)"
+                    >
+                      {{ t('novelParaQuickSelectBtn') }}
+                    </button>
+                  </div>
                 </div>
               </article>
 

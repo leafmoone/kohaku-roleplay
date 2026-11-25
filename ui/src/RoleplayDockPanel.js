@@ -13,6 +13,7 @@ import {
 import {
   collectGreetings,
   extractSafePersonaDraft,
+  findPrivilegedRootCreature,
   normalizeStateFields,
   normalizeWorldbookDiagnostics,
   normalizeWorldbookEntries,
@@ -23,9 +24,11 @@ import { CardWebPanel } from "./CardWebPanel.js";
 import { CharacterSheetView } from "./CharacterSheetView.js";
 import { MvuPanel } from "./MvuPanel.js";
 import { NativePanels } from "./NativePanels.js";
+import { NovelReaderModalHost } from "./NovelReaderModalHost.js";
 import { PortraitFrame } from "./PortraitFrame.js";
 import { RoleplayHeaderSummary } from "./RoleplayHeaderSummary.js";
 import { StateFieldsView } from "./StateFieldsView.js";
+import { allocateOverlayHostId, openNovelReaderModal } from "./readerState.js";
 import { useRoleplayText } from "./strings.js";
 
 const WORLDBOOK_ISSUE_KEYS = {
@@ -62,6 +65,7 @@ export const RoleplayDockPanel = {
     CharacterSheetView,
     MvuPanel,
     NativePanels,
+    NovelReaderModalHost,
     PortraitFrame,
     RoleplayHeaderSummary,
     StateFieldsView,
@@ -71,6 +75,7 @@ export const RoleplayDockPanel = {
     const session = useSession();
     const creature = useCreature();
     const t = useRoleplayText();
+    const overlayHostId = allocateOverlayHostId();
     let kt = null;
     try {
       kt = useExtension();
@@ -1047,11 +1052,15 @@ export const RoleplayDockPanel = {
     }
 
     function openNovelReaderTab() {
-      try {
-        openTab("kohaku-roleplay/novel-reader");
-      } catch {
-        openLibraryTab();
-      }
+      const sid = session.value?.id || "";
+      const rawCreatures =
+        session.value?.instance?.creatures || session.value?.creatures || [];
+      const privileged = findPrivilegedRootCreature(rawCreatures);
+      const rootCid =
+        (typeof state.value.rootCreatureId === "string" && state.value.rootCreatureId) ||
+        privileged.creatureId ||
+        "";
+      openNovelReaderModal(sid, rootCid, overlayHostId);
     }
 
     function openLibrarySettings() {
@@ -1065,6 +1074,7 @@ export const RoleplayDockPanel = {
     return {
       owner,
       t,
+      overlayHostId,
       state,
       mode,
       active,
@@ -2461,6 +2471,7 @@ export const RoleplayDockPanel = {
           </div>
         </section>
       </template>
+      <NovelReaderModalHost :host-id="overlayHostId" />
     </div>
   `,
 };

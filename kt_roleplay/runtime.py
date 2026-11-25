@@ -113,7 +113,7 @@ from .projections import (
     tavern_outlets,
 )
 from .recovery import resume_scene
-from .scene_tools import ingest_report
+from .scene_tools import ingest_report, resolve_story_director
 from .script_session import (
     ScriptSession,
     approved,
@@ -283,7 +283,7 @@ class RoleplayPlugin(BasePlugin):
                 group = resolve_group_context(self.binding.host_agent.executor._build_tool_context(), require_privileged=False)
                 channel = group.engine.channel(group.caller.graph_id, self.binding.agent_name)
                 message_id = event.context.get("message_id")
-                director = resolve_group_target(group, "root")
+                director = resolve_story_director(group)
                 sender_id = director.creature_id
                 # ChannelTrigger exposes the message ID, but not the stable sender ID.
                 if channel is None or not any(message.message_id == message_id and message.sender_id == sender_id
@@ -304,7 +304,7 @@ class RoleplayPlugin(BasePlugin):
 
     def watch_reports(self, context) -> None:
         group = resolve_group_context(context, require_privileged=False)
-        if not self.binding or resolve_group_target(group, "root").agent is not self.binding.host_agent:
+        if not self.binding or resolve_story_director(group).agent is not self.binding.host_agent:
             raise ValueError("Reports must be collected by this graph's director")
         channel = context.environment.shared_channels.get("report_to_root")
         if channel is None:

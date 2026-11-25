@@ -51,10 +51,10 @@ def materialize_image(binding, members: list[CastMember], story: Story, outcome:
             if actors and member.actor not in actors:
                 continue
             selected = chosen_key(member.scene_media_rules, member.state_fields, story.card_values.get(member.actor, {}))
+            asset = next((asset for asset in member.media if asset.key == selected), None)
         else:
-            actor, _, key = explicit.partition(":")
-            selected = key if actor == member.actor else None
-        if asset := next((asset for asset in member.media if asset.key == selected), None):
+            asset = next((asset for asset in member.media if f"{member.actor}:{asset.key}" == explicit), None)
+        if asset is not None:
             return save_scene_image(library_dir(), member.cardId, asset, binding.session_store)
     if explicit:
         for row in media_pool(binding, []):

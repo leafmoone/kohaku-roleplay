@@ -9,17 +9,24 @@ from kohakuterrarium.api.auth.dependencies import get_auth_config
 from kohakuterrarium.api.ext import current_service, require_admin, studio
 from kohakuterrarium.core.events import TriggerEvent
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError
+from kohakuterrarium.studio.sessions.lifecycle import rename_session
 from kohakuterrarium.studio.studio import Studio
 from kohakuterrarium.terrarium import LocalTerrariumService, TerrariumService
+from kohakuterrarium.terrarium.creature.ops import wire_creature_on_engine
+from kohakuterrarium.terrarium.tools.context import resolve_group_context
 from pydantic import Field
 
 from .cast import (
+    RESERVED_ACTORS,
     NovelSettings,
     WorldbookSnapshot,
-    cast_recipe,
-    initialize_npc,
+    clean_node_name,
+    director_recipe,
     member_from_card,
+    taken_actor_names,
+    unique_actor_name,
 )
+from .cast_tools import add_cast_node
 from .charx import read_charx_image
 from .default_narrator import (
     DEFAULT_NARRATOR_ASSET,
@@ -129,7 +136,10 @@ async def novel_media(session_id: str, actor: str, key: str, host: StudioDep) ->
 async def start_novel(body: NovelStart, host: StudioDep, service: ServiceDep) -> dict[str, str]:
     directory = library_dir()
     cards = [(key, _library_card(key)) for key in body.cardIds]
-    members = [member_from_card(f"npc_{index}", key, card, "") for index, (key, card) in enumerate(cards, 1)]
+    player_name = body.playerName.strip() or "主角"
+    root_name = "旁白视角" if body.playerMode == "director" else clean_node_name(player_name, "主角")
+    if root_name in RESERVED_ACTORS:
+        root_name += " (主角)"
     books = []
     try:
         for key in dict.fromkeys(body.worldbookIds):
@@ -150,49 +160,57 @@ async def start_novel(body: NovelStart, host: StudioDep, service: ServiceDep) ->
         narrator = card_voice(narrator_id, _library_card(narrator_id).fields)
     style_id = body.styleCardId
     style = card_voice(style_id, _library_card(style_id).fields) if style_id else None
-    settings = NovelSettings(title=body.name or "Roleplay Novel", playerMode=body.playerMode,
-                            playerName=body.playerName.strip() or "Player", playerPersona=body.playerPersona,
+    settings = NovelSettings(title=(body.name or "").strip() or "Roleplay Novel", playerMode=body.playerMode,
+                            playerName=player_name, playerPersona=body.playerPersona,
                             premise=body.premise, sheetHint=body.sheetHint, narrator=narrator, style=style, includeCardLore=body.includeCardLore)
-    sheets = {m.actor: sheet_from_fields(m.state_fields, {}) for m in members}
-    if body.playerMode == "protagonist":
-        sheets[PLAYER] = CharacterSheet()
-    chapters = [Chapter(number=0, title=body.prologueTitle or "Prologue", prose=body.prologueText)] if body.prologueText else []
-    story = Story(cast=[m.actor for m in members], sheets=sheets, playerMode=body.playerMode,
-                  latest_prose=body.prologueText, chapters=chapters)
-    recipe = cast_recipe(directory / "recipes", members)
+    recipes = [director_recipe(directory / "recipes", root_name)]
     try:
-        session = await host.sessions.start_terrarium(recipe, name=body.name or "Roleplay Novel")
-    except Exception:
-        recipe.unlink()
+        session = await host.sessions.start_creature(recipes[0], name=root_name)
+    except BaseException:
+        recipes[0].unlink(missing_ok=True)
         raise
     sid = session.session_id
     try:
-        root = host.sessions.find_creature(sid, "root")
+        root = host.sessions.find_creature(sid, session.creatures[0]["creature_id"])
         plugin = root.agent.plugins.get_plugin("roleplay")
         if not isinstance(plugin, RoleplayPlugin) or plugin.mode != "novel":
             raise OwnerArgumentError("Director was not loaded on the novel root")
         if plugin.binding is None or plugin.binding.session_store is None:
             raise OwnerArgumentError("Director has no persistent session")
+        group = resolve_group_context(root.agent.executor._build_tool_context())
+        engine = group.engine
+        await engine.add_channel(sid, "report_to_root", description="NPC scene reports")
+        wire_creature_on_engine(engine, sid, root.creature_id, "report_to_root", "listen", enabled=True)
+        taken = taken_actor_names(group)
+        members = []
+        for key, card in cards:
+            actor = unique_actor_name(card.fields.name, taken)
+            taken.add(actor)
+            members.append(member_from_card(actor, key, card, ""))
+        sheets = {m.actor: sheet_from_fields(m.state_fields, {}) for m in members}
+        if body.playerMode == "protagonist":
+            sheets[PLAYER] = CharacterSheet()
+        chapters = [Chapter(number=0, title=body.prologueTitle or "Prologue", prose=body.prologueText)] if body.prologueText else []
+        story = Story(cast=[m.actor for m in members], sheets=sheets, playerMode=body.playerMode,
+                      latest_prose=body.prologueText, chapters=chapters)
+        for member in members:
+            _, recipe = await add_cast_node(engine, root, plugin.binding, member, story)
+            recipes.append(recipe)
+        await engine.checkpoint_graph(sid)
+        rename_session(service, sid, settings.title)
         plugin.binding.set_state("cast", [member.model_dump() for member in members])
         plugin.binding.set_state("novelSettings", settings.model_dump())
         plugin.binding.set_state("narrator", narrator.model_dump() if narrator else None)
         plugin.binding.set_state("novelWorldbooks", [book.model_dump() for book in books])
         plugin.save_story(story)
-        for member in members:
-            npc = host.sessions.find_creature(sid, member.actor)
-            actor_plugin = npc.agent.plugins.get_plugin("roleplay")
-            if not isinstance(actor_plugin, RoleplayPlugin) or actor_plugin.mode != "npc":
-                raise OwnerArgumentError(f"NPC roleplay plugin missing: {member.actor}")
-            if actor_plugin.binding is None or actor_plugin.binding.session_store is None:
-                raise OwnerArgumentError(f"NPC has no persistent session: {member.actor}")
-            initialize_npc(actor_plugin.binding, member, story)
-            await service.wire_creature(sid, root.creature_id, member.actor, "send", enabled=True)
         if chapters:
             await plugin.publish_opening(body.prologueText)
         elif body.prologuePrompt:
             plugin.can_open_scene = True
             await root.agent.inject_event(TriggerEvent(type="roleplay_opening", content=f"Opening scene request:\n{body.prologuePrompt}"))
-        return {"sessionId": sid, "creatureId": root.creature_id}
-    except Exception:
+        return {"sessionId": sid, "creatureId": root.creature_id, "rootCreatureId": root.creature_id, "rootName": root.name}
+    except BaseException:
         await host.sessions.end(sid)
+        for recipe in recipes:
+            recipe.unlink(missing_ok=True)
         raise

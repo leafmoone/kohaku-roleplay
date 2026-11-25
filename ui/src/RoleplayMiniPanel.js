@@ -9,13 +9,16 @@ import {
 
 import { CardWebPanel } from "./CardWebPanel.js";
 import { CharacterSheetView } from "./CharacterSheetView.js";
+import { NovelReaderModalHost } from "./NovelReaderModalHost.js";
 import {
+  findPrivilegedRootCreature,
   normalizeActorMemory,
   normalizeSheet,
   normalizeStateFields,
   projectNovelView,
 } from "./helpers.js";
 import { usePlayWindow } from "./playWindow.js";
+import { allocateOverlayHostId, openNovelReaderModal } from "./readerState.js";
 import { useRoleplayText } from "./strings.js";
 
 const MAX_FALLBACK_SUMMARY_ITEMS = 8;
@@ -261,12 +264,14 @@ export const RoleplayMiniPanel = {
     ActionButton,
     CardWebPanel,
     CharacterSheetView,
+    NovelReaderModalHost,
   },
   setup() {
     const owner = useOwner();
     const session = useSession();
     const creature = useCreature();
     const t = useRoleplayText();
+    const overlayHostId = allocateOverlayHostId();
 
     const rootEl = ref(null);
     const {
@@ -734,6 +739,18 @@ export const RoleplayMiniPanel = {
       }
     }
 
+    function openNovelReader() {
+      const sid = session.value?.id || "";
+      const rawCreatures =
+        session.value?.instance?.creatures || session.value?.creatures || [];
+      const privileged = findPrivilegedRootCreature(rawCreatures);
+      const rootCid =
+        (typeof state.value.rootCreatureId === "string" && state.value.rootCreatureId) ||
+        privileged.creatureId ||
+        "";
+      openNovelReaderModal(sid, rootCid, overlayHostId);
+    }
+
     function itemTestId(id) {
       return `kt-rp-mini-summary-item-${encodeURIComponent(id)}`;
     }
@@ -745,6 +762,7 @@ export const RoleplayMiniPanel = {
     return {
       owner,
       t,
+      overlayHostId,
       rootEl,
       playWindowIsPhone,
       playWindowExpanded,
@@ -786,6 +804,7 @@ export const RoleplayMiniPanel = {
       resumePendingScene,
       uploadActorPortrait,
       saveCastMemberToLibrary,
+      openNovelReader,
       itemTestId,
       detailTestId,
     };
@@ -821,15 +840,27 @@ export const RoleplayMiniPanel = {
           data-testid="kt-rp-mini-char-name"
         >{{ headerTitle }}</strong>
         <span v-else class="ktrp-muted" />
-        <ActionButton
-          size="sm"
-          variant="ghost"
-          :aria-expanded="String(playWindowExpanded)"
-          data-testid="kt-rp-play-window-toggle"
-          @click="toggleWindowExpand"
-        >
-          {{ playWindowExpanded ? t('playWindowRestoreBtn') : t('playWindowExpandBtn') }}
-        </ActionButton>
+        <div class="ktrp-inline-actions">
+          <ActionButton
+            v-if="isActiveNovel || isActiveNpc"
+            size="sm"
+            variant="primary"
+            icon="i-carbon-book"
+            data-testid="kt-rp-play-open-reader"
+            @click="openNovelReader"
+          >
+            {{ t('novelOpenReaderBtn') }}
+          </ActionButton>
+          <ActionButton
+            size="sm"
+            variant="ghost"
+            :aria-expanded="String(playWindowExpanded)"
+            data-testid="kt-rp-play-window-toggle"
+            @click="toggleWindowExpand"
+          >
+            {{ playWindowExpanded ? t('playWindowRestoreBtn') : t('playWindowExpandBtn') }}
+          </ActionButton>
+        </div>
       </div>
 
       <div
@@ -1152,6 +1183,7 @@ export const RoleplayMiniPanel = {
         data-testid="kt-rp-play-resize-handle"
         @pointerdown="startPlayWindowResize"
       />
+      <NovelReaderModalHost :host-id="overlayHostId" />
     </div>
   `,
 };

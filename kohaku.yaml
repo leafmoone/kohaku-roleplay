@@ -27,6 +27,7 @@ ui:
     - {kind: tab, id: studio, label: Roleplay Library, owner: package, icon: i-carbon-book}
     - {kind: tab, id: worldbooks, label: Worldbook Library, owner: package, icon: i-carbon-notebook}
     - {kind: tab, id: novel-reader, label: Novel Reader, owner: package, icon: i-carbon-book}
+    - {kind: panel, id: novel-book, label: Novel Reader, owner: 'plugin:roleplay', icon: i-carbon-book, dock: true}
     - {kind: panel, id: roleplay, label: role, owner: 'plugin:roleplay', icon: i-carbon-user-avatar, dock: true}
     - {kind: panel, id: gameplay, label: Play, owner: 'plugin:roleplay', icon: i-carbon-play, dock: true}
     - {kind: message-renderer, id: choices, label: Roleplay Choices, owner: 'plugin:roleplay', renderer: kt_roleplay.choices}

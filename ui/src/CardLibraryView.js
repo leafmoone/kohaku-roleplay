@@ -24,8 +24,10 @@ import {
 } from "./helpers.js";
 import { CardCopyEditor } from "./CardCopyEditor.js";
 import { CardMediaGallery } from "./CardMediaGallery.js";
+import { NovelReaderModalHost } from "./NovelReaderModalHost.js";
 import { PortraitFrame } from "./PortraitFrame.js";
 import { PortraitRuleEditor } from "./PortraitRuleEditor.js";
+import { allocateOverlayHostId, openNovelReaderModal } from "./readerState.js";
 import { useRoleplayText } from "./strings.js";
 
 /**
@@ -138,6 +140,7 @@ export const CardLibraryView = {
     CardCopyEditor,
     PortraitRuleEditor,
     CardMediaGallery,
+    NovelReaderModalHost,
   },
   props: {
     mode: { type: String, default: "settings" },
@@ -146,6 +149,7 @@ export const CardLibraryView = {
     const owner = useOwner();
     const kt = useExtension();
     const t = useRoleplayText();
+    const overlayHostId = allocateOverlayHostId();
 
     const fileInput = ref(null);
     const query = ref("");
@@ -198,7 +202,8 @@ export const CardLibraryView = {
     const novelCastIds = ref([]);
     const novelTitle = ref("");
     const novelPlayerMode = ref("protagonist");
-    const novelPlayerName = ref("Player");
+    const novelPlayerName = ref(t("novelDefaultPlayerName"));
+    const novelPlayerNameDirty = ref(false);
     const novelPlayerPersona = ref("");
     const novelNarratorCardId = ref("__default__");
     const novelStyleCardId = ref("");
@@ -550,12 +555,22 @@ export const CardLibraryView = {
       }
     }
 
+    watch(
+      () => t("novelDefaultPlayerName"),
+      (nextDefault) => {
+        if (!novelPlayerNameDirty.value) {
+          novelPlayerName.value = nextDefault;
+        }
+      },
+    );
+
     function openNovelReaderTab() {
-      try {
-        openTab("kohaku-roleplay/novel-reader");
-      } catch (err) {
-        actionError.value = err?.message || String(err);
-      }
+      const sid = launchedSession.value?.kind === "novel" ? launchedSession.value.sessionId : "";
+      const cid =
+        launchedSession.value?.kind === "novel"
+          ? launchedSession.value.rootCreatureId || launchedSession.value.creatureId || ""
+          : "";
+      openNovelReaderModal(sid, cid, overlayHostId);
     }
 
     function assetIssueDisplayLabel(issue) {
@@ -1293,13 +1308,20 @@ export const CardLibraryView = {
       try {
         const resp = await kt.api.post("novels", payload);
         const data = resp?.data || resp || {};
+        const sessionId = data.sessionId || "";
+        const rootCreatureId = data.rootCreatureId || data.creatureId || "";
         launchedSession.value = {
           kind: "novel",
-          sessionId: data.sessionId || "",
-          creatureId: data.creatureId || "",
+          sessionId,
+          creatureId: data.creatureId || rootCreatureId,
+          rootCreatureId,
+          rootName: data.rootName || "",
           label: payload.name,
         };
         notify(t("launchCreatedToast"), "success");
+        if (sessionId) {
+          openNovelReaderModal(sessionId, rootCreatureId, overlayHostId);
+        }
       } catch (err) {
         actionError.value = err?.response?.data?.detail || err?.message || String(err);
       } finally {
@@ -1352,6 +1374,7 @@ export const CardLibraryView = {
       props,
       owner,
       t,
+      overlayHostId,
       fileInput,
       query,
       selectedId,
@@ -1458,6 +1481,7 @@ export const CardLibraryView = {
       novelTitle,
       novelPlayerMode,
       novelPlayerName,
+      novelPlayerNameDirty,
       novelPlayerPersona,
       novelNarratorCardId,
       novelStyleCardId,
@@ -3079,7 +3103,9 @@ export const CardLibraryView = {
                 type="text"
                 class="ktrp-input"
                 maxlength="80"
+                :placeholder="t('novelDefaultPlayerName')"
                 data-testid="kt-rp-novel-player-name"
+                @input="novelPlayerNameDirty = true"
               />
             </div>
             <div class="ktrp-field-block">
@@ -3342,6 +3368,7 @@ export const CardLibraryView = {
           <SettingsRow :title="t('modeNovel')" :hint="t('usageGuideNovel')" />
         </SettingsGroup>
       </template>
+      <NovelReaderModalHost :host-id="overlayHostId" />
     </section>
   `,
 };

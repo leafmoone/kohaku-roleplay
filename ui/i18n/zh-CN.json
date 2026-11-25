@@ -612,5 +612,12 @@
   "novelStyleTaggedBadge": "{name} [文风卡]",
   "novelStyleCardBadge": "文风：{name}",
   "novelDefaultNarratorBadge": "旁白：{name}（默认）",
-  "novelNoNarratorBadge": "未挂载旁白卡"
+  "novelNoNarratorBadge": "未挂载旁白卡",
+  "novelReaderCloseFullscreenBtn": "返回会话",
+  "novelBookPanelTitle": "小说阅读器",
+  "novelBookOpenBtn": "全屏打开小说阅读器",
+  "novelBookInactiveHint": "开启小说模式会话后，可在此一键打开全屏沉浸小说阅读器。",
+  "novelParaQuickSelectBtn": "精修此段",
+  "novelDefaultPlayerName": "主角",
+  "novelReaderChaptersBadge": "共 {count} 幕"
 }

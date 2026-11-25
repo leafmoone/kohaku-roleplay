@@ -2,6 +2,7 @@ import { defineExtension } from "@kohakuterrarium/ui-sdk";
 
 import { CardLibraryView } from "./src/CardLibraryView.js";
 import { ChoiceBlock } from "./src/ChoiceBlock.js";
+import { NovelBookPanel } from "./src/NovelBookPanel.js";
 import { NovelReaderView } from "./src/NovelReaderView.js";
 import { RoleplayDockPanel } from "./src/RoleplayDockPanel.js";
 import { RoleplayMiniPanel } from "./src/RoleplayMiniPanel.js";
@@ -38,6 +39,12 @@ const NovelReaderTab = {
   template: `<div class="ktrp-tab-shell ktrp-tab-shell--reader"><NovelReaderView /></div>`,
 };
 
+export const NovelBookSurface = {
+  name: "RoleplayNovelBookSurface",
+  components: { NovelBookPanel },
+  template: `<NovelBookPanel />`,
+};
+
 export const RoleplaySurface = {
   name: "RoleplaySurface",
   components: { RoleplayDockPanel },
@@ -55,6 +62,7 @@ export default defineExtension((kt) => {
   kt.registerTab("studio", StudioLibraryTab);
   kt.registerTab("worldbooks", WorldbookLibraryTab);
   kt.registerTab("novel-reader", NovelReaderTab);
+  kt.registerPanel("novel-book", NovelBookSurface);
   kt.registerPanel("roleplay", RoleplaySurface);
   kt.registerPanel("gameplay", RoleplayMiniSurface);
   kt.registerMessageRenderer("choices", ChoiceBlock);

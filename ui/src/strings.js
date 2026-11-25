@@ -710,6 +710,13 @@ const EN_FALLBACK = {
   novelStyleCardBadge: "Style: {name}",
   novelDefaultNarratorBadge: "Narrator: {name} (Default)",
   novelNoNarratorBadge: "No narrator card",
+  novelReaderCloseFullscreenBtn: "Back to Chat",
+  novelBookPanelTitle: "Novel Reader",
+  novelBookOpenBtn: "Open Full-Window Reader",
+  novelBookInactiveHint: "Open a Novel session to launch the full-window book reader.",
+  novelParaQuickSelectBtn: "Refine passage",
+  novelDefaultPlayerName: "Player",
+  novelReaderChaptersBadge: "{count} chapter(s)",
 };
 
 function interpolate(template, params = {}) {

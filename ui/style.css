@@ -1811,3 +1811,78 @@ section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"][data-ktrp-interactin
   margin-right: 0.25rem;
   flex-shrink: 0;
 }
+
+/* Full-Window Teleport Novel Reader & Bulletproof Text Selection */
+
+.ktrp-reader-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 2400;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+  color: var(--color-text);
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+.ktrp-reader-fullscreen > .ktrp-reader-root {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.ktrp-reader-fullscreen .ktrp-reader-stage,
+.ktrp-reader-fullscreen .ktrp-reader-chapter,
+.ktrp-reader-fullscreen .ktrp-reader-prose,
+.ktrp-reader-fullscreen .ktrp-reader-para,
+.ktrp-reader-fullscreen .ktrp-reader-paragraph,
+.ktrp-reader-stage,
+.ktrp-reader-chapter,
+.ktrp-reader-prose,
+.ktrp-reader-para,
+.ktrp-reader-paragraph {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+.ktrp-reader-para,
+.ktrp-reader-paragraph {
+  cursor: text;
+  flex: 1;
+  min-width: 0;
+}
+
+.ktrp-reader-para-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.ktrp-para-quick-select {
+  opacity: 0;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--ktrp-reader-border);
+  border-radius: 999px;
+  background: var(--ktrp-reader-surface);
+  color: var(--ktrp-reader-muted);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.7rem;
+  line-height: 1.3;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-top: 0.25rem;
+  transition: opacity 120ms ease;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.ktrp-reader-para-row:hover .ktrp-para-quick-select,
+.ktrp-reader-para-row:focus-within .ktrp-para-quick-select,
+.ktrp-para-quick-select:focus-visible {
+  opacity: 1;
+}
+
+.ktrp-novel-book-dock {
+  min-width: 16rem;
+}

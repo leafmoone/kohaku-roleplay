@@ -1166,6 +1166,8 @@ export function projectNovelView(state) {
   return {
     active: Boolean(src.active),
     title: typeof src.title === "string" && src.title.trim() ? src.title.trim() : "",
+    rootCreatureId: typeof src.rootCreatureId === "string" ? src.rootCreatureId : "",
+    rootName: typeof src.rootName === "string" ? src.rootName : "",
     playerMode,
     player,
     premise: typeof src.premise === "string" ? src.premise.trim() : "",
@@ -1183,6 +1185,21 @@ export function projectNovelView(state) {
     latestProse: typeof src.latestProse === "string" ? src.latestProse : "",
     blockedReason: typeof src.blockedReason === "string" ? src.blockedReason : "",
   };
+}
+
+/**
+ * Find the privileged root creature identifier and display name from a session creature list.
+ */
+export function findPrivilegedRootCreature(creatures) {
+  const list = Array.isArray(creatures) ? creatures.filter((c) => c && typeof c === "object") : [];
+  if (!list.length) return { creatureId: "", name: "" };
+  const privileged = list.find((c) => Boolean(c.is_privileged) || Boolean(c.is_root));
+  const rootNamed =
+    privileged || list.find((c) => c.name === "root" || c.creature_id === "root" || c.id === "root");
+  const chosen = rootNamed || list[0];
+  const creatureId = String(chosen.creature_id || chosen.id || chosen.agent_id || chosen.name || "");
+  const name = String(chosen.name || creatureId || "");
+  return { creatureId, name };
 }
 
 /**
