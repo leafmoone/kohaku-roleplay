@@ -1,68 +1,143 @@
 """Bind confirmed character data to a live KT creature without mutating its config."""
 
-from asyncio import current_task, to_thread
-from collections.abc import Callable
 import json
 import logging
+from asyncio import current_task, to_thread
+from collections.abc import Callable
 from typing import Literal
 from uuid import uuid4
 
 from kohakuterrarium.builtins.plugins.ui_declarative.plugin import attached_renderers
-from kohakuterrarium.modules.output.event import OutputEvent
+from kohakuterrarium.core.conversation.elide import (
+    TOOL_FEEDBACK_KIND,
+    estimate_message_tokens,
+)
 from kohakuterrarium.core.events import TriggerEvent
-from kohakuterrarium.modules.tool.base import ToolContext
-from kohakuterrarium.terrarium.tools.context import resolve_group_context, resolve_group_target
-from pydantic import Field, JsonValue, TypeAdapter, ValidationError
-from kohakuterrarium.core.conversation.elide import TOOL_FEEDBACK_KIND, estimate_message_tokens
 from kohakuterrarium.llm.message import ImagePart, UserMessage
-from kohakuterrarium.parsing import is_action_event, parse_full
-from kohakuterrarium.modules.plugin.base import BasePlugin, PluginBlockError, PluginContext, ToolVisibility
+from kohakuterrarium.modules.output.event import OutputEvent
+from kohakuterrarium.modules.plugin.base import (
+    BasePlugin,
+    PluginBlockError,
+    PluginContext,
+    ToolVisibility,
+)
+from kohakuterrarium.modules.tool.base import ToolContext
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError, OwnerForbiddenError
+from kohakuterrarium.parsing import is_action_event, parse_full
+from kohakuterrarium.terrarium.tools.context import (
+    resolve_group_context,
+    resolve_group_target,
+)
+from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 
 from .card_scripts import script_fingerprint, visible_script_buttons
+from .card_state import FieldUpdate, model_fields, public_fields
 from .cards import CardError
 from .cast import NovelBinding
 from .errors import SettlementRejected
-from .gameplay_pack import GameplayPackUnavailable, pack_settings, pack_tools, tavern_creature
 from .gameplay import Action, PlayActions, apply_actions, apply_field_changes
+from .gameplay_pack import (
+    GameplayPackUnavailable,
+    pack_settings,
+    pack_tools,
+    tavern_creature,
+)
 from .header_summary import MAX_HEADER_PINS, header_summary
-from .legacy_plugins import LegacyPluginError, LegacyRequest, LegacySelection, configured_plugins, request_plugin
-from .legacy_web import (LegacyReplyCapture, LegacyReplyState, OpeningCounterWrite,
-                         legacy_web_message, mvu_reply_has_body, selected_message_values)
-from .novel import Outcome, SceneError, Story
-from .card_state import FieldUpdate, model_fields, public_fields
-from .state_tool import SetCardState
-from .portraits import chosen_key
-from .library_view import card_detail, cards_view, media_summary, media_view, portrait_view
+from .legacy_plugins import (
+    LegacyPluginError,
+    LegacyRequest,
+    LegacySelection,
+    configured_plugins,
+    request_plugin,
+)
+from .legacy_web import (
+    LegacyReplyCapture,
+    LegacyReplyState,
+    OpeningCounterWrite,
+    legacy_web_message,
+    mvu_reply_has_body,
+    selected_message_values,
+)
 from .library import CardNotFound, get_card
-from .module_linker import RETRYABLE_MODULE_ISSUES, link_card_scripts
+from .library_view import (
+    card_detail,
+    cards_view,
+    media_summary,
+    media_view,
+    portrait_view,
+)
 from .lore import active_entries
 from .lore_regex import MatchBudget
 from .lore_templates import render_templates
 from .lore_timing import LoreTiming
+from .module_linker import RETRYABLE_MODULE_ISSUES, link_card_scripts
 from .mvu import MvuChange, public_options, public_values
-from .mvu_settlement import settle_mvu_candidate
 from .mvu_patch import json_equal
+from .mvu_settlement import settle_mvu_candidate
 from .mvu_tool import ApplyMvuUpdate, UpdateMvu
-from .opening_mvu_schema import OpeningSchemaSnapshot, derive_opening_schema, with_opening_schema_output
+from .novel import Outcome, SceneError, Story, actor_memory
+from .novel_lore import novel_lore
+from .novel_media import materialize_image, media_pool
+from .novel_reader import READER_ACTIONS, call_reader
+from .novel_revision import (
+    BASELINE,
+    PLAYER_INPUT,
+    active_revision,
+    canonical_chapters,
+    committed_revision,
+    revision_view,
+)
+from .opening_mvu_schema import (
+    OpeningSchemaSnapshot,
+    derive_opening_schema,
+    with_opening_schema_output,
+)
 from .panels import ChoicePanel, InventoryPanel, QuestPanel, public_panels
 from .paths import library_dir
 from .pinned_mvu import calculate_pinned_mvu
-from .pinned_mvu_setup import SETUP_MARKER, MvuSetupWrite, setup_preserved, setup_projection, setup_update
-from .projections import (
-    Persona, insert_depth_lore, insert_roleplay_context, mount_persona, render_tavern_text, story_context, tavern_outlets,
+from .pinned_mvu_setup import (
+    SETUP_MARKER,
+    MvuSetupWrite,
+    setup_preserved,
+    setup_projection,
+    setup_update,
 )
-from .worldbook import TEMPLATE_BOOK_BUDGET, read_worldbook
-from .worldbook_library import WorldbookNotFound, snapshot_detail, worldbook_for_play
-from .scene_tools import ingest_report
-from .script_session import ScriptSession, approved, upgrade_button_receipts, upgrade_script_clock
-from .script_tool import CardScriptError, RunCardScript
+from .portraits import chosen_key
+from .projections import (
+    Persona,
+    insert_depth_lore,
+    insert_roleplay_context,
+    mount_persona,
+    render_tavern_text,
+    story_context,
+    tavern_outlets,
+)
 from .recovery import resume_scene
-from .tavern_opening import SCRIPT_CLOCK_UNAVAILABLE, WorldbookSnapshot, card_scripts_unavailable, prepare_tavern_opening
-from .tavern_media import attach_scene_image, save_scene_image, scene_image, without_scene_images
+from .scene_tools import ingest_report
+from .script_session import (
+    ScriptSession,
+    approved,
+    upgrade_button_receipts,
+    upgrade_script_clock,
+)
+from .script_tool import CardScriptError, RunCardScript
+from .state_tool import SetCardState
+from .tavern_media import (
+    attach_scene_image,
+    save_scene_image,
+    scene_image,
+    without_scene_images,
+)
+from .tavern_opening import (
+    SCRIPT_CLOCK_UNAVAILABLE,
+    WorldbookSnapshot,
+    card_scripts_unavailable,
+    prepare_tavern_opening,
+)
 from .tavern_state import Arguments, Play, TavernSession
 from .tavern_web import WEB_ACTIONS, call_web_panel, pinned_status_view
-
+from .worldbook import TEMPLATE_BOOK_BUDGET, read_worldbook
+from .worldbook_library import WorldbookNotFound, snapshot_detail, worldbook_for_play
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +191,7 @@ class RoleplayPlugin(BasePlugin):
         self.report_watch = None
         self.can_open_scene = False
         self._committed_prose: str | None = None
+        self._committed_image: ImagePart | None = None
         self._restore_feedback: Callable[[], None] | None = None
 
     async def on_load(self, context: PluginContext) -> None:
@@ -141,10 +217,10 @@ class RoleplayPlugin(BasePlugin):
             async def drain_input(active_controller) -> int:
                 nonlocal settled_prose
                 prose = self._committed_prose
-                if current_task() is owner and active_controller is context.controller and prose is not None and handles:
-                    if not native_mode or self._has_commit_result(controller.conversation.get_messages(), native_tool_call_ids.values(), prose):
-                        settled_prose = prose
-                        return 0
+                if (current_task() is owner and active_controller is context.controller and prose is not None and handles
+                        and (not native_mode or self._has_commit_result(controller.conversation.get_messages(), native_tool_call_ids.values(), prose))):
+                    settled_prose = prose
+                    return 0
                 return await drain(active_controller)
 
             async def push_feedback(event: TriggerEvent) -> None:
@@ -163,8 +239,9 @@ class RoleplayPlugin(BasePlugin):
                 controller.push_event = push
             if not withheld or settled_prose is None:
                 return again
-            await self._publish_assistant(controller, settled_prose)
+            await self._publish_assistant(controller, settled_prose, image=self._committed_image)
             self._committed_prose = None
+            self._committed_image = None
             return False
 
         def restore() -> None:
@@ -193,16 +270,37 @@ class RoleplayPlugin(BasePlugin):
             # The host journals a fresh turn before this hook. Migrate old receipts
             # through its predecessor, not through the new input being processed.
             self._upgrade_saved_script_clock(before_current=True)
-        if self.mode == "novel" and event.type == "user_input":
-            self.can_open_scene = True
+        if self.mode == "novel" and event.type == "user_input" and self.binding and self.binding.session_store is not None:
+            self.can_open_scene = self.story().pending is None
+            if self.can_open_scene and active_revision(self.binding) is None:
+                self.binding.set_state(PLAYER_INPUT, _text({"content": event.content}))
             # Never apply an interrupted continuation to a new player turn.
             self._committed_prose = None
+            self._committed_image = None
         if self.mode == "npc" and event.type == "channel_message" and self.binding is not None:
             raw = event.context.get("raw_content")
             if event.context.get("channel") == self.binding.agent_name and isinstance(raw, str):
-                incoming = json.loads(raw)
-                if isinstance(incoming, dict) and incoming.get("actor") == self.binding.agent_name and type(incoming.get("scene")) is int:
-                    self.binding.set_state("cueScene", incoming["scene"])
+                group = resolve_group_context(self.binding.host_agent.executor._build_tool_context(), require_privileged=False)
+                channel = group.engine.channel(group.caller.graph_id, self.binding.agent_name)
+                message_id = event.context.get("message_id")
+                director = resolve_group_target(group, "root")
+                sender_id = director.creature_id
+                # ChannelTrigger exposes the message ID, but not the stable sender ID.
+                if channel is None or not any(message.message_id == message_id and message.sender_id == sender_id
+                                              and message.content == raw for message in reversed(channel.history)):
+                    return
+                try:
+                    incoming = json.loads(raw)
+                except ValueError:
+                    logger.warning("Ignored malformed novel cue for %s", self.binding.agent_name)
+                    return
+                plugin = director.agent.plugins.get_plugin("roleplay")
+                scene = plugin.story().pending if plugin and plugin.mode == "novel" else None
+                if (scene is not None and isinstance(incoming, dict) and incoming.get("actor") == self.binding.agent_name
+                        and incoming.get("scene") == scene.number and incoming.get("attempt", "") == scene.attempt):
+                    self.binding.set_state("cueScene", scene.number)
+                    self.binding.set_state("cueAttempt", scene.attempt)
+                    self.ui_emit("state", self.ui_state())
 
     def watch_reports(self, context) -> None:
         group = resolve_group_context(context, require_privileged=False)
@@ -276,7 +374,7 @@ class RoleplayPlugin(BasePlugin):
             self._restore_feedback = None
 
     def presentation_contribution(self, context: PluginContext) -> str | None:
-        if self.mode not in ("tavern", "novel") or "kt_roleplay.choices" not in attached_renderers(context.host_agent):
+        if self.mode != "novel" and (self.mode != "tavern" or "kt_roleplay.choices" not in attached_renderers(context.host_agent)):
             return None
         location = "in outcome.prose when committing a scene" if self.mode == "novel" else "after finished prose"
         return ('Optional reader choices ' + location + ': a closed kt_roleplay.choices code fence containing '
@@ -311,7 +409,12 @@ class RoleplayPlugin(BasePlugin):
             else:
                 scene = self.story().pending
                 if scene is None and self.can_open_scene:
-                    allowed = frozenset({"rp_dispatch_scene"})
+                    rewrite = active_revision(self.binding)
+                    allowed = frozenset({"rp_commit_scene"})
+                    if rewrite is None:
+                        allowed |= {"rp_dispatch_scene", "rp_list_library_cards", "rp_spawn_cast_from_card", "rp_create_cast_character"}
+                    elif rewrite.mode == "full_rerun":
+                        allowed |= {"rp_dispatch_scene"}
                 elif scene is not None and scene.cues.keys() == scene.reports.keys():
                     allowed = frozenset({"rp_commit_scene"})
         return ToolVisibility(allowed_tools=allowed, allowed_subagents=frozenset())
@@ -320,7 +423,6 @@ class RoleplayPlugin(BasePlugin):
         visibility = self.get_tool_visibility(context)
         if visibility is not None and call.name not in visibility.allowed_tools:
             raise PluginBlockError(f"Tool {call.name!r} is unavailable to the {self.mode} narrator")
-        return None
 
     async def pre_subagent_run(self, task: str, **kwargs: object) -> None:
         if self.mode != "persona":
@@ -530,6 +632,10 @@ class RoleplayPlugin(BasePlugin):
             raise ValueError("Only the director has the world state")
         return self.novel.story(self.binding)
 
+    def require_open_scene(self) -> None:
+        if self.mode != "novel" or not self.can_open_scene or self.story().pending is not None:
+            raise SceneError("A fresh director turn with no pending scene is required")
+
     def save_story(self, story: Story) -> None:
         if self.mode != "novel" or self.binding is None:
             raise ValueError("Only the director may adjudicate")
@@ -537,7 +643,19 @@ class RoleplayPlugin(BasePlugin):
         self._save(story.model_dump())
         self.ui_emit("state", self.ui_state())
 
-    def save_adjudication(self, context: ToolContext, story: Story, outcome: Outcome) -> None:
+    def open_dispatched_scene(self, before: Story, story: Story) -> None:
+        binding = self.binding
+        rewrite = active_revision(binding)
+        if rewrite and rewrite.mode == "director_rewrite":
+            raise SceneError("Director-only rewrites cannot dispatch NPCs")
+        rows = [(binding._state_key("novel"), story.model_dump())]
+        if rewrite is None:
+            rows.append((binding._state_key(BASELINE), before.model_dump()))
+        binding.session_store.state.put_many(rows)
+        self.can_open_scene = False
+        self.ui_emit("state", self.ui_state())
+
+    def save_adjudication(self, context: ToolContext, before: Story, story: Story, outcome: Outcome) -> None:
         """Commit the world and addressed NPC memories without waking a creature."""
         group = resolve_group_context(context)
         director = self.binding
@@ -547,20 +665,32 @@ class RoleplayPlugin(BasePlugin):
         if store is None:
             raise SceneError("A persistent novel session is required")
         story = self.novel.apply_fields(director, story, outcome)
-        rows = [(director._state_key("novel"), story.model_dump())]
-        for actor in outcome.private_updates.keys() | outcome.card_updates.keys():
+        rows = []
+        updated_plugins = []
+        memory_actors = outcome.private_updates.keys() | outcome.memory_updates.keys()
+        sheet_actors = outcome.sheet_updates.keys() | outcome.card_updates.keys()
+        for actor in (memory_actors | sheet_actors) & set(story.cast):
             target = resolve_group_target(group, actor)
             plugin = target.agent.plugins.get_plugin("roleplay")
             binding = plugin.binding if isinstance(plugin, RoleplayPlugin) else None
             if binding is None or plugin.mode != "npc" or binding.session_store is not store or binding.agent_name != actor:
                 raise SceneError(f"Cannot deliver an adjudication to the session of {actor!r}")
-            if actor in outcome.private_updates:
-                receipt = {"throughScene": story.completed, "known": story.knowledge[actor]}
-                rows.append((binding._state_key("privateKnowledge"), receipt))
+            if actor in memory_actors:
+                rows.append((binding._state_key("privateKnowledge"), actor_memory(story, actor).model_dump()))
+            if actor in sheet_actors:
+                rows.append((binding._state_key("characterSheet"), story.sheets[actor].model_dump()))
             if actor in outcome.card_updates:
                 rows.append((binding._state_key("fieldValues"), story.card_values[actor]))
-        store.state.put_many(rows)
+            updated_plugins.append(plugin)
+        image = materialize_image(director, self.novel.members(director), story, outcome)
+        if image is not None:
+            story = story.model_copy(update={"chapters": [*story.chapters[:-1], story.chapters[-1].model_copy(update={"imageUrl": image.url})]})
+        values = {"novel": story.model_dump(), **committed_revision(director, before, story)}
+        store.state.put_many([*((director._state_key(key), value) for key, value in values.items()), *rows])
+        for plugin in updated_plugins:
+            plugin.ui_emit("state", plugin.ui_state())
         self._committed_prose = story.latest_prose
+        self._committed_image = image
         self.can_open_scene = False
         self.ui_emit("state", self.ui_state())
 
@@ -574,7 +704,11 @@ class RoleplayPlugin(BasePlugin):
 
     def ui_state(self) -> dict[str, object]:
         if self.novel:
-            return self.novel.view(self.binding)
+            view = self.novel.view(self.binding)
+            if self.mode == "novel" and view["active"]:
+                view["mediaPool"] = media_pool(self.binding, self.novel.members(self.binding))
+                view["revision"] = revision_view(self, self.story(), bool(view["isProcessing"]))
+            return view
         record = self._record()
         if record is None:
             return {"mode": self.mode, "active": False}
@@ -661,6 +795,8 @@ class RoleplayPlugin(BasePlugin):
         if context is not None and context.multi_user:
             raise OwnerForbiddenError("Roleplay currently supports single-user KT hosts only")
         try:
+            if self.mode == "novel" and action in READER_ACTIONS:
+                return await call_reader(self, action, args)
             if action == "resume_scene" and self.mode == "novel":
                 number = args.get("scene")
                 if type(number) is not int or set(args) != {"scene"}:
@@ -796,12 +932,14 @@ class RoleplayPlugin(BasePlugin):
                 if args.get("id") != play.cardId or not isinstance(key, str) or not any(item.key == key for item in play.media):
                     raise OwnerArgumentError("Only media from the selected tavern card can be viewed here")
                 return await to_thread(media_view, library_dir(), play.cardId, key)
-            if action in ("detail", "portrait") and self.mode != "npc":
+            if action in ("detail", "portrait") and (self.mode != "npc" or action == "portrait"):
                 key = args.get("id")
                 if not isinstance(key, str) or not key:
                     raise OwnerArgumentError("A card id is required")
                 if self.mode == "novel" and (action != "portrait" or key not in {m.cardId for m in self.novel.members(self.binding)}):
                     raise OwnerArgumentError("The reader can only request portraits from this cast")
+                if self.mode == "npc" and key != self.ui_state().get("cardId"):
+                    raise OwnerArgumentError("Only this NPC's portrait can be requested")
                 if action == "detail":
                     return card_detail(library_dir(), key)
                 selected = args.get("variant")
@@ -991,6 +1129,16 @@ class RoleplayPlugin(BasePlugin):
         record = self._record()
         if self.novel:
             content = self.novel.prompt(self.binding)
+            if self.mode == "novel":
+                content += canonical_chapters(self.story())
+                messages = without_scene_images(messages)
+                settings = self.novel.settings(self.binding)
+                messages, lore = await novel_lore(messages, self.novel.worldbooks(self.binding), settings, _text, _cost)
+                if lore:
+                    content += "\nDirector-only worldbook references: " + json.dumps(lore, ensure_ascii=False)
+                media = media_pool(self.binding, self.novel.members(self.binding))
+                if media:
+                    content += "\nAvailable local scene image keys: " + json.dumps([{k: item[k] for k in ("key", "name")} for item in media], ensure_ascii=False)
         elif record is None:
             return None
         elif self.mode == "persona":

@@ -8,7 +8,13 @@ import {
 } from "@kohakuterrarium/ui-sdk";
 
 import { CardWebPanel } from "./CardWebPanel.js";
-import { normalizeStateFields, projectNovelView } from "./helpers.js";
+import { CharacterSheetView } from "./CharacterSheetView.js";
+import {
+  normalizeActorMemory,
+  normalizeSheet,
+  normalizeStateFields,
+  projectNovelView,
+} from "./helpers.js";
 import { usePlayWindow } from "./playWindow.js";
 import { useRoleplayText } from "./strings.js";
 
@@ -254,6 +260,7 @@ export const RoleplayMiniPanel = {
   components: {
     ActionButton,
     CardWebPanel,
+    CharacterSheetView,
   },
   setup() {
     const owner = useOwner();
@@ -285,6 +292,12 @@ export const RoleplayMiniPanel = {
     const resumeError = ref("");
     let resumeMutationSeq = 0;
 
+    const selectedNovelActorId = ref("");
+    const showPrivateSheet = ref(false);
+    const novelActionBusy = ref(false);
+    const novelActionError = ref("");
+    let novelActionSeq = 0;
+
     let unmounted = false;
     let focusEpoch = 0;
 
@@ -306,6 +319,75 @@ export const RoleplayMiniPanel = {
     const isActiveTavern = computed(
       () => owner.status.value === "ready" && mode.value === "tavern" && active.value,
     );
+    const novelView = computed(() => projectNovelView(state.value));
+    const isActiveNovel = computed(
+      () => owner.status.value === "ready" && mode.value === "novel" && novelView.value.active,
+    );
+    const isActiveNpc = computed(
+      () => owner.status.value === "ready" && mode.value === "npc" && active.value,
+    );
+    const novelActorTabs = computed(() => {
+      if (!isActiveNovel.value) return [];
+      const tabs = [];
+      if (novelView.value.playerMode === "protagonist" && novelView.value.player) {
+        tabs.push({
+          id: novelView.value.player.actor,
+          label: novelView.value.player.name || t("sheetProtagonistTab"),
+          isPlayer: true,
+          data: {
+            ...novelView.value.player,
+            ephemeral: false,
+            cardId: "",
+            hasPortrait: false,
+            portraitKey: "",
+            customPortraitUrl: "",
+            visibleStatus: {},
+            stateFields: [],
+            privateSheet: normalizeSheet(null),
+            memory: normalizeActorMemory(null),
+          },
+        });
+      }
+      for (const actor of novelView.value.cast) {
+        tabs.push({
+          id: actor.actor,
+          label: actor.name,
+          isPlayer: false,
+          data: actor,
+        });
+      }
+      return tabs;
+    });
+    const selectedNovelTab = computed(
+      () =>
+        novelActorTabs.value.find((tab) => tab.id === selectedNovelActorId.value) ||
+        novelActorTabs.value[0] ||
+        null,
+    );
+    const npcActorModel = computed(() => {
+      if (!isActiveNpc.value) return null;
+      const s = state.value;
+      return {
+        actor: typeof s.actor === "string" ? s.actor : "",
+        name: typeof s.name === "string" ? s.name : "",
+        cardId: typeof s.cardId === "string" ? s.cardId : "",
+        ephemeral: false,
+        hasPortrait: Boolean(s.hasPortrait || s.customPortraitUrl),
+        portraitKey: typeof s.portraitKey === "string" ? s.portraitKey : "",
+        customPortraitUrl: typeof s.customPortraitUrl === "string" ? s.customPortraitUrl : "",
+        visibleStatus: {},
+        stateFields: [],
+        sheet: normalizeSheet(s.sheet),
+        privateSheet: normalizeSheet(null),
+        memory: normalizeActorMemory(s.memory),
+      };
+    });
+    const headerTitle = computed(() => {
+      if (isActiveTavern.value) return String(state.value.name || "");
+      if (isActiveNovel.value) return novelView.value.title || t("modeNovel");
+      if (isActiveNpc.value) return npcActorModel.value?.name || t("npcModeTitle");
+      return "";
+    });
     const tavernScopeKey = computed(() =>
       JSON.stringify([session.value?.id || "", creature.value?.name || "", state.value.cardId || ""]),
     );
@@ -318,7 +400,6 @@ export const RoleplayMiniPanel = {
         .sort();
       return JSON.stringify(ids);
     });
-    const novelView = computed(() => projectNovelView(state.value));
 
     const summaryMode = computed(() => {
       if (!isActiveTavern.value) return "none";
@@ -404,6 +485,7 @@ export const RoleplayMiniPanel = {
       scriptMutationSeq += 1;
       choiceMutationSeq += 1;
       resumeMutationSeq += 1;
+      novelActionSeq += 1;
       scriptBusy.value = false;
       scriptError.value = "";
       scriptSuccessNotice.value = "";
@@ -411,7 +493,23 @@ export const RoleplayMiniPanel = {
       choiceError.value = "";
       resumingScene.value = false;
       resumeError.value = "";
+      novelActionBusy.value = false;
+      novelActionError.value = "";
     }
+
+    watch(
+      novelActorTabs,
+      (list) => {
+        if (!list.length) {
+          selectedNovelActorId.value = "";
+          return;
+        }
+        if (!list.some((tab) => tab.id === selectedNovelActorId.value)) {
+          selectedNovelActorId.value = list[0].id;
+        }
+      },
+      { immediate: true },
+    );
 
     // Clear stale owner state immediately when focus (session/creature) changes
     // so previous creature's writable actions cannot be invoked while host refresh is in flight.
@@ -421,6 +519,8 @@ export const RoleplayMiniPanel = {
         focusEpoch += 1;
         owner.state.value = null;
         summaryExpanded.value = false;
+        showPrivateSheet.value = false;
+        selectedNovelActorId.value = "";
         clearActionFeedback();
       },
       { flush: "sync" },
@@ -555,6 +655,85 @@ export const RoleplayMiniPanel = {
       }
     }
 
+    async function uploadActorPortrait(payload) {
+      if (unmounted || novelActionBusy.value || !isActiveNovel.value) return;
+      const epochSnap = focusEpoch;
+      const focusSnap = focusScopeKey.value;
+      const seq = ++novelActionSeq;
+      novelActionBusy.value = true;
+      novelActionError.value = "";
+      try {
+        const nextView = await owner.call("upload_novel_media", {
+          target: "actor",
+          actor: payload.actor,
+          dataUrl: payload.dataUrl,
+          name: payload.name,
+        });
+        if (
+          unmounted ||
+          epochSnap !== focusEpoch ||
+          focusScopeKey.value !== focusSnap ||
+          seq !== novelActionSeq
+        ) {
+          return;
+        }
+        if (nextView && typeof nextView === "object") {
+          owner.state.value = nextView;
+        }
+        notify(t("sheetPortraitUploadedToast"), "success");
+      } catch (err) {
+        if (
+          !unmounted &&
+          epochSnap === focusEpoch &&
+          focusScopeKey.value === focusSnap &&
+          seq === novelActionSeq
+        ) {
+          novelActionError.value = err?.message || String(err);
+        }
+      } finally {
+        if (!unmounted && seq === novelActionSeq) {
+          novelActionBusy.value = false;
+        }
+      }
+    }
+
+    async function saveCastMemberToLibrary(actorId) {
+      if (unmounted || novelActionBusy.value || !isActiveNovel.value || !actorId) return;
+      const epochSnap = focusEpoch;
+      const focusSnap = focusScopeKey.value;
+      const seq = ++novelActionSeq;
+      novelActionBusy.value = true;
+      novelActionError.value = "";
+      try {
+        const nextView = await owner.call("save_cast_to_library", { actor: actorId });
+        if (
+          unmounted ||
+          epochSnap !== focusEpoch ||
+          focusScopeKey.value !== focusSnap ||
+          seq !== novelActionSeq
+        ) {
+          return;
+        }
+        if (nextView && typeof nextView === "object") {
+          owner.state.value = nextView;
+        }
+        notify(t("sheetSavedToLibraryToast"), "success");
+      } catch (err) {
+        if (
+          !unmounted &&
+          epochSnap === focusEpoch &&
+          focusScopeKey.value === focusSnap &&
+          seq === novelActionSeq
+        ) {
+          novelActionError.value = err?.message || String(err);
+        }
+      } finally {
+        if (!unmounted && seq === novelActionSeq) {
+          novelActionBusy.value = false;
+        }
+      }
+    }
+
     function itemTestId(id) {
       return `kt-rp-mini-summary-item-${encodeURIComponent(id)}`;
     }
@@ -576,9 +755,19 @@ export const RoleplayMiniPanel = {
       mode,
       active,
       isActiveTavern,
+      isActiveNovel,
+      isActiveNpc,
+      headerTitle,
       tavernScopeKey,
       mvuPublicSignature,
       novelView,
+      novelActorTabs,
+      selectedNovelActorId,
+      selectedNovelTab,
+      showPrivateSheet,
+      novelActionBusy,
+      novelActionError,
+      npcActorModel,
       summaryMode,
       summaryItems,
       expandedSummaryItems,
@@ -595,6 +784,8 @@ export const RoleplayMiniPanel = {
       invokeCardScriptButton,
       chooseNativeOption,
       resumePendingScene,
+      uploadActorPortrait,
+      saveCastMemberToLibrary,
       itemTestId,
       detailTestId,
     };
@@ -618,17 +809,17 @@ export const RoleplayMiniPanel = {
         >
           <span class="ktrp-play-move-grip" aria-hidden="true">⋮⋮</span>
           <strong
-            v-if="isActiveTavern"
+            v-if="headerTitle"
             class="ktrp-mini-char-name"
             data-testid="kt-rp-mini-char-name"
-          >{{ state.name }}</strong>
+          >{{ headerTitle }}</strong>
           <span v-else>{{ t('playWindowMoveLabel') }}</span>
         </button>
         <strong
-          v-else-if="isActiveTavern"
+          v-else-if="headerTitle"
           class="ktrp-mini-char-name"
           data-testid="kt-rp-mini-char-name"
-        >{{ state.name }}</strong>
+        >{{ headerTitle }}</strong>
         <span v-else class="ktrp-muted" />
         <ActionButton
           size="sm"
@@ -842,28 +1033,107 @@ export const RoleplayMiniPanel = {
         </div>
       </template>
 
-      <template v-else-if="mode === 'novel' && novelView.active">
-        <div class="ktrp-mini-head" data-testid="kt-rp-mini-novel">
-          <div class="ktrp-inline-actions">
-            <span class="ktrp-chip">{{ t('novelSceneCompleted', { count: novelView.sceneNumber }) }}</span>
+      <template v-else-if="isActiveNovel">
+        <div class="ktrp-mini-section" data-testid="kt-rp-mini-novel">
+          <div class="ktrp-row-between">
+            <div class="ktrp-inline-actions">
+              <span class="ktrp-chip">{{ t('novelSceneCompleted', { count: novelView.sceneNumber }) }}</span>
+              <span v-if="novelView.pendingScene" class="ktrp-chip ktrp-chip--accent">
+                {{ t('novelScenePending', { number: novelView.pendingScene.number }) }}
+              </span>
+            </div>
             <ActionButton
               v-if="novelView.pendingScene"
               size="sm"
-              :disabled="resumingScene"
+              :disabled="resumingScene || novelActionBusy"
               data-testid="kt-rp-mini-novel-resume-btn"
               @click="resumePendingScene"
             >
               {{ resumingScene ? t('novelResumingBtn') : t('novelResumeBtn') }}
             </ActionButton>
           </div>
+
           <div
-            v-if="resumeError"
+            v-if="resumeError || novelActionError"
             class="ktrp-banner ktrp-banner--error"
             role="alert"
             data-testid="kt-rp-mini-novel-error"
           >
-            <span>{{ resumeError }}</span>
+            <span>{{ resumeError || novelActionError }}</span>
           </div>
+
+          <div
+            v-if="novelActorTabs.length"
+            class="ktrp-actor-tabs"
+            role="tablist"
+            data-testid="kt-rp-play-actor-tabs"
+          >
+            <button
+              v-for="tab in novelActorTabs"
+              :key="tab.id"
+              type="button"
+              role="tab"
+              class="ktrp-actor-tab"
+              :class="{ 'is-active': selectedNovelTab && selectedNovelTab.id === tab.id }"
+              :aria-selected="Boolean(selectedNovelTab && selectedNovelTab.id === tab.id)"
+              :data-actor-id="tab.id"
+              :data-testid="'kt-rp-play-actor-tab-' + tab.id"
+              @click="selectedNovelActorId = tab.id"
+            >
+              {{ tab.label }}
+            </button>
+          </div>
+
+          <label
+            v-if="selectedNovelTab && !selectedNovelTab.isPlayer"
+            class="ktrp-mvu-option"
+          >
+            <input
+              v-model="showPrivateSheet"
+              type="checkbox"
+              data-testid="kt-rp-play-show-private"
+            />
+            <span>{{ t('sheetShowPrivateLabel') }}</span>
+          </label>
+
+          <CharacterSheetView
+            v-if="selectedNovelTab"
+            :actor="selectedNovelTab.data"
+            :show-private="!selectedNovelTab.isPlayer && showPrivateSheet"
+            :show-memory="!selectedNovelTab.isPlayer && showPrivateSheet"
+            :allow-upload-portrait="!selectedNovelTab.isPlayer"
+            :allow-save-to-library="!selectedNovelTab.isPlayer && Boolean(selectedNovelTab.data.ephemeral && !selectedNovelTab.data.cardId)"
+            :busy="novelActionBusy || resumingScene"
+            :on-upload-portrait="uploadActorPortrait"
+            :on-save-to-library="saveCastMemberToLibrary"
+            compact
+            test-id-prefix="kt-rp-play-sheet"
+          />
+          <p v-else class="ktrp-muted">{{ t('novelNoCast') }}</p>
+        </div>
+      </template>
+
+      <template v-else-if="isActiveNpc && npcActorModel">
+        <div class="ktrp-mini-section" data-testid="kt-rp-npc-play-sheet">
+          <div v-if="state.cueScene != null || state.reportedScene != null" class="ktrp-chip-row">
+            <span class="ktrp-chip">
+              {{
+                t('npcSceneStatus', {
+                  cue: state.cueScene ?? '—',
+                  reported: state.reportedScene ?? '—',
+                })
+              }}
+            </span>
+          </div>
+          <CharacterSheetView
+            :actor="npcActorModel"
+            :show-private="true"
+            :show-memory="true"
+            :allow-upload-portrait="false"
+            :allow-save-to-library="false"
+            compact
+            test-id-prefix="kt-rp-npc-sheet"
+          />
         </div>
       </template>
 

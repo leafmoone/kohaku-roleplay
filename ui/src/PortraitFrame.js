@@ -10,6 +10,7 @@ export const PortraitFrame = {
     name: { type: String, default: "" },
     hasPortrait: { type: Boolean, default: false },
     variant: { type: String, default: "" },
+    customPortraitUrl: { type: String, default: "" },
     argKey: { type: String, default: "id" },
     size: { type: String, default: "md" },
     revision: { type: Number, default: 0 },
@@ -31,6 +32,7 @@ export const PortraitFrame = {
         props.cardId,
         props.hasPortrait,
         props.variant,
+        props.customPortraitUrl,
         props.argKey,
         props.revision,
         owner.status.value,
@@ -40,6 +42,12 @@ export const PortraitFrame = {
         onCleanup(() => {
           stale = true;
         });
+        const customUrl = typeof props.customPortraitUrl === "string" ? props.customPortraitUrl.trim() : "";
+        if (customUrl) {
+          url.value = customUrl;
+          loading.value = false;
+          return;
+        }
         url.value = "";
         if (!props.cardId || !props.hasPortrait || owner.status.value !== "ready") return;
         const variantKey = String(props.variant || "");

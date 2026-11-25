@@ -15,6 +15,7 @@ import {
   DEFAULT_MAX_CARD_BYTES,
   base64ToUint8Array,
   collectGreetings,
+  normalizeDefaultNarrator,
   normalizeWorldbookDiagnostics,
   normalizeWorldbookEntries,
   readFileAsBase64,
@@ -33,6 +34,7 @@ import { useRoleplayText } from "./strings.js";
  * When `mode === 'tab'`, also exposes Tavern & Novel launch actions via `kt.api.post(...)`.
  */
 const NOVEL_CAST_LIMIT = 32;
+const NOVEL_WORLDBOOK_LIMIT = 8;
 
 function normalizeScriptDependencies(rawScripts) {
   if (!Array.isArray(rawScripts)) return [];
@@ -195,6 +197,21 @@ export const CardLibraryView = {
     const tavernLaunchScriptsMode = ref("__default__");
     const novelCastIds = ref([]);
     const novelTitle = ref("");
+    const novelPlayerMode = ref("protagonist");
+    const novelPlayerName = ref("Player");
+    const novelPlayerPersona = ref("");
+    const novelNarratorCardId = ref("__default__");
+    const novelStyleCardId = ref("");
+    const defaultNarratorRulesExpanded = ref(false);
+    const copyingDefaultNarrator = ref(false);
+    const novelWorldbookIds = ref([]);
+    const novelIncludeCardLore = ref(false);
+    const novelPremise = ref("");
+    const novelSheetHint = ref("");
+    const novelPrologueMode = ref("none");
+    const novelPrologueTitle = ref("");
+    const novelPrologueText = ref("");
+    const novelProloguePrompt = ref("");
     const launchedSession = ref(null);
 
     const state = computed(() => owner.state.value || {});
@@ -351,6 +368,59 @@ export const CardLibraryView = {
       return t("quickLaunchNovelSelectedHint", { name: fallbackName });
     });
     const novelCastAtLimit = computed(() => novelCastIds.value.length >= NOVEL_CAST_LIMIT);
+    const novelWorldbooksAtLimit = computed(
+      () => novelWorldbookIds.value.length >= NOVEL_WORLDBOOK_LIMIT,
+    );
+    const defaultNarrator = computed(() => {
+      const normalized = normalizeDefaultNarrator(state.value.defaultNarrator);
+      if (normalized) return normalized;
+      return {
+        id: "__default__",
+        name: t("novelDefaultNarratorTitle"),
+        portraitUrl: "/api/ext/kohaku-roleplay/default-narrator.png",
+        description: "",
+        personality: "",
+        examples: "",
+      };
+    });
+
+    function hasAnyCardTag(card, targetTags) {
+      const tagsList = Array.isArray(card?.tags) ? card.tags : [];
+      const lower = new Set(tagsList.map((tag) => String(tag || "").trim().toLowerCase()));
+      return targetTags.some((target) => lower.has(target));
+    }
+
+    const narratorCardOptions = computed(() => {
+      const tagged = [];
+      const others = [];
+      for (const card of cards.value) {
+        if (hasAnyCardTag(card, ["narrator"])) {
+          tagged.push({
+            id: card.id,
+            label: t("novelNarratorTaggedBadge", { name: card.name }),
+          });
+        } else {
+          others.push({ id: card.id, label: card.name });
+        }
+      }
+      return [...tagged, ...others];
+    });
+
+    const styleCardOptions = computed(() => {
+      const tagged = [];
+      const others = [];
+      for (const card of cards.value) {
+        if (hasAnyCardTag(card, ["style", "prose"])) {
+          tagged.push({
+            id: card.id,
+            label: t("novelStyleTaggedBadge", { name: card.name }),
+          });
+        } else {
+          others.push({ id: card.id, label: card.name });
+        }
+      }
+      return [...tagged, ...others];
+    });
 
     watch(
       cards,
@@ -359,13 +429,36 @@ export const CardLibraryView = {
           selectedId.value = "";
           detail.value = null;
           novelCastIds.value = [];
+          if (novelNarratorCardId.value !== "__default__" && novelNarratorCardId.value !== "__none__") {
+            novelNarratorCardId.value = "__default__";
+          }
+          novelStyleCardId.value = "";
           return;
         }
         const validIds = new Set(list.map((c) => c.id));
         novelCastIds.value = novelCastIds.value.filter((id) => validIds.has(id));
+        if (
+          novelNarratorCardId.value !== "__default__" &&
+          novelNarratorCardId.value !== "__none__" &&
+          !validIds.has(novelNarratorCardId.value)
+        ) {
+          novelNarratorCardId.value = "__default__";
+        }
+        if (novelStyleCardId.value && !validIds.has(novelStyleCardId.value)) {
+          novelStyleCardId.value = "";
+        }
         if (!list.some((card) => card.id === selectedId.value)) {
           selectedId.value = list[0].id;
         }
+      },
+      { immediate: true },
+    );
+
+    watch(
+      worldbooks,
+      (list) => {
+        const validIds = new Set(list.map((wb) => wb.id));
+        novelWorldbookIds.value = novelWorldbookIds.value.filter((id) => validIds.has(id));
       },
       { immediate: true },
     );
@@ -452,6 +545,14 @@ export const CardLibraryView = {
     function openWorldbookLibraryTab() {
       try {
         openTab("kohaku-roleplay/worldbooks");
+      } catch (err) {
+        actionError.value = err?.message || String(err);
+      }
+    }
+
+    function openNovelReaderTab() {
+      try {
+        openTab("kohaku-roleplay/novel-reader");
       } catch (err) {
         actionError.value = err?.message || String(err);
       }
@@ -1126,20 +1227,77 @@ export const CardLibraryView = {
       }
     }
 
+    function toggleNovelWorldbook(bookId) {
+      const idx = novelWorldbookIds.value.indexOf(bookId);
+      if (idx >= 0) {
+        novelWorldbookIds.value.splice(idx, 1);
+      } else if (novelWorldbookIds.value.length < NOVEL_WORLDBOOK_LIMIT) {
+        novelWorldbookIds.value.push(bookId);
+      }
+    }
+
+    function buildNovelLaunchPayload(cardIds) {
+      const resolvedName = novelTitle.value.trim() || t("novelDefaultTitle");
+      const modeValue = novelPlayerMode.value === "director" ? "director" : "protagonist";
+      const payload = {
+        cardIds: [...cardIds],
+        name: resolvedName,
+        narratorCardId: novelNarratorCardId.value || "__default__",
+        worldbookIds: [...novelWorldbookIds.value],
+        includeCardLore: Boolean(novelIncludeCardLore.value),
+        playerMode: modeValue,
+        playerName: modeValue === "protagonist" ? novelPlayerName.value.trim() || "Player" : "Player",
+        playerPersona: modeValue === "protagonist" ? novelPlayerPersona.value.trim() : "",
+        premise: novelPremise.value.trim(),
+        sheetHint: novelSheetHint.value.trim(),
+        prologueTitle: novelPrologueMode.value === "static" ? novelPrologueTitle.value.trim() : "",
+        prologueText: novelPrologueMode.value === "static" ? novelPrologueText.value.trim() : "",
+        prologuePrompt: novelPrologueMode.value === "prompt" ? novelProloguePrompt.value.trim() : "",
+      };
+      if (novelStyleCardId.value) {
+        payload.styleCardId = novelStyleCardId.value;
+      }
+      return payload;
+    }
+
+    async function copyDefaultNarrator() {
+      if (busy.value || copyingDefaultNarrator.value) return;
+      copyingDefaultNarrator.value = true;
+      actionError.value = "";
+      try {
+        const res = await owner.call("copy_default_narrator", {});
+        if (res?.state && typeof res.state === "object") {
+          owner.state.value = res.state;
+          owner.status.value = "ready";
+          owner.error.value = "";
+        } else {
+          await owner.refresh();
+        }
+        portraitRevision.value += 1;
+        if (res?.card?.id) {
+          selectedId.value = res.card.id;
+        }
+        notify(t("novelCopiedDefaultNarratorToast"), "success");
+      } catch (err) {
+        actionError.value = err?.message || String(err);
+      } finally {
+        copyingDefaultNarrator.value = false;
+      }
+    }
+
     async function launchNovelWithIds(cardIds) {
       if (!cardIds.length || busy.value) return;
-      const resolvedName = novelTitle.value.trim() || t("novelDefaultTitle");
+      const payload = buildNovelLaunchPayload(cardIds);
       busy.value = true;
       actionError.value = "";
       try {
-        const payload = { cardIds: [...cardIds], name: resolvedName };
         const resp = await kt.api.post("novels", payload);
         const data = resp?.data || resp || {};
         launchedSession.value = {
           kind: "novel",
           sessionId: data.sessionId || "",
           creatureId: data.creatureId || "",
-          label: resolvedName,
+          label: payload.name,
         };
         notify(t("launchCreatedToast"), "success");
       } catch (err) {
@@ -1206,6 +1364,7 @@ export const CardLibraryView = {
       openStudioTab,
       openSettingsLibrary,
       openWorldbookLibraryTab,
+      openNovelReaderTab,
       worldbooks,
       cardWorldbookDefaults,
       currentCardDefaultWorldbookId,
@@ -1292,12 +1451,34 @@ export const CardLibraryView = {
       tavernLaunchScriptsMode,
       novelCastIds,
       novelCastLimit: NOVEL_CAST_LIMIT,
+      novelWorldbookLimit: NOVEL_WORLDBOOK_LIMIT,
       novelCastAtLimit,
+      novelWorldbooksAtLimit,
       quickLaunchNovelHint,
       novelTitle,
+      novelPlayerMode,
+      novelPlayerName,
+      novelPlayerPersona,
+      novelNarratorCardId,
+      novelStyleCardId,
+      defaultNarrator,
+      defaultNarratorRulesExpanded,
+      copyingDefaultNarrator,
+      narratorCardOptions,
+      styleCardOptions,
+      copyDefaultNarrator,
+      novelWorldbookIds,
+      novelIncludeCardLore,
+      novelPremise,
+      novelSheetHint,
+      novelPrologueMode,
+      novelPrologueTitle,
+      novelPrologueText,
+      novelProloguePrompt,
       launchedSession,
       launchTavernFromCard,
       toggleNovelCast,
+      toggleNovelWorldbook,
       launchNovelFromCast,
       launchNovelQuick,
       openSessionTab,
@@ -1356,14 +1537,24 @@ export const CardLibraryView = {
             {{ t('launchReadyIds', { sessionId: launchedSession.sessionId, creatureId: launchedSession.creatureId }) }}
           </p>
         </div>
-        <ActionButton
-          variant="primary"
-          size="sm"
-          data-testid="kt-rp-launch-open-session-btn"
-          @click="openSessionTab(launchedSession.sessionId)"
-        >
-          {{ t('launchOpenSession') }}
-        </ActionButton>
+        <div class="ktrp-inline-actions">
+          <ActionButton
+            v-if="launchedSession.kind === 'novel'"
+            size="sm"
+            data-testid="kt-rp-launch-open-reader-btn"
+            @click="openNovelReaderTab"
+          >
+            {{ t('launchOpenReaderBtn') }}
+          </ActionButton>
+          <ActionButton
+            variant="primary"
+            size="sm"
+            data-testid="kt-rp-launch-open-session-btn"
+            @click="openSessionTab(launchedSession.sessionId)"
+          >
+            {{ t('launchOpenSession') }}
+          </ActionButton>
+        </div>
       </div>
 
       <!-- Top-level notice when a card was imported but catalog refresh failed -->
@@ -2851,34 +3042,287 @@ export const CardLibraryView = {
           <p v-if="novelCastAtLimit" class="ktrp-muted" data-testid="kt-rp-novel-cast-limit-hint">
             {{ t('studioNovelLimitReached', { max: novelCastLimit }) }}
           </p>
-          <div class="ktrp-field-block">
-            <label class="ktrp-label" for="ktrp-studio-novel-name">{{ t('studioNovelNameLabel') }}</label>
-            <input
-              id="ktrp-studio-novel-name"
-              v-model="novelTitle"
-              type="text"
-              class="ktrp-input"
-              :placeholder="t('novelDefaultTitle')"
-              data-testid="kt-rp-studio-novel-name"
-            />
-          </div>
-          <div class="ktrp-cast-picker">
-            <label
-              v-for="card in cards"
-              :key="card.id"
-              class="ktrp-cast-check"
-              :class="{ 'is-disabled': novelCastAtLimit && !novelCastIds.includes(card.id) }"
-              :data-testid="'kt-rp-novel-pick-' + card.id"
-            >
+
+          <div class="ktrp-form-grid">
+            <div class="ktrp-field-block">
+              <label class="ktrp-label" for="ktrp-studio-novel-name">{{ t('studioNovelNameLabel') }}</label>
               <input
-                type="checkbox"
-                :checked="novelCastIds.includes(card.id)"
-                :disabled="novelCastAtLimit && !novelCastIds.includes(card.id)"
-                @change="toggleNovelCast(card.id)"
+                id="ktrp-studio-novel-name"
+                v-model="novelTitle"
+                type="text"
+                class="ktrp-input"
+                :placeholder="t('novelDefaultTitle')"
+                data-testid="kt-rp-studio-novel-name"
               />
-              <span>{{ card.name }}</span>
+            </div>
+
+            <div class="ktrp-field-block">
+              <label class="ktrp-label" for="ktrp-novel-player-mode">{{ t('novelPlayerModeLabel') }}</label>
+              <select
+                id="ktrp-novel-player-mode"
+                v-model="novelPlayerMode"
+                class="ktrp-select"
+                data-testid="kt-rp-novel-player-mode"
+              >
+                <option value="protagonist">{{ t('novelPlayerModeProtagonist') }}</option>
+                <option value="director">{{ t('novelPlayerModeDirector') }}</option>
+              </select>
+            </div>
+          </div>
+
+          <div v-if="novelPlayerMode === 'protagonist'" class="ktrp-sub-card" data-testid="kt-rp-novel-protagonist-fields">
+            <div class="ktrp-field-block">
+              <label class="ktrp-label" for="ktrp-novel-player-name">{{ t('novelPlayerNameLabel') }}</label>
+              <input
+                id="ktrp-novel-player-name"
+                v-model="novelPlayerName"
+                type="text"
+                class="ktrp-input"
+                maxlength="80"
+                data-testid="kt-rp-novel-player-name"
+              />
+            </div>
+            <div class="ktrp-field-block">
+              <label class="ktrp-label" for="ktrp-novel-player-persona">{{ t('novelPlayerPersonaLabel') }}</label>
+              <textarea
+                id="ktrp-novel-player-persona"
+                v-model="novelPlayerPersona"
+                rows="2"
+                class="ktrp-textarea"
+                maxlength="4000"
+                :placeholder="t('novelPlayerPersonaPlaceholder')"
+                data-testid="kt-rp-novel-player-persona"
+              />
+            </div>
+          </div>
+
+          <div class="ktrp-field-block">
+            <span class="ktrp-label">{{ t('novelCastTitle') }}</span>
+            <div class="ktrp-cast-picker">
+              <label
+                v-for="card in cards"
+                :key="card.id"
+                class="ktrp-cast-check"
+                :class="{ 'is-disabled': novelCastAtLimit && !novelCastIds.includes(card.id) }"
+                :data-testid="'kt-rp-novel-pick-' + card.id"
+              >
+                <input
+                  type="checkbox"
+                  :checked="novelCastIds.includes(card.id)"
+                  :disabled="novelCastAtLimit && !novelCastIds.includes(card.id)"
+                  @change="toggleNovelCast(card.id)"
+                />
+                <span>{{ card.name }}</span>
+              </label>
+            </div>
+            <p class="ktrp-muted" data-testid="kt-rp-novel-first-mes-note">
+              {{ t('novelFirstMesIgnoredNote') }}
+            </p>
+          </div>
+
+          <div class="ktrp-form-grid">
+            <div class="ktrp-field-block">
+              <label class="ktrp-label" for="ktrp-novel-narrator-card">{{ t('novelNarratorLabel') }}</label>
+              <select
+                id="ktrp-novel-narrator-card"
+                v-model="novelNarratorCardId"
+                class="ktrp-select"
+                data-testid="kt-rp-novel-narrator-card"
+              >
+                <option value="__default__">{{ t('novelNarratorDefaultOption') }}</option>
+                <option value="__none__">{{ t('novelNarratorNoneOption') }}</option>
+                <option v-for="item in narratorCardOptions" :key="'narr-' + item.id" :value="item.id">
+                  {{ item.label }}
+                </option>
+              </select>
+            </div>
+
+            <div class="ktrp-field-block">
+              <label class="ktrp-label" for="ktrp-novel-style-card">{{ t('novelStyleCardLabel') }}</label>
+              <select
+                id="ktrp-novel-style-card"
+                v-model="novelStyleCardId"
+                class="ktrp-select"
+                data-testid="kt-rp-novel-style-card"
+              >
+                <option value="">{{ t('novelStyleCardNoneOption') }}</option>
+                <option v-for="item in styleCardOptions" :key="'style-' + item.id" :value="item.id">
+                  {{ item.label }}
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <div
+            v-if="novelNarratorCardId === '__default__'"
+            class="ktrp-sub-card ktrp-default-narrator-card"
+            data-testid="kt-rp-default-narrator-preview"
+          >
+            <div class="ktrp-default-narrator-head">
+              <img
+                :src="defaultNarrator.portraitUrl"
+                :alt="defaultNarrator.name"
+                class="ktrp-narrator-thumb"
+                data-testid="kt-rp-default-narrator-thumb"
+              />
+              <div class="ktrp-default-narrator-meta">
+                <div class="ktrp-row-between">
+                  <strong>{{ defaultNarrator.name }}</strong>
+                  <div class="ktrp-inline-actions">
+                    <ActionButton
+                      v-if="defaultNarrator.description || defaultNarrator.personality || defaultNarrator.examples"
+                      size="sm"
+                      variant="ghost"
+                      :aria-expanded="String(defaultNarratorRulesExpanded)"
+                      data-testid="kt-rp-default-narrator-rules-toggle"
+                      @click="defaultNarratorRulesExpanded = !defaultNarratorRulesExpanded"
+                    >
+                      {{ defaultNarratorRulesExpanded ? t('novelDefaultNarratorCollapseBtn') : t('novelDefaultNarratorExpandBtn') }}
+                    </ActionButton>
+                    <ActionButton
+                      size="sm"
+                      :disabled="busy || copyingDefaultNarrator"
+                      data-testid="kt-rp-copy-default-narrator"
+                      @click="copyDefaultNarrator"
+                    >
+                      {{ copyingDefaultNarrator ? t('novelCopyingDefaultNarratorBtn') : t('novelCopyDefaultNarratorBtn') }}
+                    </ActionButton>
+                  </div>
+                </div>
+                <p v-if="defaultNarrator.description && !defaultNarratorRulesExpanded" class="ktrp-muted ktrp-narrator-summary">
+                  {{ defaultNarrator.description }}
+                </p>
+              </div>
+            </div>
+            <div
+              v-if="defaultNarratorRulesExpanded"
+              class="ktrp-stack"
+              data-testid="kt-rp-default-narrator-rules"
+            >
+              <p v-if="defaultNarrator.description" class="ktrp-muted ktrp-pre">{{ defaultNarrator.description }}</p>
+              <p v-if="defaultNarrator.personality" class="ktrp-muted ktrp-pre">{{ defaultNarrator.personality }}</p>
+              <pre v-if="defaultNarrator.examples" class="ktrp-quote-box ktrp-pre">{{ defaultNarrator.examples }}</pre>
+            </div>
+          </div>
+
+          <div class="ktrp-field-block">
+            <span class="ktrp-label">{{ t('novelWorldbooksLabel', { max: novelWorldbookLimit }) }}</span>
+            <div
+              v-if="worldbooks.length"
+              class="ktrp-cast-picker"
+              data-testid="kt-rp-novel-worldbooks"
+            >
+              <label
+                v-for="wb in worldbooks"
+                :key="wb.id"
+                class="ktrp-cast-check"
+                :class="{ 'is-disabled': novelWorldbooksAtLimit && !novelWorldbookIds.includes(wb.id) }"
+              >
+                <input
+                  type="checkbox"
+                  :checked="novelWorldbookIds.includes(wb.id)"
+                  :disabled="novelWorldbooksAtLimit && !novelWorldbookIds.includes(wb.id)"
+                  :data-testid="'kt-rp-novel-worldbook-' + wb.id"
+                  @change="toggleNovelWorldbook(wb.id)"
+                />
+                <span>{{ wb.name }} ({{ wb.supportedEntries }}/{{ wb.totalEntries }})</span>
+              </label>
+            </div>
+            <p v-else class="ktrp-muted" data-testid="kt-rp-novel-worldbooks">
+              {{ t('novelWorldbooksEmpty') }}
+            </p>
+            <label class="ktrp-mvu-option">
+              <input
+                v-model="novelIncludeCardLore"
+                type="checkbox"
+                data-testid="kt-rp-novel-include-card-lore"
+              />
+              <span>{{ t('novelIncludeCardLoreLabel') }}</span>
             </label>
           </div>
+
+          <div class="ktrp-field-block">
+            <label class="ktrp-label" for="ktrp-novel-premise">{{ t('novelPremiseLabel') }}</label>
+            <textarea
+              id="ktrp-novel-premise"
+              v-model="novelPremise"
+              rows="2"
+              class="ktrp-textarea"
+              maxlength="8000"
+              :placeholder="t('novelPremisePlaceholder')"
+              data-testid="kt-rp-novel-premise"
+            />
+          </div>
+
+          <div class="ktrp-field-block">
+            <label class="ktrp-label" for="ktrp-novel-sheet-hint">{{ t('novelSheetHintLabel') }}</label>
+            <input
+              id="ktrp-novel-sheet-hint"
+              v-model="novelSheetHint"
+              type="text"
+              class="ktrp-input"
+              maxlength="1000"
+              :placeholder="t('novelSheetHintPlaceholder')"
+              data-testid="kt-rp-novel-sheet-hint"
+            />
+          </div>
+
+          <div class="ktrp-field-block">
+            <label class="ktrp-label" for="ktrp-novel-prologue-mode">{{ t('novelPrologueModeLabel') }}</label>
+            <select
+              id="ktrp-novel-prologue-mode"
+              v-model="novelPrologueMode"
+              class="ktrp-select"
+              data-testid="kt-rp-novel-prologue-mode"
+            >
+              <option value="none">{{ t('novelPrologueNone') }}</option>
+              <option value="static">{{ t('novelPrologueStatic') }}</option>
+              <option value="prompt">{{ t('novelProloguePrompt') }}</option>
+            </select>
+          </div>
+
+          <div v-if="novelPrologueMode === 'static'" class="ktrp-sub-card" data-testid="kt-rp-novel-prologue-static">
+            <div class="ktrp-field-block">
+              <label class="ktrp-label" for="ktrp-novel-prologue-title">{{ t('novelPrologueTitleLabel') }}</label>
+              <input
+                id="ktrp-novel-prologue-title"
+                v-model="novelPrologueTitle"
+                type="text"
+                class="ktrp-input"
+                maxlength="200"
+                :placeholder="t('novelPrologueTitleDefault')"
+                data-testid="kt-rp-novel-prologue-title"
+              />
+            </div>
+            <div class="ktrp-field-block">
+              <label class="ktrp-label" for="ktrp-novel-prologue-text">{{ t('novelPrologueTextLabel') }}</label>
+              <textarea
+                id="ktrp-novel-prologue-text"
+                v-model="novelPrologueText"
+                rows="4"
+                class="ktrp-textarea"
+                maxlength="20000"
+                :placeholder="t('novelPrologueTextPlaceholder')"
+                data-testid="kt-rp-novel-prologue-text"
+              />
+            </div>
+          </div>
+
+          <div v-else-if="novelPrologueMode === 'prompt'" class="ktrp-sub-card" data-testid="kt-rp-novel-prologue-prompt-box">
+            <div class="ktrp-field-block">
+              <label class="ktrp-label" for="ktrp-novel-prologue-prompt">{{ t('novelProloguePromptLabel') }}</label>
+              <textarea
+                id="ktrp-novel-prologue-prompt"
+                v-model="novelProloguePrompt"
+                rows="3"
+                class="ktrp-textarea"
+                maxlength="4000"
+                :placeholder="t('novelProloguePromptPlaceholder')"
+                data-testid="kt-rp-novel-prologue-prompt"
+              />
+            </div>
+          </div>
+
           <div class="ktrp-row-end">
             <ActionButton
               variant="primary"

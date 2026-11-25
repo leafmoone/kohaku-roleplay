@@ -1,21 +1,46 @@
 """Scene tools narrow KT broadcasts to typed, per-character story exchanges."""
 
 import json
+from asyncio import gather
 from typing import Protocol
 
-from pydantic import BaseModel, Field
-from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolContext, ToolResult
-from kohakuterrarium.terrarium.tools.context import resolve_group_context, resolve_group_target
+from kohakuterrarium.modules.tool.base import (
+    BaseTool,
+    ExecutionMode,
+    ToolContext,
+    ToolResult,
+)
+from kohakuterrarium.terrarium.tools.context import (
+    resolve_group_context,
+    resolve_group_target,
+)
 from kohakuterrarium.terrarium.tools.send import SendChannelTool
+from kohakuterrarium.utils.logging import get_logger
+from pydantic import BaseModel, Field, ValidationError
 
-from .novel import Cue, Outcome, Proposal, SceneError, Story, StoryModel, begin_scene, commit_scene, npc_input, receive_report
+from .novel import (
+    Cue,
+    Outcome,
+    Proposal,
+    SceneError,
+    Story,
+    StoryModel,
+    begin_scene,
+    commit_scene,
+    npc_input,
+    receive_report,
+)
+
+log = get_logger(__name__)
 
 
 class SceneHost(Protocol):
     def watch_reports(self, context: ToolContext) -> None: ...
     def story(self) -> Story: ...
     def save_story(self, story: Story) -> None: ...
-    def save_adjudication(self, context: ToolContext, story: Story, outcome: Outcome) -> None: ...
+    def open_dispatched_scene(self, before: Story, story: Story) -> None: ...
+    def require_open_scene(self) -> None: ...
+    def save_adjudication(self, context: ToolContext, before: Story, story: Story, outcome: Outcome) -> None: ...
 
 
 class Dispatch(StoryModel):
@@ -25,6 +50,10 @@ class Dispatch(StoryModel):
 class Report(StoryModel):
     scene: int = Field(gt=0)
     proposal: Proposal
+
+
+class ReportEnvelope(Report):
+    attempt: str = ""
 
 
 class Commit(StoryModel):
@@ -38,6 +67,7 @@ class Check(StoryModel):
 
 class SceneTool(BaseTool):
     needs_context = True
+    is_concurrency_safe = False
     execution_mode = ExecutionMode.DIRECT
     arguments: type[BaseModel]
 
@@ -62,7 +92,8 @@ def prepare_cue(context: ToolContext, group, story: Story, actor: str) -> dict[s
     target = resolve_group_target(group, actor)
     _listeners(context, actor, {group.caller.creature_id, target.creature_id})
     plugin = target.agent.plugins.get_plugin("roleplay")
-    if plugin is None or plugin.binding is None or plugin.mode != "npc":
+    if (plugin is None or plugin.binding is None or plugin.mode != "npc"
+            or plugin.binding.session_store is not group.caller.agent.session_store):
         raise SceneError(f"Missing NPC session binding for {actor!r}")
     cue = npc_input(story, actor)
     if plugin.binding.get_state("privateKnowledge") is not None:
@@ -82,14 +113,15 @@ class DispatchScene(SceneTool):
         self.host = host
 
     async def _execute(self, args: dict, context: ToolContext) -> ToolResult:
+        self.host.require_open_scene()
         cues = Dispatch.model_validate(args).cues
         group = resolve_group_context(context)
         self.host.watch_reports(context)
-        story = begin_scene(self.host.story(), cues)
+        before = self.host.story()
+        story = begin_scene(before, cues)
         deliveries = {actor: prepare_cue(context, group, story, actor) for actor in cues}
-        self.host.save_story(story)
-        for actor, cue in deliveries.items():
-            await send_story_message(context, actor, cue)
+        self.host.open_dispatched_scene(before, story)
+        await gather(*(send_story_message(context, actor, cue) for actor, cue in deliveries.items()))
         return ToolResult(output=json.dumps({"scene": story.pending.number, "waiting": list(cues)}))
 
 
@@ -109,11 +141,15 @@ class ReportScene(SceneTool):
         director = root.agent.plugins.get_plugin("roleplay")
         director.watch_reports(context)
         current = director.story()
+        actor_plugin = group.caller.agent.plugins.get_plugin("roleplay")
+        attempt = actor_plugin.binding.get_state("cueAttempt") or ""
+        if current.pending is None or current.pending.attempt != attempt:
+            raise SceneError("This NPC proposal belongs to an inactive scene attempt")
         checked = receive_report(current, report.scene, group.caller.name, report.proposal)
         if checked is not current:
-            await send_story_message(context, "report_to_root", report.model_dump())
-        actor_plugin = group.caller.agent.plugins.get_plugin("roleplay")
+            await send_story_message(context, "report_to_root", {**report.model_dump(), "attempt": attempt})
         actor_plugin.binding.set_state("reportedScene", report.scene)
+        actor_plugin.ui_emit("state", actor_plugin.ui_state())
         return ToolResult(output=f"Your report for scene {report.scene} was received. Finish this turn; report again only for a new scene.")
 
 
@@ -135,8 +171,14 @@ def ingest_report(group, story: Story, message) -> Story:
         return story
     if message.sender_id != resolve_group_target(group, message.sender).creature_id:
         return story
-    report = Report.model_validate_json(message.content)
-    if report.scene != scene.number:
+    if message.sender in scene.reports:
+        return story
+    try:
+        report = ReportEnvelope.model_validate_json(message.content)
+    except ValidationError:
+        log.warning("Ignored malformed novel report", actor=message.sender, scene=scene.number)
+        return story
+    if report.scene != scene.number or report.attempt != scene.attempt:
         return story
     return receive_report(story, report.scene, message.sender, report.proposal)
 
@@ -159,9 +201,9 @@ class CheckScene(SceneTool):
 
 class CommitScene(SceneTool):
     tool_name = "rp_commit_scene"
-    description = ('Adjudicate once all reports are in. Pass scene as an integer and outcome as an '
+    description = ('Commit directly when no proposals are needed, or adjudicate once all reports are in. Pass scene as an integer and outcome as an '
                    'object containing {"prose": "..."}, not the prose string itself. Include changed '
-                   'facts, private_updates, visible_status or card_updates in outcome when applicable. '
+                   'facts, memory_updates, sheet_updates, visible_status or card_updates in outcome when applicable. '
                    'Keep character-private information out of reader prose.')
     arguments = Commit
 
@@ -172,6 +214,8 @@ class CommitScene(SceneTool):
     async def _execute(self, args: dict, context: ToolContext) -> ToolResult:
         request = Commit.model_validate(args)
         story = collect_reports(context, self.host.story())
+        if story.pending is None:
+            self.host.require_open_scene()
         committed = commit_scene(story, request.scene, request.outcome)
-        self.host.save_adjudication(context, committed, request.outcome)
+        self.host.save_adjudication(context, story, committed, request.outcome)
         return ToolResult(output=request.outcome.prose)

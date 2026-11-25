@@ -20,6 +20,7 @@ import {
 } from "./helpers.js";
 import { CardMediaGallery } from "./CardMediaGallery.js";
 import { CardWebPanel } from "./CardWebPanel.js";
+import { CharacterSheetView } from "./CharacterSheetView.js";
 import { MvuPanel } from "./MvuPanel.js";
 import { NativePanels } from "./NativePanels.js";
 import { PortraitFrame } from "./PortraitFrame.js";
@@ -58,6 +59,7 @@ export const RoleplayDockPanel = {
     ActionButton,
     CardMediaGallery,
     CardWebPanel,
+    CharacterSheetView,
     MvuPanel,
     NativePanels,
     PortraitFrame,
@@ -188,6 +190,30 @@ export const RoleplayDockPanel = {
     const chooseNativeOption = (panelId, index) =>
       owner.call("choose_panel_option", { panelId, index });
     const novelView = computed(() => projectNovelView(state.value));
+    const novelActorNameMap = computed(() => {
+      const map = new Map();
+      if (novelView.value.player) {
+        map.set(novelView.value.player.actor, novelView.value.player.name);
+      }
+      for (const actor of novelView.value.cast) {
+        map.set(actor.actor, actor.name);
+      }
+      return map;
+    });
+    const novelLatestDisplayProse = computed(() => {
+      const chapters = novelView.value.chapters;
+      if (chapters.length) {
+        const last = chapters[chapters.length - 1];
+        return last.cleanProse || last.prose || novelView.value.latestProse;
+      }
+      return novelView.value.latestProse;
+    });
+
+    function formatNovelActorsList(actorIds) {
+      return (Array.isArray(actorIds) ? actorIds : [])
+        .map((id) => novelActorNameMap.value.get(id) || id)
+        .join(", ");
+    }
 
     function worldbookIssueLabel(issueOrCode, countArg = 1) {
       const code =
@@ -1020,6 +1046,14 @@ export const RoleplayDockPanel = {
       }
     }
 
+    function openNovelReaderTab() {
+      try {
+        openTab("kohaku-roleplay/novel-reader");
+      } catch {
+        openLibraryTab();
+      }
+    }
+
     function openLibrarySettings() {
       try {
         openTab({ kind: "settings", id: "settings", section: "ext:kohaku-roleplay/library" });
@@ -1105,6 +1139,8 @@ export const RoleplayDockPanel = {
       resumingScene,
       resumeError,
       novelView,
+      novelLatestDisplayProse,
+      formatNovelActorsList,
       busy,
       actionError,
       loadCards,
@@ -1124,6 +1160,7 @@ export const RoleplayDockPanel = {
       resumePendingScene,
       openLibraryTab,
       openWorldbooksTab,
+      openNovelReaderTab,
       openLibrarySettings,
     };
   },
@@ -1191,9 +1228,19 @@ export const RoleplayDockPanel = {
         <section v-else-if="mode === 'novel'" class="ktrp-stack" data-testid="kt-rp-novel-view">
           <div class="ktrp-banner ktrp-banner--info">
             <div>
-              <strong>{{ t('novelProjectionTitle') }}</strong>
+              <strong>{{ novelView.title || t('novelProjectionTitle') }}</strong>
               <p class="ktrp-muted">{{ t('novelProjectionNotice') }}</p>
             </div>
+            <ActionButton
+              v-if="novelView.active"
+              size="sm"
+              variant="primary"
+              icon="i-carbon-book"
+              data-testid="kt-rp-dock-open-reader-btn"
+              @click="openNovelReaderTab"
+            >
+              {{ t('novelOpenReaderBtn') }}
+            </ActionButton>
           </div>
 
           <div v-if="!novelView.active" class="ktrp-empty" data-testid="kt-rp-novel-inactive">
@@ -1202,9 +1249,68 @@ export const RoleplayDockPanel = {
           <template v-else>
             <div class="ktrp-stat-row">
               <span class="ktrp-chip">{{ t('novelSceneCompleted', { count: novelView.sceneNumber }) }}</span>
+              <span class="ktrp-chip">
+                {{
+                  novelView.playerMode === 'director'
+                    ? t('novelModeDirectorBadge')
+                    : t('novelModeProtagonistBadge')
+                }}
+              </span>
+              <span v-if="novelView.narrator" class="ktrp-chip ktrp-chip--accent" data-testid="kt-rp-novel-narrator-badge">
+                <img
+                  v-if="novelView.narrator.portraitUrl"
+                  :src="novelView.narrator.portraitUrl"
+                  :alt="novelView.narrator.name"
+                  class="ktrp-chip-avatar"
+                />
+                <span>
+                  {{
+                    novelView.narrator.isDefault
+                      ? t('novelDefaultNarratorBadge', { name: novelView.narrator.name })
+                      : t('novelNarratorBadge', { name: novelView.narrator.name })
+                  }}
+                </span>
+              </span>
+              <span v-else class="ktrp-chip" data-testid="kt-rp-novel-narrator-badge">
+                {{ t('novelNoNarratorBadge') }}
+              </span>
+              <span v-if="novelView.style" class="ktrp-chip ktrp-chip--accent" data-testid="kt-rp-novel-style-badge">
+                {{ t('novelStyleCardBadge', { name: novelView.style.name }) }}
+              </span>
               <span v-if="novelView.pendingScene" class="ktrp-chip ktrp-chip--accent">
                 {{ t('novelScenePending', { number: novelView.pendingScene.number }) }}
               </span>
+            </div>
+
+            <div
+              v-if="novelView.premise || novelView.sheetHint"
+              class="ktrp-card-box"
+              data-testid="kt-rp-novel-premise-card"
+            >
+              <template v-if="novelView.premise">
+                <div class="ktrp-box-head">{{ t('novelPremiseTitle') }}</div>
+                <p class="ktrp-muted ktrp-pre">{{ novelView.premise }}</p>
+              </template>
+              <template v-if="novelView.sheetHint">
+                <div class="ktrp-box-head">{{ t('novelSheetHintLabel') }}</div>
+                <p class="ktrp-muted ktrp-pre">{{ novelView.sheetHint }}</p>
+              </template>
+            </div>
+
+            <div class="ktrp-card-box" data-testid="kt-rp-novel-worldbooks-card">
+              <div class="ktrp-box-head">
+                {{ t('novelWorldbooksTitle', { count: novelView.worldbooks.length }) }}
+              </div>
+              <div v-if="novelView.worldbooks.length" class="ktrp-chip-row">
+                <span
+                  v-for="wb in novelView.worldbooks"
+                  :key="wb.id"
+                  class="ktrp-chip"
+                >
+                  {{ wb.name }} ({{ wb.entries }})
+                </span>
+              </div>
+              <p v-else class="ktrp-muted">{{ t('novelNoWorldbooks') }}</p>
             </div>
 
             <div v-if="novelView.pendingScene" class="ktrp-card-box" data-testid="kt-rp-novel-pending">
@@ -1221,6 +1327,12 @@ export const RoleplayDockPanel = {
                   {{ resumingScene ? t('novelResumingBtn') : t('novelResumeBtn') }}
                 </ActionButton>
               </div>
+              <p v-if="novelView.pendingScene.waiting.length" class="ktrp-muted">
+                {{ t('novelWaitingActors', { actors: formatNovelActorsList(novelView.pendingScene.waiting) }) }}
+              </p>
+              <p v-if="novelView.pendingScene.reported.length" class="ktrp-muted">
+                {{ t('novelReportedActors', { actors: formatNovelActorsList(novelView.pendingScene.reported) }) }}
+              </p>
               <p class="ktrp-muted">{{ t('novelResumeHint') }}</p>
               <div
                 v-if="resumeError"
@@ -1238,42 +1350,26 @@ export const RoleplayDockPanel = {
               <div v-else class="ktrp-cast-list">
                 <div
                   v-for="actor in novelView.cast"
-                  :key="actor.name"
-                  class="ktrp-cast-item"
-                  :data-testid="'kt-rp-novel-cast-' + actor.name"
+                  :key="actor.actor"
+                  class="ktrp-cast-item ktrp-stack"
+                  :data-testid="'kt-rp-novel-cast-' + actor.actor"
                 >
-                  <PortraitFrame
-                    :card-id="actor.cardId"
-                    :name="actor.name"
-                    :has-portrait="actor.hasPortrait"
-                    :variant="actor.portraitKey"
-                    arg-key="id"
-                    size="sm"
+                  <CharacterSheetView
+                    :actor="actor"
+                    :show-private="false"
+                    :show-memory="false"
+                    :allow-upload-portrait="false"
+                    :allow-save-to-library="false"
+                    compact
+                    :test-id-prefix="'kt-rp-novel-cast-sheet-' + actor.actor"
                   />
-                  <div class="ktrp-cast-meta">
-                    <div class="ktrp-cast-head">
-                      <strong>{{ actor.name }}</strong>
-                      <span v-if="actor.role" class="ktrp-chip">{{ actor.role }}</span>
-                    </div>
-                    <StateFieldsView
-                      v-if="actor.stateFields.length"
-                      :fields="actor.stateFields"
-                      compact
-                      :test-id="'kt-rp-novel-cast-state-' + actor.name"
-                    />
-                    <div v-if="Object.keys(actor.visibleStatus).length" class="ktrp-chip-row">
-                      <span v-for="(val, key) in actor.visibleStatus" :key="key" class="ktrp-chip">
-                        {{ key }}: {{ val }}
-                      </span>
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>
 
-            <div v-if="novelView.latestProse" class="ktrp-field-block" data-testid="kt-rp-novel-latest-prose">
+            <div v-if="novelLatestDisplayProse" class="ktrp-field-block" data-testid="kt-rp-novel-latest-prose">
               <h4>{{ t('novelLatestChapterTitle') }}</h4>
-              <p class="ktrp-quote-box ktrp-pre">{{ novelView.latestProse }}</p>
+              <p class="ktrp-quote-box ktrp-pre">{{ novelLatestDisplayProse }}</p>
             </div>
           </template>
         </section>

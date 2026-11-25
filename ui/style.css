@@ -1130,3 +1130,684 @@ section[data-test="v2-widget-ext:kohaku-roleplay/gameplay"][data-ktrp-interactin
   flex-direction: column;
   gap: 0.25rem;
 }
+
+/* Character Sheet & Actor Tabs */
+
+.ktrp-actor-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.ktrp-actor-tab {
+  padding: 0.22rem 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--kt-fs-2xs, 0.74rem);
+  cursor: pointer;
+}
+
+.ktrp-actor-tab.is-active {
+  border-color: var(--color-accent, var(--color-text));
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.ktrp-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.ktrp-sheet-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.ktrp-sheet-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.ktrp-sheet-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.ktrp-sheet-section--private,
+.ktrp-sheet-section--memory {
+  padding-top: 0.45rem;
+  border-top: 1px dashed var(--color-border);
+}
+
+.ktrp-sheet-entries-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.35rem;
+}
+
+.ktrp-sheet-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background: var(--color-bg);
+  min-width: 0;
+}
+
+/* Standalone Novel Reader Tab */
+
+.ktrp-tab-shell--reader {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ktrp-reader-root {
+  --ktrp-reader-bg: var(--color-bg);
+  --ktrp-reader-surface: var(--color-surface);
+  --ktrp-reader-page-bg: var(--color-surface);
+  --ktrp-reader-text: var(--color-text);
+  --ktrp-reader-muted: var(--color-text-muted);
+  --ktrp-reader-border: var(--color-border);
+  --ktrp-reader-font: Georgia, "Noto Serif SC", "Songti SC", serif;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--ktrp-reader-bg);
+  color: var(--ktrp-reader-text);
+}
+
+.ktrp-reader-root[data-theme="parchment"] {
+  --ktrp-reader-bg: #efe7d6;
+  --ktrp-reader-surface: #e8dec9;
+  --ktrp-reader-page-bg: #f8f2e4;
+  --ktrp-reader-text: #2e2519;
+  --ktrp-reader-muted: #6c5d49;
+  --ktrp-reader-border: #d8ccb3;
+}
+
+.ktrp-reader-root[data-theme="paper"] {
+  --ktrp-reader-bg: #f4f4f6;
+  --ktrp-reader-surface: #eceef2;
+  --ktrp-reader-page-bg: #ffffff;
+  --ktrp-reader-text: #1c1e24;
+  --ktrp-reader-muted: #5c6270;
+  --ktrp-reader-border: #dcdfe6;
+}
+
+.ktrp-reader-root[data-theme="night"] {
+  --ktrp-reader-bg: #14171c;
+  --ktrp-reader-surface: #1b1f26;
+  --ktrp-reader-page-bg: #1e232b;
+  --ktrp-reader-text: #dde2ea;
+  --ktrp-reader-muted: #9aa3b2;
+  --ktrp-reader-border: #2d3440;
+}
+
+.ktrp-reader-root[data-font="serif"] {
+  --ktrp-reader-font: Georgia, "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+}
+
+.ktrp-reader-root[data-font="sans"] {
+  --ktrp-reader-font: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.ktrp-reader-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+  padding: 0.5rem 0.85rem;
+  border-bottom: 1px solid var(--ktrp-reader-border);
+  background: var(--ktrp-reader-surface);
+  flex-shrink: 0;
+}
+
+.ktrp-reader-toolbar-left,
+.ktrp-reader-toolbar-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.ktrp-reader-book-title {
+  font-size: var(--kt-fs-base, 0.95rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 18rem;
+}
+
+.ktrp-reader-session-select {
+  width: auto;
+  max-width: 15rem;
+  padding: 0.25rem 0.45rem;
+}
+
+.ktrp-reader-seg {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--ktrp-reader-border);
+  border-radius: 0.4rem;
+  overflow: hidden;
+  background: var(--ktrp-reader-bg);
+}
+
+.ktrp-reader-seg-btn {
+  padding: 0.22rem 0.5rem;
+  border: 0;
+  border-right: 1px solid var(--ktrp-reader-border);
+  background: transparent;
+  color: var(--ktrp-reader-muted);
+  font: inherit;
+  font-size: var(--kt-fs-2xs, 0.74rem);
+  cursor: pointer;
+}
+
+.ktrp-reader-seg-btn:last-child {
+  border-right: 0;
+}
+
+.ktrp-reader-seg-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ktrp-reader-seg-btn.is-active {
+  background: var(--ktrp-reader-page-bg);
+  color: var(--ktrp-reader-text);
+  font-weight: 600;
+}
+
+.ktrp-reader-font-readout {
+  padding: 0 0.4rem;
+  border-right: 1px solid var(--ktrp-reader-border);
+  color: var(--ktrp-reader-muted);
+  font-size: var(--kt-fs-2xs, 0.74rem);
+  font-variant-numeric: tabular-nums;
+}
+
+.ktrp-reader-status-msg,
+.ktrp-reader-empty-state {
+  margin: 1.5rem;
+}
+
+.ktrp-reader-workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ktrp-reader-toc {
+  width: 16.5rem;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.85rem;
+  border-right: 1px solid var(--ktrp-reader-border);
+  background: var(--ktrp-reader-surface);
+  overflow-y: auto;
+}
+
+.ktrp-reader-toc-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.ktrp-reader-toc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.ktrp-reader-toc-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.38rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: var(--ktrp-reader-text);
+  font: inherit;
+  font-size: var(--kt-fs-xs, 0.8125rem);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ktrp-reader-toc-item:hover {
+  background: var(--ktrp-reader-bg);
+}
+
+.ktrp-reader-toc-item.is-active {
+  border-color: var(--ktrp-reader-border);
+  background: var(--ktrp-reader-page-bg);
+  font-weight: 600;
+}
+
+.ktrp-reader-toc-num {
+  color: var(--ktrp-reader-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.ktrp-reader-toc-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ktrp-reader-cast-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.ktrp-reader-cast-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: var(--kt-fs-xs, 0.8125rem);
+}
+
+.ktrp-reader-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ktrp-reader-wb-drawer {
+  margin: 0.65rem 1rem 0;
+  max-height: 15rem;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.ktrp-reader-wb-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.ktrp-reader-stage {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.5rem 1.25rem;
+  font-family: var(--ktrp-reader-font);
+  font-size: var(--ktrp-reader-font-size, 17px);
+}
+
+.ktrp-reader-page {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 1.75rem 2rem;
+  border: 1px solid var(--ktrp-reader-border);
+  border-radius: 0.65rem;
+  background: var(--ktrp-reader-page-bg);
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+.ktrp-reader-chapter {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--ktrp-reader-border);
+}
+
+.ktrp-reader-chapter:last-of-type {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.ktrp-reader-chapter-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ktrp-reader-chapter-eyebrow {
+  display: block;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ktrp-reader-muted);
+}
+
+.ktrp-reader-chapter-title {
+  margin: 0.15rem 0 0;
+  font-size: 1.45em;
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+.ktrp-reader-figure {
+  margin: 0.25rem 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.ktrp-reader-cg {
+  display: block;
+  max-width: 100%;
+  max-height: 26rem;
+  object-fit: contain;
+  border-radius: 0.45rem;
+  border: 1px solid var(--ktrp-reader-border);
+}
+
+.ktrp-reader-caption {
+  font-size: 0.85em;
+  color: var(--ktrp-reader-muted);
+  text-align: center;
+}
+
+.ktrp-reader-prose {
+  display: flex;
+  flex-direction: column;
+  gap: 0.95em;
+}
+
+.ktrp-reader-paragraph {
+  margin: 0;
+  line-height: 1.82;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ktrp-reader-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--ktrp-reader-border);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.ktrp-reader-rehearsal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--ktrp-reader-border);
+  border-radius: 0.5rem;
+  background: var(--ktrp-reader-surface);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: var(--kt-fs-xs, 0.8125rem);
+}
+
+.ktrp-reader-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--ktrp-reader-border);
+  background: var(--ktrp-reader-surface);
+  flex-shrink: 0;
+}
+
+.ktrp-reader-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-width: 48rem;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.ktrp-reader-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.55rem;
+  max-width: 48rem;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.ktrp-reader-textarea {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 820px) {
+  .ktrp-reader-workspace {
+    flex-direction: column;
+  }
+
+  .ktrp-reader-toc {
+    width: 100%;
+    max-height: 14rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--ktrp-reader-border);
+  }
+
+  .ktrp-reader-stage {
+    padding: 0.85rem 0.65rem;
+  }
+
+  .ktrp-reader-page {
+    padding: 1.1rem 1rem;
+  }
+}
+
+/* Mode 1 Selection Studio & Latest-Scene Rewrite / Variant Switcher */
+
+.ktrp-reader-selection-mark {
+  background: rgba(245, 196, 81, 0.34);
+  color: inherit;
+  border-radius: 0.2rem;
+  padding: 0 0.12rem;
+}
+
+.ktrp-reader-selection-mark.is-preview {
+  background: rgba(74, 158, 255, 0.28);
+  outline: 1px dashed currentColor;
+}
+
+.ktrp-reader-root[data-theme="night"] .ktrp-reader-selection-mark {
+  background: rgba(235, 178, 56, 0.28);
+}
+
+.ktrp-reader-root[data-theme="night"] .ktrp-reader-selection-mark.is-preview {
+  background: rgba(92, 168, 255, 0.26);
+}
+
+.ktrp-selection-studio {
+  width: 21rem;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0.85rem;
+  border-left: 1px solid var(--ktrp-reader-border);
+  background: var(--ktrp-reader-surface);
+  overflow-y: auto;
+}
+
+.ktrp-selection-studio-head {
+  gap: 0.4rem;
+}
+
+.ktrp-selection-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 1px solid var(--ktrp-reader-border);
+  border-radius: 0.35rem;
+  background: transparent;
+  color: var(--ktrp-reader-muted);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ktrp-selection-excerpt {
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border-left: 2px solid var(--ktrp-reader-border);
+  background: var(--ktrp-reader-page-bg);
+  border-radius: 0.35rem;
+  font-size: var(--kt-fs-xs, 0.8125rem);
+  max-height: 6rem;
+  overflow-y: auto;
+}
+
+.ktrp-selection-preset-btn {
+  cursor: pointer;
+}
+
+.ktrp-selection-candidate-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--ktrp-reader-border);
+  border-radius: 0.45rem;
+  background: var(--ktrp-reader-page-bg);
+  color: var(--ktrp-reader-text);
+  font: inherit;
+  font-size: var(--kt-fs-xs, 0.8125rem);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ktrp-selection-candidate-btn.is-selected {
+  border-color: var(--color-accent, #5a8dee);
+  box-shadow: 0 0 0 1px var(--color-accent, #5a8dee);
+}
+
+.ktrp-reader-variant-switcher {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--ktrp-reader-border);
+  border-radius: 0.4rem;
+  overflow: hidden;
+  background: var(--ktrp-reader-bg);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.ktrp-reader-variant-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 0.45rem;
+  border-right: 1px solid var(--ktrp-reader-border);
+  font-size: var(--kt-fs-2xs, 0.74rem);
+  color: var(--ktrp-reader-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ktrp-reader-rewrite-drawer {
+  margin-top: 0.35rem;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+@media (max-width: 1080px) {
+  .ktrp-reader-workspace {
+    flex-direction: column;
+  }
+
+  .ktrp-reader-toc {
+    width: 100%;
+    max-height: 14rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--ktrp-reader-border);
+  }
+
+  .ktrp-selection-studio {
+    width: 100%;
+    max-height: 18rem;
+    border-left: 0;
+    border-top: 1px solid var(--ktrp-reader-border);
+  }
+}
+
+/* Default Narrator Preview & Chip Avatar */
+
+.ktrp-default-narrator-card {
+  gap: 0.5rem;
+}
+
+.ktrp-default-narrator-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.ktrp-narrator-thumb {
+  width: 3rem;
+  height: 3.75rem;
+  object-fit: cover;
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+  flex-shrink: 0;
+}
+
+.ktrp-default-narrator-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.ktrp-narrator-summary {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ktrp-chip-avatar {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  object-fit: cover;
+  margin-right: 0.25rem;
+  flex-shrink: 0;
+}

@@ -3,29 +3,57 @@
 import asyncio
 import base64
 import binascii
+from pathlib import Path
 
-from pydantic import ValidationError
 from kohakuterrarium.api.ext import UICallContext
-from kohakuterrarium.modules.ui_owner import OwnerArgumentError, OwnerForbiddenError, UIOwnerMixin
+from kohakuterrarium.modules.ui_owner import (
+    OwnerArgumentError,
+    OwnerForbiddenError,
+    UIOwnerMixin,
+)
+from pydantic import ValidationError
 
 from .card_assets import prepare_card_assets
 from .card_editor import CopyRequest, edit_draft, save_copy
 from .cards import MAX_CARD_BYTES, CardError, card_format, parse_card
 from .charx import MAX_ARCHIVE_BYTES
-from .library import (CardNotFound, card_scripts_default, import_card, list_cards,
-                      original_card, remove_card, set_card_scripts_default)
+from .default_narrator import default_narrator_png_card, default_narrator_view
+from .library import (
+    CardNotFound,
+    CardSummary,
+    card_scripts_default,
+    import_card,
+    list_cards,
+    original_card,
+    remove_card,
+    set_card_scripts_default,
+)
 from .library_view import card_detail, media_view, portrait_view
 from .module_library import snapshot_modules
-from .opening_page_library import (opening_module_dependencies, opening_module_plan,
-                                   opening_page_dependencies, snapshot_opening_module, snapshot_opening_page)
-from .portrait_library import PortraitCopy, portrait_draft, save_portraits_copy
+from .opening_page_library import (
+    opening_module_dependencies,
+    opening_module_plan,
+    opening_page_dependencies,
+    snapshot_opening_module,
+    snapshot_opening_page,
+)
 from .paths import library_dir
+from .portrait_library import PortraitCopy, portrait_draft, save_portraits_copy
 from .script_dependencies import script_dependencies
 from .tavern_artifacts import inspect_tavern_artifacts
 from .tavern_extension_manifest import inspect_tavern_extension
-from .worldbook_library import (MAX_WORLDBOOK_BYTES, WorldbookNotFound, embedded_worldbook, import_worldbook,
-                                list_worldbooks, original_worldbook, preview_worldbook, remove_worldbook,
-                                set_default_worldbook, worldbook_detail)
+from .worldbook_library import (
+    MAX_WORLDBOOK_BYTES,
+    WorldbookNotFound,
+    embedded_worldbook,
+    import_worldbook,
+    list_worldbooks,
+    original_worldbook,
+    preview_worldbook,
+    remove_worldbook,
+    set_default_worldbook,
+    worldbook_detail,
+)
 
 
 def single_user(context: UICallContext) -> None:
@@ -62,6 +90,10 @@ def _preview_card_dependencies(args: dict[str, object]) -> dict:
             **({"remoteOpeningPage": page.model_dump()} if (page := card.legacy_remote_opening) else {})}
 
 
+def _copy_default_narrator(directory: Path) -> CardSummary:
+    return import_card(directory, default_narrator_png_card())
+
+
 class CardCatalog(UIOwnerMixin):
     """Serve card metadata and media without sharing any session's experiences."""
 
@@ -71,13 +103,20 @@ class CardCatalog(UIOwnerMixin):
         books, defaults = await asyncio.to_thread(list_worldbooks, directory)
         return {"cards": await asyncio.to_thread(list_cards, directory), "maxCardBytes": MAX_CARD_BYTES,
                 "maxArchiveBytes": MAX_ARCHIVE_BYTES, "worldbooks": books, "cardWorldbookDefaults": defaults,
-                "maxWorldbookBytes": MAX_WORLDBOOK_BYTES,
+                "maxWorldbookBytes": MAX_WORLDBOOK_BYTES, "defaultNarrator": default_narrator_view(),
                 "cardScriptsDefault": await asyncio.to_thread(card_scripts_default, directory)}
 
     async def ui_call(self, action: str, args: dict[str, object], context: UICallContext) -> object:
         single_user(context)
         directory = library_dir()
         try:
+            if action == "copy_default_narrator":
+                if args:
+                    raise OwnerArgumentError("Copying the default narrator takes no arguments")
+                card = await asyncio.to_thread(_copy_default_narrator, directory)
+                state = await self.ui_state(context)
+                self.ui_emit("state", state)
+                return {"card": card, "state": state}
             if action == "set_card_scripts_default":
                 enabled = args.get("enabled")
                 if set(args) != {"enabled"} or type(enabled) is not bool:
