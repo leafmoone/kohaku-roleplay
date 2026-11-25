@@ -948,12 +948,18 @@ export const NovelReaderView = {
 
     watch(
       () => [props.initialSessionId, props.initialCreatureId],
-      ([nextSid, nextCid]) => {
+      ([nextSid, nextCid], [prevSid]) => {
+        const sidChanged = Boolean(nextSid && nextSid !== prevSid);
         if (nextSid) {
           activeSessionId.value = nextSid;
         }
         if (nextCid) {
           activeCreatureId.value = nextCid;
+        } else if (sidChanged) {
+          activeCreatureId.value = "";
+        }
+        if (sidChanged && !isDirectNovelOwner.value) {
+          bridgedState.value = null;
         }
         if (!isDirectNovelOwner.value && (nextSid || isPackageOwner.value)) {
           void discoverNovelSessions();

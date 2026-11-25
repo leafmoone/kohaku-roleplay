@@ -4,13 +4,16 @@ import json
 from asyncio import gather
 from typing import Protocol
 
+from kohakuterrarium.core.channel import AgentChannel
 from kohakuterrarium.modules.tool.base import (
     BaseTool,
     ExecutionMode,
     ToolContext,
     ToolResult,
 )
+from kohakuterrarium.terrarium.creature.host import Creature
 from kohakuterrarium.terrarium.tools.context import (
+    GroupContext,
     compute_group,
     resolve_group_context,
     resolve_group_target,
@@ -40,7 +43,7 @@ class SceneHost(Protocol):
     def watch_reports(self, context: ToolContext) -> None: ...
     def story(self) -> Story: ...
     def save_story(self, story: Story) -> None: ...
-    def open_dispatched_scene(self, before: Story, story: Story) -> None: ...
+    def open_dispatched_scene(self, before: Story, story: Story, output: str) -> None: ...
     def require_open_scene(self) -> None: ...
     def save_adjudication(self, context: ToolContext, before: Story, story: Story, outcome: Outcome) -> None: ...
 
@@ -84,6 +87,27 @@ def resolve_story_director(group):
     if len(directors) != 1:
         raise SceneError("The graph must contain one privileged novel director")
     return directors[0]
+
+
+async def ensure_creature_running(group: GroupContext, target: Creature, label: str) -> None:
+    if target.is_running:
+        return
+    if target.agent.paused:
+        raise SceneError(f"{label} is paused; resume it in KT first")
+    if target.killed:
+        raise SceneError(f"{label} was force-stopped; start it in KT first")
+    await group.engine.start(target.creature_id)
+    # Register the broadcast queues before the listener's first wait can run.
+    for name in target.listen_channels:
+        channel = target.agent.environment.shared_channels.get(name)
+        if isinstance(channel, AgentChannel):
+            channel.subscribe(f"{target.name}_{name}")
+
+
+async def ensure_actor_running(group: GroupContext, actor: str) -> Creature:
+    target = resolve_group_target(group, actor)
+    await ensure_creature_running(group, target, f"Actor {actor!r}")
+    return target
 
 
 async def send_story_message(context: ToolContext, channel: str, value: dict[str, object]) -> None:
@@ -130,10 +154,13 @@ class DispatchScene(SceneTool):
         self.host.watch_reports(context)
         before = self.host.story()
         story = begin_scene(before, cues)
+        for actor in cues:
+            await ensure_actor_running(group, actor)
         deliveries = {actor: prepare_cue(context, group, story, actor) for actor in cues}
-        self.host.open_dispatched_scene(before, story)
+        output = json.dumps({"scene": story.pending.number, "waiting": list(cues)})
+        self.host.open_dispatched_scene(before, story, output)
         await gather(*(send_story_message(context, actor, cue) for actor, cue in deliveries.items()))
-        return ToolResult(output=json.dumps({"scene": story.pending.number, "waiting": list(cues)}))
+        return ToolResult(output=output)
 
 
 class ReportScene(SceneTool):
@@ -158,10 +185,15 @@ class ReportScene(SceneTool):
             raise SceneError("This NPC proposal belongs to an inactive scene attempt")
         checked = receive_report(current, report.scene, group.caller.name, report.proposal)
         if checked is not current:
-            await send_story_message(context, "report_to_root", {**report.model_dump(), "attempt": attempt})
+            director.save_story(checked)
+            if checked.pending is not None and checked.pending.reports.keys() == checked.pending.cues.keys():
+                await ensure_creature_running(group, root, "Director")
+                await send_story_message(context, "report_to_root", {**report.model_dump(), "attempt": attempt})
         actor_plugin.binding.set_state("reportedScene", report.scene)
         actor_plugin.ui_emit("state", actor_plugin.ui_state())
-        return ToolResult(output=f"Your report for scene {report.scene} was received. Finish this turn; report again only for a new scene.")
+        output = f"Your report for scene {report.scene} was received. Finish this turn; report again only for a new scene."
+        actor_plugin.mark_scene_feedback(self.tool_name, output)
+        return ToolResult(output=output)
 
 
 def collect_reports(context: ToolContext, story: Story) -> Story:

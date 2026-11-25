@@ -201,6 +201,7 @@ class RoleplayPlugin(BasePlugin):
         self._legacy_reply_capture: LegacyReplyCapture | None = None
         self.report_watch = None
         self.can_open_scene = False
+        self._scene_feedback: tuple[str, str] | None = None
         self._committed_prose: str | None = None
         self._committed_choices: ChoicePrompt | None = None
         self._committed_image: ImagePart | None = None
@@ -213,31 +214,33 @@ class RoleplayPlugin(BasePlugin):
         if self.mode == 'tavern' and agent is not None:
             self._legacy_reply_capture = LegacyReplyCapture(self._capture_legacy_reply)
             agent.output_router.add_secondary(self._legacy_reply_capture)
-        if self.mode != "novel" or agent is None:
+        if self.mode not in ("novel", "npc") or agent is None:
             return
         original = agent._collect_and_push_feedback
 
         async def finish_feedback(controller, handles, handle_order, native_tool_call_ids, native_mode) -> bool:
             # KT 2.2.2 appends native results before draining input and queuing
             # feedback. Keep that settlement; defer queued player turns only
-            # when a successful adjudication replaces the model continuation.
+            # when a successful scene tool ends the model continuation.
             drain, push = agent._drain_mid_turn_pending_inputs, controller.push_event
             owner = current_task()
-            settled_prose: str | None = None
+            settled = False
             withheld = False
 
             async def drain_input(active_controller) -> int:
-                nonlocal settled_prose
-                prose = self._committed_prose
-                if (current_task() is owner and active_controller is context.controller and prose is not None and handles
-                        and (not native_mode or self._has_commit_result(controller.conversation.get_messages(), native_tool_call_ids.values(), prose))):
-                    settled_prose = prose
+                nonlocal settled
+                marker = self._scene_feedback
+                if self._committed_prose is not None:
+                    marker = ("rp_commit_scene", self._committed_prose)
+                if (current_task() is owner and active_controller is context.controller and marker is not None and handles
+                        and (not native_mode or self._has_tool_result(controller.conversation.get_messages(), native_tool_call_ids.values(), *marker))):
+                    settled = True
                     return 0
                 return await drain(active_controller)
 
             async def push_feedback(event: TriggerEvent) -> None:
                 nonlocal withheld
-                if current_task() is owner and settled_prose is not None and event.type == "tool_complete":
+                if current_task() is owner and settled and event.type == "tool_complete":
                     withheld = True
                 else:
                     await push(event)
@@ -249,16 +252,18 @@ class RoleplayPlugin(BasePlugin):
             finally:
                 agent._drain_mid_turn_pending_inputs = drain
                 controller.push_event = push
-            if not withheld or settled_prose is None:
+            self._scene_feedback = None
+            if not withheld:
                 return again
-            choices = self._committed_choices
-            chat_text = settled_prose
-            if choices and "kt_roleplay.choices" in attached_renderers(agent) and self.novel.settings(self.binding).enableStoryChoices:
-                chat_text += "\n\n" + format_choice_fence(choices)
-            await self._publish_assistant(controller, chat_text, image=self._committed_image)
-            self._committed_prose = None
-            self._committed_choices = None
-            self._committed_image = None
+            if self._committed_prose is not None:
+                choices = self._committed_choices
+                chat_text = self._committed_prose
+                if choices and "kt_roleplay.choices" in attached_renderers(agent) and self.novel.settings(self.binding).enableStoryChoices:
+                    chat_text += "\n\n" + format_choice_fence(choices)
+                await self._publish_assistant(controller, chat_text, image=self._committed_image)
+                self._committed_prose = None
+                self._committed_choices = None
+                self._committed_image = None
             return False
 
         def restore() -> None:
@@ -268,17 +273,20 @@ class RoleplayPlugin(BasePlugin):
         agent._collect_and_push_feedback = finish_feedback
         self._restore_feedback = restore
 
+    def mark_scene_feedback(self, tool_name: str, output: str) -> None:
+        self._scene_feedback = (tool_name, output)
+
     @staticmethod
-    def _has_commit_result(messages, current_ids, prose: str) -> bool:
+    def _has_tool_result(messages, current_ids, tool_name: str, expected_output: str) -> bool:
         """Match the native result to the current assistant tool announcement."""
         result_ids = set()
         for message in reversed(messages):
             if message.role == "assistant":
                 return any(
-                    call["id"] in result_ids and call["function"]["name"] == "rp_commit_scene"
+                    call["id"] in result_ids and call["function"]["name"] == tool_name
                     for call in message.tool_calls or ()
                 )
-            if message.role == "tool" and message.tool_call_id in current_ids and message.get_text_content() == prose:
+            if message.role == "tool" and message.tool_call_id in current_ids and message.get_text_content() == expected_output:
                 result_ids.add(message.tool_call_id)
         return False
 
@@ -287,6 +295,9 @@ class RoleplayPlugin(BasePlugin):
             # The host journals a fresh turn before this hook. Migrate old receipts
             # through its predecessor, not through the new input being processed.
             self._upgrade_saved_script_clock(before_current=True)
+        if ((self.mode == "novel" and event.type in ("user_input", "roleplay_opening", "roleplay_resume"))
+                or (self.mode == "npc" and event.type == "channel_message")):
+            self._scene_feedback = None
         if self.mode == "novel" and event.type == "user_input" and self.binding and self.binding.session_store is not None:
             self.can_open_scene = self.story().pending is None
             if self.can_open_scene and active_revision(self.binding) is None:
@@ -665,7 +676,7 @@ class RoleplayPlugin(BasePlugin):
         self._save(story.model_dump())
         self.ui_emit("state", self.ui_state())
 
-    def open_dispatched_scene(self, before: Story, story: Story) -> None:
+    def open_dispatched_scene(self, before: Story, story: Story, output: str) -> None:
         binding = self.binding
         rewrite = active_revision(binding)
         if rewrite and rewrite.mode == "director_rewrite":
@@ -675,6 +686,7 @@ class RoleplayPlugin(BasePlugin):
             rows.append((binding._state_key(BASELINE), before.model_dump()))
         binding.session_store.state.put_many(rows)
         self.can_open_scene = False
+        self.mark_scene_feedback("rp_dispatch_scene", output)
         self.ui_emit("state", self.ui_state())
 
     def save_adjudication(self, context: ToolContext, before: Story, story: Story, outcome: Outcome) -> None:

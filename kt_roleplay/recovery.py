@@ -1,24 +1,32 @@
 """Manually resume only unfinished work in an existing story scene."""
 
+from kohakuterrarium.core.channel import AgentChannel
 from kohakuterrarium.core.events import TriggerEvent
-from kohakuterrarium.terrarium.tools.context import resolve_group_context, resolve_group_target
+from kohakuterrarium.terrarium.tools.context import resolve_group_context
 
 from .novel import SceneError
-from .scene_tools import collect_reports, prepare_cue, send_story_message
+from .scene_tools import (
+    collect_reports,
+    ensure_actor_running,
+    ensure_creature_running,
+    prepare_cue,
+    send_story_message,
+)
 
 
 async def resume_scene(plugin, number: int) -> None:
     binding = plugin.binding
     if binding is None or plugin.mode != "novel" or binding.host_agent is None:
-        raise SceneError("Recovery requires a running director")
+        raise SceneError("Recovery requires a loaded novel director")
     root = binding.host_agent
-    if root.is_processing or not root.is_running or root.paused:
-        raise SceneError("The director must be running and idle before resuming a scene")
+    if root.is_processing or root.paused:
+        raise SceneError("The director must be idle and unpaused before resuming a scene")
     context = root.executor._build_tool_context()
     group = resolve_group_context(context)
     current = plugin.story()
     if current.pending is None or current.pending.number != number:
         raise SceneError("This is not the current pending scene; refresh the session")
+    await ensure_creature_running(group, group.caller, "Director")
     plugin.watch_reports(context)
     story = collect_reports(context, current)
     if story is not current:
@@ -29,11 +37,12 @@ async def resume_scene(plugin, number: int) -> None:
         return
     deliveries = {}
     for actor in missing:
-        target = resolve_group_target(group, actor)
-        if target.agent.paused or not target.agent.is_running:
-            raise SceneError("A required NPC is not running; resume it in KT before retrying")
+        target = await ensure_actor_running(group, actor)
         channel = context.environment.shared_channels.get(actor)
-        if not target.agent.is_processing and (channel is None or not channel.qsize):
+        # The KT trigger subscribes as <creature>_<channel> on its first wait.
+        if not target.agent.is_processing and (
+            not isinstance(channel, AgentChannel) or channel.subscribe(f"{target.name}_{actor}").empty
+        ):
             cue = prepare_cue(context, group, story, actor)
             deliveries[actor] = (cue, target.agent.plugins.get_plugin("roleplay").binding)
     if not deliveries:

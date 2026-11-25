@@ -41,11 +41,18 @@ export function unregisterOverlayHost(hostId) {
  * Open the full-window Teleport Novel Reader overlay, optionally targeting a session and root creature.
  */
 export function openNovelReaderModal(sessionId, creatureId, hostId) {
-  if (typeof sessionId === "string" && sessionId.trim()) {
-    novelReaderTargetSessionId.value = sessionId.trim();
+  const nextSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
+  const nextCreatureId = typeof creatureId === "string" ? creatureId.trim() : "";
+  const sessionChanged = Boolean(
+    nextSessionId && nextSessionId !== novelReaderTargetSessionId.value,
+  );
+  if (nextSessionId) {
+    novelReaderTargetSessionId.value = nextSessionId;
   }
-  if (typeof creatureId === "string" && creatureId.trim()) {
-    novelReaderTargetCreatureId.value = creatureId.trim();
+  if (nextCreatureId) {
+    novelReaderTargetCreatureId.value = nextCreatureId;
+  } else if (sessionChanged) {
+    novelReaderTargetCreatureId.value = "";
   }
   if (typeof hostId === "string" && hostId.trim()) {
     preferredOverlayHostId.value = hostId.trim();

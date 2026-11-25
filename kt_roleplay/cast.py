@@ -269,7 +269,9 @@ class NovelBinding:
             live["joinedCast"] = joined
         if settings.playerMode != "director":
             live["playerSheet"] = story.sheets.get(PLAYER, CharacterSheet()).model_dump()
-        return "Director live scene state (reference data): " + json.dumps(live, ensure_ascii=False)
+        instruction = ("All invited actors have reported in pending.reports. Adjudicate with rp_commit_scene.\n"
+                       if phase and phase["ready"] else "")
+        return instruction + "Director live scene state (reference data): " + json.dumps(live, ensure_ascii=False)
 
     def view(self, binding) -> dict[str, object]:
         if binding is None or binding.session_store is None:
