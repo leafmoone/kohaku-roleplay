@@ -1,24 +1,37 @@
 """Prepare a tavern snapshot without publishing or writing the session."""
+import json
 from asyncio import to_thread
 from collections.abc import Callable
-import json
 from pathlib import Path
 
 from kohakuterrarium.modules.ui_owner import OwnerArgumentError
 
 from .card_scripts import CardScript, script_fingerprint
 from .cards import CardError, ParsedCard
-from .legacy_web import LegacyOpeningState, has_mvu_status_adapter, selected_message_values
+from .legacy_web import (
+    LegacyOpeningState,
+    has_mvu_status_adapter,
+    selected_message_values,
+)
 from .library import card_scripts_default
 from .lore import LoreBook
 from .module_linker import ModuleLinkError, link_card_scripts
 from .mvu import MvuInit, inspect_initializers, is_initializer, public_options
 from .mvu_legacy import split_opening
 from .mvu_settlement import settle_mvu_candidate
-from .opening_mvu_schema import OpeningSchemaSnapshot, derive_opening_schema, link_opening_schema
+from .opening_mvu_schema import (
+    OpeningSchemaSnapshot,
+    derive_opening_schema,
+    link_opening_schema,
+)
 from .opening_page_library import CALLBACK_RUNTIME, cached_opening_panel
-from .pinned_mvu import (PinnedHelperMissing, calculate_pinned_mvu, compile_pinned_mvu,
-                         initializer_entries, pinned_card_author)
+from .pinned_mvu import (
+    PinnedHelperMissing,
+    calculate_pinned_mvu,
+    compile_pinned_mvu,
+    initializer_entries,
+    pinned_card_author,
+)
 from .pinned_mvu_setup import SETUP_MARKER, setup_projection
 from .pinned_mvu_status import STATUS_MARKER
 from .portraits import rules_for
@@ -26,7 +39,11 @@ from .projections import expand
 from .script_session import SessionScripts, approved
 from .script_tool import CardScriptError
 from .tavern_state import Play, TavernSession
-from .worldbook_library import WorldbookReference, default_worldbook_for_play, worldbook_for_play
+from .worldbook_library import (
+    WorldbookReference,
+    default_worldbook_for_play,
+    worldbook_for_play,
+)
 
 SCRIPT_CLOCK_UNAVAILABLE = 'Card scripts require a KT host with a persisted conversation turn counter'
 WorldbookSnapshot = tuple[WorldbookReference | None, LoreBook | None]
@@ -221,7 +238,7 @@ async def prepare_tavern_opening(
         ensure_current()
         schema = OpeningSchemaSnapshot(grant=grant, code=code, value=value)
     return TavernSession(
-        cardId=choice.cardId, card=card.fields, player=choice.player,
+        cardId=choice.cardId, card=card.fields, player=choice.player, enableStoryChoices=choice.enableStoryChoices,
         greeting=expand(opening, card.fields.name, choice.player.name, ''),
         lore=lore, worldbook=book, worldbookRef=book_ref, notes='', greetingIndex=choice.greetingIndex,
         hasPortrait=card.portrait is not None, portrait_rules=rules_for(card.portraits), state_fields=card.state_fields,

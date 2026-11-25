@@ -36,7 +36,15 @@ from .default_narrator import (
 )
 from .gameplay_pack import GameplayPackUnavailable, tavern_creature
 from .library import CardNotFound, get_card, original_card
-from .novel import PLAYER, Chapter, CharacterSheet, PlayerMode, Story, sheet_from_fields
+from .novel import (
+    PLAYER,
+    Chapter,
+    CharacterSheet,
+    PlayerMode,
+    Story,
+    sheet_from_fields,
+    split_choices,
+)
 from .paths import library_dir
 from .runtime import RoleplayPlugin
 from .tavern_opening import resolve_tavern_worldbook
@@ -62,6 +70,7 @@ class NovelStart(Arguments):
     styleCardId: str | None = None
     worldbookIds: list[str] = Field(default_factory=list, max_length=8)
     includeCardLore: bool = False
+    enableStoryChoices: bool = True
     playerMode: PlayerMode = "protagonist"
     playerName: str = Field(default="Player", max_length=80)
     playerPersona: str = Field(default="", max_length=4000)
@@ -162,7 +171,8 @@ async def start_novel(body: NovelStart, host: StudioDep, service: ServiceDep) ->
     style = card_voice(style_id, _library_card(style_id).fields) if style_id else None
     settings = NovelSettings(title=(body.name or "").strip() or "Roleplay Novel", playerMode=body.playerMode,
                             playerName=player_name, playerPersona=body.playerPersona,
-                            premise=body.premise, sheetHint=body.sheetHint, narrator=narrator, style=style, includeCardLore=body.includeCardLore)
+                            premise=body.premise, sheetHint=body.sheetHint, narrator=narrator, style=style,
+                            includeCardLore=body.includeCardLore, enableStoryChoices=body.enableStoryChoices)
     recipes = [director_recipe(directory / "recipes", root_name)]
     try:
         session = await host.sessions.start_creature(recipes[0], name=root_name)
@@ -190,21 +200,24 @@ async def start_novel(body: NovelStart, host: StudioDep, service: ServiceDep) ->
         sheets = {m.actor: sheet_from_fields(m.state_fields, {}) for m in members}
         if body.playerMode == "protagonist":
             sheets[PLAYER] = CharacterSheet()
-        chapters = [Chapter(number=0, title=body.prologueTitle or "Prologue", prose=body.prologueText)] if body.prologueText else []
+        prologue, choices = split_choices(body.prologueText)
+        chapters = [Chapter(number=0, title=body.prologueTitle or "Prologue", prose=prologue,
+                            choices=choices if settings.enableStoryChoices else None)] if body.prologueText else []
         story = Story(cast=[m.actor for m in members], sheets=sheets, playerMode=body.playerMode,
-                      latest_prose=body.prologueText, chapters=chapters)
+                      latest_prose=prologue, chapters=chapters)
         for member in members:
             _, recipe = await add_cast_node(engine, root, plugin.binding, member, story)
             recipes.append(recipe)
         await engine.checkpoint_graph(sid)
         rename_session(service, sid, settings.title)
         plugin.binding.set_state("cast", [member.model_dump() for member in members])
+        settings = settings.model_copy(update={"initialActors": story.cast})
         plugin.binding.set_state("novelSettings", settings.model_dump())
         plugin.binding.set_state("narrator", narrator.model_dump() if narrator else None)
         plugin.binding.set_state("novelWorldbooks", [book.model_dump() for book in books])
         plugin.save_story(story)
         if chapters:
-            await plugin.publish_opening(body.prologueText)
+            await plugin.publish_opening(prologue)
         elif body.prologuePrompt:
             plugin.can_open_scene = True
             await root.agent.inject_event(TriggerEvent(type="roleplay_opening", content=f"Opening scene request:\n{body.prologuePrompt}"))

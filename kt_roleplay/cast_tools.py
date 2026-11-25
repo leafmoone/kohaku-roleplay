@@ -105,10 +105,15 @@ async def spawn_member(host, context: ToolContext, member: CastMember, book: Wor
         host.require_open_scene()
         latest = host.story()
         story = latest.model_copy(update={"cast": [*latest.cast, actor], "sheets": {**latest.sheets, actor: story.sheets[actor]}})
-        members = [*host.novel.members(binding), member]
+        existing = host.novel.members(binding)
+        members = [*existing, member]
         books = host.novel.worldbooks(binding)
         rows = [(binding._state_key("cast"), [row.model_dump() for row in members]),
                 (binding._state_key("novel"), story.model_dump())]
+        settings = host.novel.settings(binding)
+        if not settings.initialActors:
+            settings = settings.model_copy(update={"initialActors": [row.actor for row in existing]})
+            rows.append((binding._state_key("novelSettings"), settings.model_dump()))
         if book and all(row.id != book.id for row in books):
             rows.append((binding._state_key("novelWorldbooks"), [row.model_dump() for row in [*books, book]]))
         binding.session_store.state.put_many(rows)

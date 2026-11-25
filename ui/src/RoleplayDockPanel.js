@@ -151,6 +151,8 @@ export const RoleplayDockPanel = {
 
     const resumingScene = ref(false);
     const resumeError = ref("");
+    const storyChoicesBusy = ref(false);
+    let storyChoicesSeq = 0;
 
     const state = computed(() => owner.state.value || {});
     const mode = computed(() => {
@@ -164,6 +166,7 @@ export const RoleplayDockPanel = {
       return "persona";
     });
     const active = computed(() => Boolean(state.value.active));
+    const enableStoryChoices = computed(() => state.value?.enableStoryChoices !== false);
     const greetings = computed(() => collectGreetings(selectedDetail.value?.fields));
     const selectedCardSummary = computed(
       () => cards.value.find((card) => card.id === selectedCardId.value) || null,
@@ -439,6 +442,7 @@ export const RoleplayDockPanel = {
       worldbookMutationSeq += 1;
       scriptMutationSeq += 1;
       headerPinsSeq += 1;
+      storyChoicesSeq += 1;
       worldbookError.value = "";
       scriptBusy.value = false;
       scriptError.value = "";
@@ -449,6 +453,7 @@ export const RoleplayDockPanel = {
       headerPinsBusy.value = false;
       headerPinsError.value = "";
       headerPinsSaved.value = false;
+      storyChoicesBusy.value = false;
       panelMoreExpanded.value = false;
       resetSlotInspector();
     });
@@ -1035,6 +1040,32 @@ export const RoleplayDockPanel = {
       }
     }
 
+    async function toggleStoryChoices() {
+      if (busy.value || storyChoicesBusy.value || !active.value) return;
+      if (mode.value !== "tavern" && mode.value !== "novel") return;
+      const scopeSnap = tavernScopeKey.value;
+      const seq = ++storyChoicesSeq;
+      storyChoicesBusy.value = true;
+      actionError.value = "";
+      try {
+        const nextView = await owner.call("set_story_choices", {
+          enabled: !enableStoryChoices.value,
+        });
+        if (seq !== storyChoicesSeq || tavernScopeKey.value !== scopeSnap) return;
+        if (nextView && typeof nextView === "object") {
+          owner.state.value = nextView;
+        }
+      } catch (err) {
+        if (seq === storyChoicesSeq && tavernScopeKey.value === scopeSnap) {
+          actionError.value = err?.message || String(err);
+        }
+      } finally {
+        if (seq === storyChoicesSeq) {
+          storyChoicesBusy.value = false;
+        }
+      }
+    }
+
     function openLibraryTab() {
       try {
         openTab("kohaku-roleplay/studio");
@@ -1148,6 +1179,9 @@ export const RoleplayDockPanel = {
       saveHeaderSummaryPins,
       resumingScene,
       resumeError,
+      enableStoryChoices,
+      storyChoicesBusy,
+      toggleStoryChoices,
       novelView,
       novelLatestDisplayProse,
       formatNovelActorsList,
@@ -1290,6 +1324,16 @@ export const RoleplayDockPanel = {
               <span v-if="novelView.pendingScene" class="ktrp-chip ktrp-chip--accent">
                 {{ t('novelScenePending', { number: novelView.pendingScene.number }) }}
               </span>
+              <ActionButton
+                size="sm"
+                :variant="enableStoryChoices ? 'secondary' : 'ghost'"
+                :aria-pressed="String(enableStoryChoices)"
+                :disabled="busy || storyChoicesBusy"
+                data-testid="kt-rp-dock-story-choices-toggle"
+                @click="toggleStoryChoices"
+              >
+                {{ enableStoryChoices ? t('storyChoicesStatusOn') : t('storyChoicesStatusOff') }}
+              </ActionButton>
             </div>
 
             <div
@@ -1397,6 +1441,18 @@ export const RoleplayDockPanel = {
             />
             <div class="ktrp-active-meta">
               <h4>{{ state.name }}</h4>
+              <div class="ktrp-inline-actions">
+                <ActionButton
+                  size="sm"
+                  :variant="enableStoryChoices ? 'secondary' : 'ghost'"
+                  :aria-pressed="String(enableStoryChoices)"
+                  :disabled="busy || storyChoicesBusy"
+                  data-testid="kt-rp-dock-story-choices-toggle"
+                  @click="toggleStoryChoices"
+                >
+                  {{ enableStoryChoices ? t('storyChoicesStatusOn') : t('storyChoicesStatusOff') }}
+                </ActionButton>
+              </div>
             </div>
           </div>
 

@@ -5,7 +5,7 @@ import re
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from .card_state import FieldUpdate, StateField, Value
 
@@ -13,7 +13,8 @@ Key = Annotated[str, Field(min_length=1)]
 Visibility = Literal["public", "private"]
 PlayerMode = Literal["protagonist", "director"]
 PLAYER = "__player__"
-CHOICE_FENCE = re.compile(r"(?:^|\n)```kt_roleplay\.choices[^\S\n]*\n(.*?)\n```[^\S\n]*\s*\Z", re.DOTALL)
+CHOICE_FENCE = re.compile(r"(?:^|\n)```kt_roleplay\.choices[^\S\n]*\n((?:(?!\n```).)*)\n```[^\S\n]*\s*\Z", re.DOTALL)
+CHOICE_SHAPE = '{"prompt":"…","options":[{"tag":"…","label":"…","summary":"…","text":"…"}]}'
 
 
 class StoryModel(BaseModel):
@@ -67,6 +68,47 @@ class MemoryPatch(StoryModel):
     clear_beliefs: list[str] = Field(default_factory=list)
 
 
+class StoryChoicesToggle(StoryModel):
+    enabled: bool
+
+
+class ChoiceOption(StoryModel):
+    label: Key
+    text: Key
+    tag: str = ""
+    summary: str = ""
+
+    @field_validator("label", "text")
+    @classmethod
+    def usable_choice(cls, value: str, info: ValidationInfo) -> str:
+        value = value.strip()
+        if not value or (info.field_name == "text" and value.startswith("/")):
+            raise ValueError("Choice labels and text must not be blank; choice text cannot be a slash command")
+        return value
+
+    @field_validator("tag")
+    @classmethod
+    def short_tag(cls, value: str) -> str:
+        return value.strip()[:24].rstrip()
+
+    @field_validator("summary")
+    @classmethod
+    def one_line_summary(cls, value: str) -> str:
+        return " ".join(value.splitlines()).strip()
+
+
+class ChoicePrompt(StoryModel):
+    prompt: str = ""
+    options: list[ChoiceOption] = Field(min_length=1, max_length=6)
+
+    @field_validator("options", mode="before")
+    @classmethod
+    def allow_legacy_strings(cls, value: object) -> object:
+        if isinstance(value, list):
+            return [{"label": item, "text": item} if isinstance(item, str) else item for item in value]
+        return value
+
+
 class Chapter(StoryModel):
     number: int
     title: str = ""
@@ -74,7 +116,12 @@ class Chapter(StoryModel):
     actors: list[str] = Field(default_factory=list)
     imageUrl: str | None = None
     imageCaption: str = ""
-    choices: dict[str, object] | None = None
+    choices: ChoicePrompt | None = None
+
+    @field_validator("choices", mode="before")
+    @classmethod
+    def read_choices(cls, raw: object) -> ChoicePrompt | None:
+        return raw if isinstance(raw, ChoicePrompt) else normalize_choices(raw)
 
 
 class Cue(StoryModel):
@@ -96,6 +143,7 @@ class Scene(StoryModel):
 
 class Outcome(StoryModel):
     prose: Key
+    choices: ChoicePrompt | None = None
     title: str = ""
     actors: list[Key] = Field(default_factory=list)
     scene_image_key: str | None = None
@@ -127,36 +175,49 @@ class SceneError(ValueError):
     """An action does not belong to the active scene or its cast."""
 
 
-def split_choices(prose: str) -> tuple[str, dict[str, object] | None]:
+def normalize_choices(raw: object) -> ChoicePrompt | None:
+    if not isinstance(raw, dict) or not isinstance(raw.get("options"), list):
+        return None
+    options = []
+    for option in raw["options"]:
+        if isinstance(option, str):
+            option = {"label": option, "text": option}
+        if not isinstance(option, dict):
+            continue
+        label = option.get("label") or option.get("text") or option.get("value")
+        text = option.get("text") or option.get("value") or option.get("label")
+        if not (isinstance(label, str) and isinstance(text, str) and label.strip() and text.strip()) or text.lstrip().startswith("/"):
+            continue
+        tag, summary = option.get("tag"), option.get("summary")
+        options.append(ChoiceOption(label=label, text=text, tag=tag if isinstance(tag, str) else "",
+                                    summary=summary if isinstance(summary, str) else ""))
+        if len(options) == 6:
+            break
+    prompt = raw.get("prompt", raw.get("question", ""))
+    return ChoicePrompt(prompt=prompt.strip() if isinstance(prompt, str) else "", options=options) if options else None
+
+
+def split_choices(prose: str) -> tuple[str, ChoicePrompt | None]:
     match = CHOICE_FENCE.search(prose)
     if match is None:
         return prose, None
+    clean = prose[:match.start()].rstrip()
     try:
-        choices = json.loads(match[1])
-    except ValueError:
-        return prose, None
-    if not isinstance(choices, dict) or not isinstance(choices.get("options"), list):
-        return prose, None
-    options = []
-    for option in choices["options"]:
-        if isinstance(option, str):
-            label = text = option.strip()
-        elif isinstance(option, dict):
-            label = option.get("label") or option.get("text") or option.get("value")
-            text = option.get("text") or option.get("value") or option.get("label")
-        else:
-            continue
-        if isinstance(label, str) and isinstance(text, str) and label.strip() and text.strip() and not text.lstrip().startswith("/"):
-            options.append({"label": label.strip(), "text": text.strip()})
-    if not options:
-        return prose, None
-    prompt = choices.get("prompt", choices.get("question", ""))
-    return prose[:match.start()].rstrip(), {"prompt": prompt.strip() if isinstance(prompt, str) else "", "options": options}
+        raw = json.loads(match[1])
+    except (ValueError, RecursionError):
+        return clean, None
+    return clean, normalize_choices(raw)
+
+
+def format_choice_fence(choices: ChoicePrompt) -> str:
+    return "```kt_roleplay.choices\n" + choices.model_dump_json() + "\n```"
 
 
 def chapter_view(chapter: Chapter) -> dict[str, object]:
-    clean, choices = split_choices(chapter.prose)
-    return {**chapter.model_dump(), "cleanProse": clean, "choices": chapter.choices or choices}
+    clean, fenced = split_choices(chapter.prose)
+    choices = chapter.choices or fenced
+    return {**chapter.model_dump(), "prose": clean, "cleanProse": clean,
+            "choices": choices.model_dump() if choices else None}
 
 
 def story_chapters(story: Story) -> list[Chapter]:
@@ -258,10 +319,14 @@ def commit_scene(story: Story, number: int, outcome: Outcome) -> Story:
                                        outcome.private_updates.get(actor, ""))
     for actor, patch in outcome.sheet_updates.items():
         sheets[actor] = patch_sheet(sheets.get(actor, CharacterSheet()), patch)
-    chapter = Chapter(number=number, title=outcome.title, prose=outcome.prose,
+    prose, fenced = split_choices(outcome.prose)
+    if not prose.strip():
+        raise SceneError("A committed chapter must contain narrative prose")
+    choices = (normalize_choices(outcome.choices.model_dump()) if outcome.choices else None) or fenced
+    chapter = Chapter(number=number, title=outcome.title, prose=prose,
                       actors=outcome.actors or (list(scene.cues) if scene else []),
-                      choices=split_choices(outcome.prose)[1], imageCaption=outcome.image_caption)
-    return story.model_copy(update={"completed": number, "latest_prose": outcome.prose, "pending": None,
+                      choices=choices, imageCaption=outcome.image_caption)
+    return story.model_copy(update={"completed": number, "latest_prose": prose, "pending": None,
                                     "memories": memories, "sheets": sheets, "chapters": [*story_chapters(story), chapter],
                                     "facts": [*story.facts, *outcome.facts],
                                     "visible_status": {**story.visible_status, **outcome.visible_status}})

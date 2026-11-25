@@ -717,6 +717,17 @@ const EN_FALLBACK = {
   novelParaQuickSelectBtn: "Refine passage",
   novelDefaultPlayerName: "Player",
   novelReaderChaptersBadge: "{count} chapter(s)",
+  storyChoicesEnableLabel: "Show story branch options",
+  storyChoicesEnableHint: "Suggest 2-4 optional story directions at the end of scenes.",
+  storyChoicesShortLabel: "Story choices",
+  storyChoicesStatusOn: "Choices ON",
+  storyChoicesStatusOff: "Choices OFF",
+  storyChoicesCollapseBtn: "Collapse",
+  storyChoicesExpandBtn: "Expand",
+  storyChoicesEditBtn: "Edit",
+  storyChoicesSendBtn: "Send",
+  storyChoicesDraftPlaceholder: "Refine the action or dialogue before sending…",
+  storyChoicesCancelDraftBtn: "Cancel",
 };
 
 function interpolate(template, params = {}) {

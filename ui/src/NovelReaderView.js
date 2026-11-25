@@ -181,6 +181,9 @@ export const NovelReaderView = {
     // Chapter navigation & composer state.
     const selectedChapterNumber = ref(null);
     const composerDraft = ref("");
+    const composerInputEl = ref(null);
+    const choicesCollapsed = ref(false);
+    const storyChoicesBusy = ref(false);
     const sendingInput = ref(false);
     const resumingScene = ref(false);
     const uploadingCg = ref(false);
@@ -210,6 +213,7 @@ export const NovelReaderView = {
     let actionSeq = 0;
     let worldbookSeq = 0;
     let revisionSeq = 0;
+    let choicesToggleSeq = 0;
     let ownerSocket = null;
     let pollTimer = null;
     let selectionDebounceTimer = null;
@@ -283,6 +287,7 @@ export const NovelReaderView = {
     });
 
     const latestChoices = computed(() => latestChapter.value?.choices || null);
+    const enableStoryChoices = computed(() => novelView.value.enableStoryChoices !== false);
     const composerLocked = computed(
       () =>
         Boolean(novelView.value.isProcessing) ||
@@ -350,6 +355,13 @@ export const NovelReaderView = {
           selectionLock.value = null;
           selectionPreviewText.value = null;
         }
+      },
+    );
+
+    watch(
+      () => [latestChapter.value?.number ?? null, revision.value?.activeIndex ?? null],
+      () => {
+        choicesCollapsed.value = false;
       },
     );
 
@@ -1048,8 +1060,46 @@ export const NovelReaderView = {
     }
 
     async function chooseOption(option) {
-      if (!option?.text) return;
+      if (!enableStoryChoices.value || !option?.text || sendingInput.value || composerLocked.value) {
+        return;
+      }
       await submitNovelText(option.text);
+    }
+
+    function choicePreviewText(option) {
+      if (!option || typeof option !== "object") return "";
+      if (option.summary) return option.summary;
+      return option.text && option.text !== option.label ? option.text : "";
+    }
+
+    function prefillChoice(option) {
+      if (!enableStoryChoices.value || !option?.text || sendingInput.value || composerLocked.value) {
+        return;
+      }
+      composerDraft.value = option.text;
+      nextTick(() => {
+        composerInputEl.value?.focus?.();
+      });
+    }
+
+    async function toggleStoryChoices() {
+      if (unmounted || storyChoicesBusy.value || !novelView.value.active) return;
+      const seq = ++choicesToggleSeq;
+      storyChoicesBusy.value = true;
+      actionError.value = "";
+      try {
+        await callNovelOwner("set_story_choices", {
+          enabled: !enableStoryChoices.value,
+        });
+      } catch (err) {
+        if (!unmounted && seq === choicesToggleSeq) {
+          actionError.value = err?.response?.data?.detail?.message || err?.message || String(err);
+        }
+      } finally {
+        if (!unmounted && seq === choicesToggleSeq) {
+          storyChoicesBusy.value = false;
+        }
+      }
     }
 
     async function resumePendingScene() {
@@ -1209,8 +1259,12 @@ export const NovelReaderView = {
       activeChapterIndex,
       displayedChapters,
       latestChoices,
+      enableStoryChoices,
+      choicesCollapsed,
+      storyChoicesBusy,
       composerLocked,
       composerDraft,
+      composerInputEl,
       composerPlaceholder,
       sendingInput,
       resumingScene,
@@ -1255,6 +1309,9 @@ export const NovelReaderView = {
       onSessionSelectChange,
       submitNovelText,
       chooseOption,
+      choicePreviewText,
+      prefillChoice,
+      toggleStoryChoices,
       resumePendingScene,
       triggerChapterCgUpload,
       handleCgFileChange,
@@ -1411,6 +1468,17 @@ export const NovelReaderView = {
               {{ t('novelReaderFontInc') }}
             </button>
           </div>
+
+          <ActionButton
+            size="sm"
+            :variant="enableStoryChoices ? 'secondary' : 'ghost'"
+            :aria-pressed="String(enableStoryChoices)"
+            :disabled="!novelView.active || storyChoicesBusy"
+            data-testid="kt-rp-reader-story-choices-toggle"
+            @click="toggleStoryChoices"
+          >
+            {{ enableStoryChoices ? t('storyChoicesStatusOn') : t('storyChoicesStatusOff') }}
+          </ActionButton>
 
           <ActionButton
             size="sm"
@@ -1974,30 +2042,67 @@ export const NovelReaderView = {
             </div>
 
             <div
-              v-if="latestChoices && latestChoices.options.length"
+              v-if="enableStoryChoices && latestChoices && latestChoices.options.length"
               class="ktrp-reader-choices"
               data-testid="kt-rp-reader-choices"
             >
-              <span class="ktrp-choices-prompt">
-                {{ latestChoices.prompt || t('choicesPromptDefault') }}
-              </span>
-              <div class="ktrp-choices-list">
+              <div class="ktrp-choices-head">
+                <span class="ktrp-choices-prompt">
+                  {{ latestChoices.prompt || t('choicesPromptDefault') }}
+                </span>
                 <ActionButton
+                  size="sm"
+                  variant="ghost"
+                  :aria-expanded="String(!choicesCollapsed)"
+                  data-testid="kt-rp-reader-choices-collapse"
+                  @click="choicesCollapsed = !choicesCollapsed"
+                >
+                  {{ choicesCollapsed ? t('storyChoicesExpandBtn') : t('storyChoicesCollapseBtn') }}
+                </ActionButton>
+              </div>
+              <div v-show="!choicesCollapsed" class="ktrp-branch-grid">
+                <div
                   v-for="(opt, idx) in latestChoices.options"
                   :key="idx"
-                  size="sm"
-                  :disabled="sendingInput || composerLocked"
-                  data-testid="kt-rp-reader-choice-btn"
+                  class="ktrp-branch-card"
+                  data-testid="kt-rp-reader-choice-card"
                   :data-choice-index="idx"
-                  @click="chooseOption(opt)"
                 >
-                  {{ opt.label }}
-                </ActionButton>
+                  <div class="ktrp-branch-head">
+                    <span v-if="opt.tag" class="ktrp-branch-tag">{{ opt.tag }}</span>
+                    <strong class="ktrp-branch-label">{{ opt.label }}</strong>
+                  </div>
+                  <p v-if="choicePreviewText(opt)" class="ktrp-branch-preview">
+                    {{ choicePreviewText(opt) }}
+                  </p>
+                  <div class="ktrp-branch-actions">
+                    <ActionButton
+                      size="sm"
+                      :disabled="sendingInput || composerLocked"
+                      data-testid="kt-rp-reader-choice-btn"
+                      :data-choice-index="idx"
+                      @click="chooseOption(opt)"
+                    >
+                      {{ t('storyChoicesSendBtn') }}
+                    </ActionButton>
+                    <ActionButton
+                      size="sm"
+                      variant="ghost"
+                      :disabled="sendingInput || composerLocked"
+                      data-testid="kt-rp-reader-choice-edit-btn"
+                      :data-choice-index="idx"
+                      @click.stop="prefillChoice(opt)"
+                    >
+                      {{ t('storyChoicesEditBtn') }}
+                    </ActionButton>
+                  </div>
+                </div>
               </div>
             </div>
 
             <div class="ktrp-reader-input-row">
               <textarea
+                ref="composerInputEl"
                 v-model="composerDraft"
                 rows="2"
                 class="ktrp-textarea ktrp-reader-textarea"

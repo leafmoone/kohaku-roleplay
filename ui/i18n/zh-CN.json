@@ -619,5 +619,16 @@
   "novelBookInactiveHint": "开启小说模式会话后，可在此一键打开全屏沉浸小说阅读器。",
   "novelParaQuickSelectBtn": "精修此段",
   "novelDefaultPlayerName": "主角",
-  "novelReaderChaptersBadge": "共 {count} 幕"
+  "novelReaderChaptersBadge": "共 {count} 幕",
+  "storyChoicesEnableLabel": "启用剧情走向选项提示",
+  "storyChoicesEnableHint": "在场景与回复末尾提供 2-4 个可选剧情走向提示，可随时开关。",
+  "storyChoicesShortLabel": "走向选项",
+  "storyChoicesStatusOn": "选项提示：开",
+  "storyChoicesStatusOff": "选项提示：关",
+  "storyChoicesCollapseBtn": "收起",
+  "storyChoicesExpandBtn": "展开",
+  "storyChoicesEditBtn": "填入微调",
+  "storyChoicesSendBtn": "直接发送",
+  "storyChoicesDraftPlaceholder": "可在此微调行动或台词后再发送…",
+  "storyChoicesCancelDraftBtn": "取消"
 }

@@ -11,7 +11,7 @@ from pydantic import Field
 
 from .cast import CastMember
 from .cast_tools import save_new_card
-from .novel import Key, SceneError, StoryModel, story_chapters
+from .novel import Key, SceneError, StoryChoicesToggle, StoryModel, story_chapters
 from .novel_media import upload_image
 from .novel_revision import (
     REVISION_ACTIONS,
@@ -23,7 +23,7 @@ from .novel_revision import (
 from .paths import library_dir
 from .worldbook_library import snapshot_detail
 
-READER_ACTIONS = REVISION_ACTIONS | {"submit_novel_input", "save_cast_to_library", "upload_novel_media", "novel_worldbook_detail"}
+READER_ACTIONS = REVISION_ACTIONS | {"submit_novel_input", "save_cast_to_library", "upload_novel_media", "novel_worldbook_detail", "set_story_choices"}
 
 
 class NovelInput(StoryModel):
@@ -80,7 +80,11 @@ async def call_reader(host, action: str, args: dict[str, object]) -> dict[str, o
             raise SceneError("The selected worldbook is not bound to this novel")
         return snapshot_detail(books[index].name, books[index].book)
     root = binding.host_agent
-    if action == "submit_novel_input":
+    if action == "set_story_choices":
+        toggle = StoryChoicesToggle.model_validate(args)
+        settings = host.novel.settings(binding).model_copy(update={"enableStoryChoices": toggle.enabled})
+        binding.set_state("novelSettings", settings.model_dump())
+    elif action == "submit_novel_input":
         text = NovelInput.model_validate(args).text.strip()
         if not text:
             raise SceneError("Enter a non-empty player response")

@@ -31,6 +31,7 @@ class Play(Arguments):
     player: Player
     greetingIndex: int = Field(ge=0)
     worldbookId: str | None = Field(default=None, min_length=1)
+    enableStoryChoices: bool = True
     enableCardScripts: bool = False
     enableOpeningModules: bool = True
     openingPageRuntime: OpeningPageRuntime | None = None
@@ -62,6 +63,7 @@ class TavernSession(Arguments):
     greeting: str
     greetingIndex: int = 0
     openingSent: bool = False
+    enableStoryChoices: bool = True
     hasPortrait: bool = False
     portrait_rules: list[PortraitRule] = Field(default_factory=list)
     state_fields: list[StateField] = Field(default_factory=list)

@@ -301,7 +301,9 @@ export const RoleplayMiniPanel = {
     const showPrivateSheet = ref(false);
     const novelActionBusy = ref(false);
     const novelActionError = ref("");
+    const storyChoicesBusy = ref(false);
     let novelActionSeq = 0;
+    let storyChoicesSeq = 0;
 
     let unmounted = false;
     let focusEpoch = 0;
@@ -331,6 +333,7 @@ export const RoleplayMiniPanel = {
     const isActiveNpc = computed(
       () => owner.status.value === "ready" && mode.value === "npc" && active.value,
     );
+    const enableStoryChoices = computed(() => state.value?.enableStoryChoices !== false);
     const novelActorTabs = computed(() => {
       if (!isActiveNovel.value) return [];
       const tabs = [];
@@ -491,6 +494,7 @@ export const RoleplayMiniPanel = {
       choiceMutationSeq += 1;
       resumeMutationSeq += 1;
       novelActionSeq += 1;
+      storyChoicesSeq += 1;
       scriptBusy.value = false;
       scriptError.value = "";
       scriptSuccessNotice.value = "";
@@ -500,6 +504,7 @@ export const RoleplayMiniPanel = {
       resumeError.value = "";
       novelActionBusy.value = false;
       novelActionError.value = "";
+      storyChoicesBusy.value = false;
     }
 
     watch(
@@ -739,6 +744,49 @@ export const RoleplayMiniPanel = {
       }
     }
 
+    async function toggleStoryChoices() {
+      if (
+        unmounted ||
+        storyChoicesBusy.value ||
+        (!isActiveTavern.value && !isActiveNovel.value)
+      ) {
+        return;
+      }
+      const epochSnap = focusEpoch;
+      const focusSnap = focusScopeKey.value;
+      const seq = ++storyChoicesSeq;
+      storyChoicesBusy.value = true;
+      try {
+        const nextView = await owner.call("set_story_choices", {
+          enabled: !enableStoryChoices.value,
+        });
+        if (
+          unmounted ||
+          epochSnap !== focusEpoch ||
+          focusScopeKey.value !== focusSnap ||
+          seq !== storyChoicesSeq
+        ) {
+          return;
+        }
+        if (nextView && typeof nextView === "object") {
+          owner.state.value = nextView;
+        }
+      } catch (err) {
+        if (
+          !unmounted &&
+          epochSnap === focusEpoch &&
+          focusScopeKey.value === focusSnap &&
+          seq === storyChoicesSeq
+        ) {
+          notify(err?.message || String(err), "error");
+        }
+      } finally {
+        if (!unmounted && seq === storyChoicesSeq) {
+          storyChoicesBusy.value = false;
+        }
+      }
+    }
+
     function openNovelReader() {
       const sid = session.value?.id || "";
       const rawCreatures =
@@ -775,6 +823,8 @@ export const RoleplayMiniPanel = {
       isActiveTavern,
       isActiveNovel,
       isActiveNpc,
+      enableStoryChoices,
+      storyChoicesBusy,
       headerTitle,
       tavernScopeKey,
       mvuPublicSignature,
@@ -804,6 +854,7 @@ export const RoleplayMiniPanel = {
       resumePendingScene,
       uploadActorPortrait,
       saveCastMemberToLibrary,
+      toggleStoryChoices,
       openNovelReader,
       itemTestId,
       detailTestId,
@@ -841,6 +892,17 @@ export const RoleplayMiniPanel = {
         >{{ headerTitle }}</strong>
         <span v-else class="ktrp-muted" />
         <div class="ktrp-inline-actions">
+          <ActionButton
+            v-if="isActiveTavern || isActiveNovel"
+            size="sm"
+            :variant="enableStoryChoices ? 'secondary' : 'ghost'"
+            :aria-pressed="String(enableStoryChoices)"
+            :disabled="storyChoicesBusy"
+            data-testid="kt-rp-play-story-choices-toggle"
+            @click="toggleStoryChoices"
+          >
+            {{ enableStoryChoices ? t('storyChoicesStatusOn') : t('storyChoicesStatusOff') }}
+          </ActionButton>
           <ActionButton
             v-if="isActiveNovel || isActiveNpc"
             size="sm"

@@ -431,6 +431,101 @@
   gap: 0.45rem;
 }
 
+.ktrp-choices-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.ktrp-branch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.ktrp-branch-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.35rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--ktrp-reader-border, var(--color-border));
+  border-radius: 0.5rem;
+  background: var(--ktrp-reader-page-bg, var(--color-surface-alt));
+  color: var(--ktrp-reader-text, var(--color-text));
+  min-width: 0;
+}
+
+.ktrp-branch-card.is-chosen,
+.ktrp-branch-card.is-editing {
+  border-color: var(--color-accent, #5a8dee);
+}
+
+.ktrp-branch-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.ktrp-branch-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.42rem;
+  border-radius: 999px;
+  border: 1px solid var(--ktrp-reader-border, var(--color-border));
+  background: var(--ktrp-reader-surface, var(--color-bg));
+  color: var(--ktrp-reader-muted, var(--color-text-muted));
+  font-size: var(--kt-fs-2xs, 0.72rem);
+  font-weight: 500;
+  max-width: 100%;
+}
+
+.ktrp-branch-label {
+  font-size: var(--kt-fs-sm, 0.875rem);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.ktrp-branch-preview {
+  margin: 0;
+  color: var(--ktrp-reader-muted, var(--color-text-muted));
+  font-size: var(--kt-fs-xs, 0.8125rem);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.ktrp-branch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  margin-top: 0.1rem;
+}
+
+.ktrp-choice-draft-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--color-border);
+}
+
+@media (max-width: 480px) {
+  .ktrp-branch-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .ktrp-choices-fallback {
   padding: 0.55rem 0.7rem;
   border: 1px solid var(--color-border);

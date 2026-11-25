@@ -75,7 +75,16 @@ from .mvu import MvuChange, public_options, public_values
 from .mvu_patch import json_equal
 from .mvu_settlement import settle_mvu_candidate
 from .mvu_tool import ApplyMvuUpdate, UpdateMvu
-from .novel import Outcome, SceneError, Story, actor_memory
+from .novel import (
+    CHOICE_SHAPE,
+    ChoicePrompt,
+    Outcome,
+    SceneError,
+    Story,
+    StoryChoicesToggle,
+    actor_memory,
+    format_choice_fence,
+)
 from .novel_lore import novel_lore
 from .novel_media import materialize_image, media_pool
 from .novel_reader import READER_ACTIONS, call_reader
@@ -105,12 +114,14 @@ from .pinned_mvu_setup import (
 from .portraits import chosen_key
 from .projections import (
     Persona,
-    insert_depth_lore,
     insert_roleplay_context,
+    insert_tail_context,
     mount_persona,
     render_tavern_text,
-    story_context,
+    tavern_dynamic_context,
+    tavern_lore_context,
     tavern_outlets,
+    tavern_static_context,
 )
 from .recovery import resume_scene
 from .scene_tools import ingest_report, resolve_story_director
@@ -191,6 +202,7 @@ class RoleplayPlugin(BasePlugin):
         self.report_watch = None
         self.can_open_scene = False
         self._committed_prose: str | None = None
+        self._committed_choices: ChoicePrompt | None = None
         self._committed_image: ImagePart | None = None
         self._restore_feedback: Callable[[], None] | None = None
 
@@ -239,8 +251,13 @@ class RoleplayPlugin(BasePlugin):
                 controller.push_event = push
             if not withheld or settled_prose is None:
                 return again
-            await self._publish_assistant(controller, settled_prose, image=self._committed_image)
+            choices = self._committed_choices
+            chat_text = settled_prose
+            if choices and "kt_roleplay.choices" in attached_renderers(agent) and self.novel.settings(self.binding).enableStoryChoices:
+                chat_text += "\n\n" + format_choice_fence(choices)
+            await self._publish_assistant(controller, chat_text, image=self._committed_image)
             self._committed_prose = None
+            self._committed_choices = None
             self._committed_image = None
             return False
 
@@ -276,6 +293,7 @@ class RoleplayPlugin(BasePlugin):
                 self.binding.set_state(PLAYER_INPUT, _text({"content": event.content}))
             # Never apply an interrupted continuation to a new player turn.
             self._committed_prose = None
+            self._committed_choices = None
             self._committed_image = None
         if self.mode == "npc" and event.type == "channel_message" and self.binding is not None:
             raw = event.context.get("raw_content")
@@ -374,11 +392,15 @@ class RoleplayPlugin(BasePlugin):
             self._restore_feedback = None
 
     def presentation_contribution(self, context: PluginContext) -> str | None:
-        if self.mode != "novel" and (self.mode != "tavern" or "kt_roleplay.choices" not in attached_renderers(context.host_agent)):
+        if self.mode != "tavern" or not (self._record() or {}).get("enableStoryChoices", True):
             return None
-        location = "in outcome.prose when committing a scene" if self.mode == "novel" else "after finished prose"
-        return ('Optional reader choices ' + location + ': a closed kt_roleplay.choices code fence containing '
-                'JSON {"prompt":"…","options":["…","…"]}. Free text remains available.')
+        if "kt_roleplay.choices" not in attached_renderers(context.host_agent):
+            return None
+        return ("At the end of each completed narrative reply where the player can act next (not during tool-only steps), "
+                f"append one closed ```kt_roleplay.choices JSON fence in the scene's language: {CHOICE_SHAPE}. "
+                "Offer 3–4 genuinely distinct directions with a short tag, concise label and one-line summary. "
+                "In text, use a concrete action or speech from {{user}}'s perspective, never a slash command. "
+                "Do not choose or act for {{user}} in the prose. Free text remains available.")
 
     def get_tool_visibility(self, context: PluginContext) -> ToolVisibility | None:
         if self.mode == "tavern":
@@ -683,13 +705,18 @@ class RoleplayPlugin(BasePlugin):
                 rows.append((binding._state_key("fieldValues"), story.card_values[actor]))
             updated_plugins.append(plugin)
         image = materialize_image(director, self.novel.members(director), story, outcome)
-        if image is not None:
-            story = story.model_copy(update={"chapters": [*story.chapters[:-1], story.chapters[-1].model_copy(update={"imageUrl": image.url})]})
+        chapter = story.chapters[-1]
+        patch = {"imageUrl": image.url} if image is not None else {}
+        if not self.novel.settings(director).enableStoryChoices:
+            patch["choices"] = None
+        if patch:
+            story = story.model_copy(update={"chapters": [*story.chapters[:-1], chapter.model_copy(update=patch)]})
         values = {"novel": story.model_dump(), **committed_revision(director, before, story)}
         store.state.put_many([*((director._state_key(key), value) for key, value in values.items()), *rows])
         for plugin in updated_plugins:
             plugin.ui_emit("state", plugin.ui_state())
         self._committed_prose = story.latest_prose
+        self._committed_choices = story.chapters[-1].choices
         self._committed_image = image
         self.can_open_scene = False
         self.ui_emit("state", self.ui_state())
@@ -717,7 +744,7 @@ class RoleplayPlugin(BasePlugin):
         play = TavernSession.model_validate(record)
         view = {"mode": self.mode, "active": True, "cardId": play.cardId, "name": play.card.name,
                 "player": play.player.model_dump(), "greeting": play.greeting, "greetingIndex": play.greetingIndex,
-                "openingSent": play.openingSent, "hasPortrait": play.hasPortrait, "notes": play.notes,
+                "enableStoryChoices": play.enableStoryChoices, "openingSent": play.openingSent, "hasPortrait": play.hasPortrait, "notes": play.notes,
                 "worldbookEntries": len(play.worldbook.entries) if play.worldbook else None,
                 "worldbookRef": play.worldbookRef,
                 "worldbookDiagnostics": play.worldbook.diagnostics() if play.worldbook else None,
@@ -797,6 +824,15 @@ class RoleplayPlugin(BasePlugin):
         try:
             if self.mode == "novel" and action in READER_ACTIONS:
                 return await call_reader(self, action, args)
+            if action == "set_story_choices" and self.mode == "tavern":
+                record = self._record()
+                if record is None:
+                    raise OwnerArgumentError("Start a tavern before setting story choices")
+                toggle = StoryChoicesToggle.model_validate(args)
+                self._save({**record, "enableStoryChoices": toggle.enabled})
+                view = self.ui_state()
+                self.ui_emit("state", view)
+                return view
             if action == "resume_scene" and self.mode == "novel":
                 number = args.get("scene")
                 if type(number) is not int or set(args) != {"scene"}:
@@ -1128,17 +1164,18 @@ class RoleplayPlugin(BasePlugin):
                     await self._scripts.fire("user", sequence=turn, args={"text": message.get_text_content()[:900]})
         record = self._record()
         if self.novel:
-            content = self.novel.prompt(self.binding)
+            head = self.novel.prompt_head(self.binding)
+            tail = self.novel.prompt_tail(self.binding)
             if self.mode == "novel":
-                content += canonical_chapters(self.story())
+                tail += canonical_chapters(self.story())
                 messages = without_scene_images(messages)
                 settings = self.novel.settings(self.binding)
-                messages, lore = await novel_lore(messages, self.novel.worldbooks(self.binding), settings, _text, _cost)
+                lore = await novel_lore(messages, self.novel.worldbooks(self.binding), settings, _text, _cost)
                 if lore:
-                    content += "\nDirector-only worldbook references: " + json.dumps(lore, ensure_ascii=False)
+                    tail += "\nDirector-only worldbook references: " + json.dumps(lore, ensure_ascii=False)
                 media = media_pool(self.binding, self.novel.members(self.binding))
                 if media:
-                    content += "\nAvailable local scene image keys: " + json.dumps([{k: item[k] for k in ("key", "name")} for item in media], ensure_ascii=False)
+                    tail += "\nAvailable local scene image keys: " + json.dumps([{k: item[k] for k in ("key", "name")} for item in media], ensure_ascii=False)
         elif record is None:
             return None
         elif self.mode == "persona":
@@ -1208,21 +1245,26 @@ class RoleplayPlugin(BasePlugin):
                     activation.pop(kind, None)
             if activation != play.lore_activation:
                 self._save(play.model_copy(update={"lore_activation": activation}).model_dump())
-            content = story_context(play.card, play.player, entries, play.notes)
-            messages = insert_depth_lore(messages, entries, play.card, play.player)
+            static_lore, dynamic_lore = tavern_lore_context(play.card, play.player, books, entries)
+            head = tavern_static_context(play.card, play.player, play.notes, static_lore)
+            if not play.enableStoryChoices:
+                head += "\nDo not output a kt_roleplay.choices block."
+            elif self.binding and (choice_direction := self.presentation_contribution(self.binding)):
+                head += "\n" + choice_direction
+            state = []
             if play.state_fields:
-                content += ("\nUse rp_set_card_state for changed declared fields only. Settle independent in-world actions "
+                state.append("Use rp_set_card_state for changed declared fields only. Settle independent in-world actions "
                             "in separate tool calls, even in the same turn. Group only steps that must succeed together. "
                             "Do not replay successful calls if a different call fails. Keep private fields out of prose.\n"
                             + json.dumps(model_fields(play.state_fields, play.values), ensure_ascii=False))
             gameplay = public_panels([panel for panel in play.native_panels if isinstance(panel, (InventoryPanel, QuestPanel))],
                                      play.state_fields, play.values)
             if gameplay:
-                content += ("\nFor an inventory or quest action, use rp_apply_gameplay with these panel IDs; "
+                state.append("For an inventory or quest action, use rp_apply_gameplay with these panel IDs; "
                             "do not replace inventory contents or set a quest to its completed value through rp_set_card_state.\n" + json.dumps(gameplay, ensure_ascii=False))
             if play.mvu is not None and play.mvu.values:
                 mvu_tool = 'rp_apply_mvu_update' if play.pinned_mvu is not None else 'rp_update_mvu'
-                content += (f"\nThese are initialized variables in the current fictional session only. Use {mvu_tool} to "
+                state.append(f"These are initialized variables in the current fictional session only. Use {mvu_tool} to "
                             "record only justified changes. Variables not selected for display are private; do not copy "
                             "their values into prose.\n" + json.dumps({"mvu_variables": play.mvu.values,
                                                                        "mvu_displayed_paths": [json.loads(key) for key in play.mvu_public]},
@@ -1230,11 +1272,12 @@ class RoleplayPlugin(BasePlugin):
             if play.script_state.approved and self._script_turn_index() is not None:
                 script_choices = [{"id": script.id, "name": script.name} for script in approved(play.scripts, play.script_state)]
                 if script_choices:
-                    content += "\nOnly use rp_run_card_script for a justified action with a registered ID from this list:\n" + json.dumps(script_choices, ensure_ascii=False)
+                    state.append("Only use rp_run_card_script for a justified action with a registered ID from this list:\n" + json.dumps(script_choices, ensure_ascii=False))
             if play.pinned_mvu is not None:
-                content += '\nUse one <UpdateVariable><JSONPatch>…</JSONPatch></UpdateVariable> with literal JSON add, replace and remove operations. Do not print the update in the story.'
+                head += '\nUse one <UpdateVariable><JSONPatch>…</JSONPatch></UpdateVariable> with literal JSON add, replace and remove operations. Do not print the update in the story.'
             elif play.mvu_legacy:
-                content += "\nIf the card requests a literal <UpdateVariable> block, call rp_apply_mvu_update instead of printing the block. Do not apply the same change through both update tools."
+                head += "\nIf the card requests a literal <UpdateVariable> block, call rp_apply_mvu_update instead of printing the block. Do not apply the same change through both update tools."
+            tail = tavern_dynamic_context(dynamic_lore, state)
             if books and self.binding:
                 lore_view = {"totalEntries": sum(len(book.entries) for book in books), "activeTitles": [e.name or e.comment or ", ".join(e.keys) for e in entries], "usedTokens": allowance - remaining, "budgetTokens": min(allowance, sum(book.token_budget for book in books))}
                 if template_failures:
@@ -1242,4 +1285,4 @@ class RoleplayPlugin(BasePlugin):
                 if self.binding.get_state("loreView") != lore_view:
                     self.binding.set_state("loreView", lore_view)
                     self.ui_emit("state", self.ui_state())
-        return insert_roleplay_context(messages, content)
+        return insert_roleplay_context(insert_tail_context(messages, tail), head)

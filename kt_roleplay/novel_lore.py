@@ -8,14 +8,14 @@ from .cast import NovelSettings, WorldbookSnapshot
 from .lore import active_entries
 from .lore_regex import MatchBudget
 from .lore_templates import render_templates
-from .projections import Player, insert_depth_lore, render_tavern_text
+from .projections import Player, depth_lore, render_tavern_text
 from .worldbook import TEMPLATE_BOOK_BUDGET
 
 
 async def novel_lore(messages: list[dict], books: list[WorldbookSnapshot], settings: NovelSettings,
-                     text: Callable[[dict], str], cost: Callable[[str], int]) -> tuple[list[dict], list[str]]:
+                     text: Callable[[dict], str], cost: Callable[[str], int]) -> list[str]:
     if not books:
-        return messages, []
+        return []
     history = [text(row) for row in messages if row.get("role") in ("user", "assistant")]
     player = Player(name=settings.playerName)
     narrator = settings.narrator
@@ -38,6 +38,5 @@ async def novel_lore(messages: list[dict], books: list[WorldbookSnapshot], setti
         remaining -= sum(rendered_cost(entry.content) for entry in chosen)
         if remaining <= 0:
             break
-    return insert_depth_lore(messages, selected, voice, player), [
-        render_tavern_text(entry.content, voice, player) for entry in selected if entry.position != "at_depth"
-    ]
+    ordered = [*depth_lore(selected), *(entry for entry in selected if entry.position != "at_depth")]
+    return [render_tavern_text(entry.content, voice, player) for entry in ordered]

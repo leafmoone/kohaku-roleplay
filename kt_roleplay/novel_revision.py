@@ -13,7 +13,6 @@ from kohakuterrarium.terrarium.tools.context import (
 from pydantic import Field, ValidationError
 
 from .novel import (
-    CHOICE_FENCE,
     Chapter,
     CharacterSheet,
     Key,
@@ -244,9 +243,8 @@ def _edit(host, story: Story, chapter: Chapter, clean: str, request: SpanEdit) -
     new_clean = clean[:request.start] + request.replacementText + clean[request.end:]
     if not new_clean.strip():
         raise SceneError("A chapter cannot be empty")
-    fence = CHOICE_FENCE.search(chapter.prose)
-    prose = new_clean.rstrip() + "\n\n```kt_roleplay.choices\n" + fence[1] + "\n```" if fence else new_clean
-    save_chapter(host, story, chapter.number, {"prose": prose})
+    _, fenced = split_choices(chapter.prose)
+    save_chapter(host, story, chapter.number, {"prose": new_clean, "choices": chapter.choices or fenced})
     return _emit(host)
 
 

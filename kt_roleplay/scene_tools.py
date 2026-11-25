@@ -20,6 +20,7 @@ from kohakuterrarium.utils.logging import get_logger
 from pydantic import BaseModel, Field, ValidationError
 
 from .novel import (
+    CHOICE_SHAPE,
     Cue,
     Outcome,
     Proposal,
@@ -214,7 +215,8 @@ class CommitScene(SceneTool):
     description = ('Commit directly when no proposals are needed, or adjudicate once all reports are in. Pass scene as an integer and outcome as an '
                    'object containing {"prose": "..."}, not the prose string itself. Include changed '
                    'facts, memory_updates, sheet_updates, visible_status or card_updates in outcome when applicable. '
-                   'Keep character-private information out of reader prose.')
+                   'When story choices are enabled, provide optional outcome.choices as ' + CHOICE_SHAPE + '. '
+                   'Keep outcome.prose pure narrative without choice fences or character-private information.')
     arguments = Commit
 
     def __init__(self, host: SceneHost):
@@ -228,4 +230,4 @@ class CommitScene(SceneTool):
             self.host.require_open_scene()
         committed = commit_scene(story, request.scene, request.outcome)
         self.host.save_adjudication(context, story, committed, request.outcome)
-        return ToolResult(output=request.outcome.prose)
+        return ToolResult(output=committed.latest_prose)

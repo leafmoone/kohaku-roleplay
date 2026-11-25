@@ -199,6 +199,7 @@ export const CardLibraryView = {
     const tavernLaunchGreetingIndex = ref(0);
     const tavernLaunchWorldbookMode = ref("__default__");
     const tavernLaunchScriptsMode = ref("__default__");
+    const tavernLaunchStoryChoices = ref(true);
     const novelCastIds = ref([]);
     const novelTitle = ref("");
     const novelPlayerMode = ref("protagonist");
@@ -211,6 +212,7 @@ export const CardLibraryView = {
     const copyingDefaultNarrator = ref(false);
     const novelWorldbookIds = ref([]);
     const novelIncludeCardLore = ref(false);
+    const novelEnableStoryChoices = ref(true);
     const novelPremise = ref("");
     const novelSheetHint = ref("");
     const novelPrologueMode = ref("none");
@@ -1203,6 +1205,7 @@ export const CardLibraryView = {
             description: tavernLaunchDesc.value.trim(),
           },
           greetingIndex: Number(tavernLaunchGreetingIndex.value) || 0,
+          enableStoryChoices: Boolean(tavernLaunchStoryChoices.value),
         };
         if (tavernLaunchWorldbookMode.value === "__none__") {
           payload.worldbookId = null;
@@ -1260,6 +1263,7 @@ export const CardLibraryView = {
         narratorCardId: novelNarratorCardId.value || "__default__",
         worldbookIds: [...novelWorldbookIds.value],
         includeCardLore: Boolean(novelIncludeCardLore.value),
+        enableStoryChoices: Boolean(novelEnableStoryChoices.value),
         playerMode: modeValue,
         playerName: modeValue === "protagonist" ? novelPlayerName.value.trim() || "Player" : "Player",
         playerPersona: modeValue === "protagonist" ? novelPlayerPersona.value.trim() : "",
@@ -1472,6 +1476,7 @@ export const CardLibraryView = {
       tavernLaunchGreetingIndex,
       tavernLaunchWorldbookMode,
       tavernLaunchScriptsMode,
+      tavernLaunchStoryChoices,
       novelCastIds,
       novelCastLimit: NOVEL_CAST_LIMIT,
       novelWorldbookLimit: NOVEL_WORLDBOOK_LIMIT,
@@ -1493,6 +1498,7 @@ export const CardLibraryView = {
       copyDefaultNarrator,
       novelWorldbookIds,
       novelIncludeCardLore,
+      novelEnableStoryChoices,
       novelPremise,
       novelSheetHint,
       novelPrologueMode,
@@ -3028,6 +3034,14 @@ export const CardLibraryView = {
                       <option value="off">{{ t('sessionScriptsExplicitOff') }}</option>
                     </select>
                   </div>
+                  <label class="ktrp-mvu-option">
+                    <input
+                      v-model="tavernLaunchStoryChoices"
+                      type="checkbox"
+                      data-testid="kt-rp-tavern-story-choices-toggle"
+                    />
+                    <span>{{ t('storyChoicesEnableLabel') }}</span>
+                  </label>
                   <p
                     v-if="detailRemoteOpeningPage"
                     class="ktrp-muted"
@@ -3264,6 +3278,14 @@ export const CardLibraryView = {
                 data-testid="kt-rp-novel-include-card-lore"
               />
               <span>{{ t('novelIncludeCardLoreLabel') }}</span>
+            </label>
+            <label class="ktrp-mvu-option">
+              <input
+                v-model="novelEnableStoryChoices"
+                type="checkbox"
+                data-testid="kt-rp-novel-story-choices-toggle"
+              />
+              <span>{{ t('storyChoicesEnableLabel') }}</span>
             </label>
           </div>
 

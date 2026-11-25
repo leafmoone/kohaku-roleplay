@@ -20,6 +20,7 @@ from .cards import CardFields, ParsedCard
 from .charx import CardMedia
 from .default_narrator import DEFAULT_NARRATOR_PORTRAIT_URL, Narrator
 from .novel import (
+    CHOICE_SHAPE,
     PLAYER,
     ActorMemory,
     CharacterSheet,
@@ -32,6 +33,7 @@ from .novel import (
     filter_sheet,
     patch_sheet,
     sheet_from_fields,
+    split_choices,
     story_chapters,
 )
 from .portraits import PortraitRule, chosen_key, rules_for
@@ -69,6 +71,8 @@ class NovelSettings(BaseModel):
     narrator: Narrator | None = None
     style: Narrator | None = None
     includeCardLore: bool = False
+    enableStoryChoices: bool = True
+    initialActors: list[str] = Field(default_factory=list)
 
     def prose_reference(self) -> dict[str, object]:
         return {"narrator": self.narrator.model_dump() if self.narrator else None,
@@ -155,6 +159,10 @@ def character_material(card: CardFields) -> dict[str, str]:
             "character_background": card.scenario, "voice_examples": card.mes_example}
 
 
+def cast_material(member: CastMember) -> dict[str, str]:
+    return {**character_material(member.card), "initial_note": member.initial_note}
+
+
 class NovelBinding:
     def __init__(self, actor: bool):
         self.actor = actor
@@ -200,44 +208,68 @@ class NovelBinding:
         return {"actor": PLAYER, "name": options.playerName, "persona": options.playerPersona,
                 "sheet": story.sheets.get(PLAYER, CharacterSheet()).model_dump()}
 
-    def prompt(self, binding) -> str:
+    def prompt_head(self, binding) -> str:
         if self.actor:
             raw = binding.get_state("character")
             if raw is None:
                 return "No character assignment is available. Do not invent one."
             material = character_material(CardFields.model_validate(raw))
-            material.update(memory=npc_memory(binding).model_dump(), sheet=npc_sheet(binding).model_dump())
             if note := (binding.get_state("castMember") or {}).get("initial_note"):
                 material["initial_note"] = note
+            return "Own character material (reference only): " + json.dumps(material, ensure_ascii=False)
+        settings, members = self.settings(binding), self.members(binding)
+        initial = set(settings.initialActors) if settings.initialActors else {member.actor for member in members}
+        cast = {member.actor: cast_material(member) for member in members if member.actor in initial}
+        player = None if settings.playerMode == "director" else {"actor": PLAYER, "name": settings.playerName, "persona": settings.playerPersona}
+        player_instruction = ("Treat reader input as the protagonist's intent; do not decide the protagonist's choices for them. "
+                              if settings.playerMode == "protagonist" else
+                              "Treat reader input as direction for the story, not as actions or dialogue from a player character. ")
+        choices_instruction = "Leave outcome.choices null and do not emit kt_roleplay.choices fences. "
+        if settings.enableStoryChoices:
+            direction = ("concrete protagonist actions or dialogue without deciding the protagonist's choice in prose"
+                         if settings.playerMode == "protagonist" else "distinct director instructions about focus, conflict or pacing")
+            choices_instruction = (f"When the reader can direct what happens next, use outcome.choices in rp_commit_scene: {CHOICE_SHAPE}. "
+                                   f"Offer 3–4 genuinely distinct directions in the novel's language; text must contain {direction}. "
+                                   "Use a short tag, concise label, and one-line summary. Keep outcome.prose pure narrative without fences. ")
+        return (player_instruction + choices_instruction + "For state changes use sheet_updates; record witnessed facts, uncertain beliefs and impressions separately with memory_updates. "
+                "Use card_updates for changes to declared card fields. Do not share private memories, sheets or matched worldbook entries wholesale with NPCs. "
+                "When mounted, narrator guides the narrative camera and pacing; proseStyle overlays diction and literary texture without changing story facts or character intent. Neither is a character in the scene. "
+                "Director static setup (reference data): " + json.dumps({"title": settings.title, "playerMode": settings.playerMode,
+                    "player": player, "premise": settings.premise, "sheetHint": settings.sheetHint,
+                    **settings.prose_reference(), "cast": cast}, ensure_ascii=False))
+
+    def prompt_tail(self, binding) -> str:
+        if self.actor:
+            if binding.get_state("character") is None:
+                return ""
             scene = binding.get_state("cueScene")
             instruction = ""
             if scene is not None and scene != binding.get_state("reportedScene"):
                 instruction = (f"Report for scene {scene} once with rp_report_scene before ending this turn. "
                                "The current cue and supplied memory and sheet supersede earlier proposals for this scene.\n")
-            return instruction + "Own character material (reference only): " + json.dumps(material, ensure_ascii=False)
+            return instruction + "Current character state (reference only): " + json.dumps({
+                "memory": npc_memory(binding).model_dump(), "sheet": npc_sheet(binding).model_dump()}, ensure_ascii=False)
         story, settings = self.story(binding), self.settings(binding)
-        cast = {}
-        for member in self.members(binding):
-            entry = character_material(member.card)
-            entry.update(sheet=story.sheets[member.actor].model_dump(), memory=actor_memory(story, member.actor).model_dump(),
-                         visible_status=story.visible_status.get(member.actor, {}), initial_note=member.initial_note)
+        members = self.members(binding)
+        initial = set(settings.initialActors) if settings.initialActors else {member.actor for member in members}
+        cast_state = {}
+        for member in members:
+            actor = member.actor
+            entry = {"sheet": story.sheets[actor].model_dump(), "memory": actor_memory(story, actor).model_dump(),
+                     "visible_status": story.visible_status.get(actor, {})}
             if member.state_fields:
-                entry["card_state"] = model_fields(member.state_fields, story.card_values.get(member.actor, {}))
-            cast[member.actor] = entry
+                entry["card_state"] = model_fields(member.state_fields, story.card_values.get(actor, {}))
+            cast_state[actor] = entry
         scene = story.pending
         phase = None if scene is None else {"number": scene.number, "ready": scene.cues.keys() == scene.reports.keys(),
-                                           "reports": {actor: proposal.model_dump() for actor, proposal in scene.reports.items()},
+                                           "reports": {actor: scene.reports[actor].model_dump() for actor in sorted(scene.reports)},
                                            "waiting": sorted(scene.cues.keys() - scene.reports.keys())}
-        player_instruction = ("Treat reader input as the protagonist's intent; do not decide the protagonist's choices for them. "
-                              if settings.playerMode == "protagonist" else
-                              "Treat reader input as direction for the story, not as actions or dialogue from a player character. ")
-        return (player_instruction + "For state changes use sheet_updates; record witnessed facts, uncertain beliefs and impressions separately with memory_updates. "
-                "Use card_updates for changes to declared card fields. Do not share private memories, sheets or matched worldbook entries wholesale with NPCs. "
-                "When mounted, narrator guides the narrative camera and pacing; proseStyle overlays diction and literary texture without changing story facts or character intent. Neither is a character in the scene. "
-                "Director-only story state (reference data): " + json.dumps({"cast": cast, "facts": story.facts,
-                    "lastCompleted": story.completed, "pending": phase, "playerMode": settings.playerMode,
-                    "player": self.player(binding, story), "premise": settings.premise, "sheetHint": settings.sheetHint,
-                    **settings.prose_reference()}, ensure_ascii=False))
+        live = {"lastCompleted": story.completed, "pending": phase, "facts": story.facts, "castState": cast_state}
+        if joined := {member.actor: cast_material(member) for member in members if member.actor not in initial}:
+            live["joinedCast"] = joined
+        if settings.playerMode != "director":
+            live["playerSheet"] = story.sheets.get(PLAYER, CharacterSheet()).model_dump()
+        return "Director live scene state (reference data): " + json.dumps(live, ensure_ascii=False)
 
     def view(self, binding) -> dict[str, object]:
         if binding is None or binding.session_store is None:
@@ -269,6 +301,7 @@ class NovelBinding:
         context = binding.host_agent.executor._build_tool_context()
         return {"mode": "novel", "active": True, "title": settings.title, "playerMode": settings.playerMode,
                 "rootCreatureId": context.creature_id, "rootName": binding.agent_name,
+                "enableStoryChoices": settings.enableStoryChoices,
                 "player": self.player(binding, story), "premise": settings.premise, "sheetHint": settings.sheetHint,
                 "narrator": {"cardId": n.cardId, "name": n.name, "isDefault": n.isDefault,
                              "portraitUrl": DEFAULT_NARRATOR_PORTRAIT_URL if n.isDefault else None} if (n := settings.narrator) else None,
@@ -277,7 +310,7 @@ class NovelBinding:
                 "sceneNumber": story.completed, "pendingScene": {"number": scene.number, "waiting": sorted(scene.cues.keys() - scene.reports.keys()),
                     "reported": sorted(scene.reports)} if scene else None,
                 "isProcessing": bool(binding.host_agent and binding.host_agent.is_processing), "cast": cast,
-                "chapters": [chapter_view(chapter) for chapter in story_chapters(story)], "latestProse": story.latest_prose}
+                "chapters": [chapter_view(chapter) for chapter in story_chapters(story)], "latestProse": split_choices(story.latest_prose)[0]}
 
     def tools(self, host):
         if self.actor:

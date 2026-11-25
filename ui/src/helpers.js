@@ -179,6 +179,40 @@ export function collectGreetings(fields) {
 }
 
 /**
+ * Normalize a choices object ({ prompt, options }) preserving optional tag and summary
+ * while staying backward-compatible with legacy string or {label, text} options.
+ */
+export function normalizeChoicesPayload(rawChoices) {
+  if (!rawChoices || typeof rawChoices !== "object" || Array.isArray(rawChoices)) return null;
+  const rawOptions = Array.isArray(rawChoices.options) ? rawChoices.options : [];
+  const options = [];
+  for (const item of rawOptions) {
+    let tag = "";
+    let label = "";
+    let summary = "";
+    let text = "";
+    if (typeof item === "string") {
+      label = item.trim();
+      text = label;
+    } else if (item && typeof item === "object" && !Array.isArray(item)) {
+      if (typeof item.tag === "string") {
+        tag = item.tag.trim().slice(0, 24);
+      }
+      label = String(item.label ?? item.text ?? item.value ?? "").trim();
+      if (typeof item.summary === "string") {
+        summary = item.summary.trim();
+      }
+      text = String(item.text ?? item.value ?? item.label ?? "").trim();
+    }
+    if (!label || !text || text.trimStart().startsWith("/")) continue;
+    options.push({ tag, label, summary, text });
+  }
+  if (!options.length) return null;
+  const prompt = String(rawChoices.prompt ?? rawChoices.question ?? "").trim();
+  return { prompt, options };
+}
+
+/**
  * Parse a closed ```kt_roleplay.choices``` fenced block into prompt + clickable options.
  * Returns null on invalid payloads so the caller falls back to raw text.
  */
@@ -186,25 +220,7 @@ export function parseChoiceFence(source) {
   if (typeof source !== "string" || !source.trim()) return null;
   try {
     const parsed = JSON.parse(source);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    const rawOptions = Array.isArray(parsed.options) ? parsed.options : [];
-    const options = [];
-    for (const item of rawOptions) {
-      let label = "";
-      let text = "";
-      if (typeof item === "string") {
-        label = item.trim();
-        text = label;
-      } else if (item && typeof item === "object") {
-        label = String(item.label ?? item.text ?? item.value ?? "").trim();
-        text = String(item.text ?? item.value ?? item.label ?? "").trim();
-      }
-      if (!label || !text || text.startsWith("/")) continue;
-      options.push({ label, text });
-    }
-    if (!options.length) return null;
-    const prompt = String(parsed.prompt ?? parsed.question ?? "").trim();
-    return { prompt, options };
+    return normalizeChoicesPayload(parsed);
   } catch {
     return null;
   }
@@ -786,25 +802,7 @@ export function normalizeActorMemory(rawMemory) {
  * Normalize novel chapter choices object ({ prompt, options }) into clickable options.
  */
 export function normalizeNovelChoices(rawChoices) {
-  if (!rawChoices || typeof rawChoices !== "object" || Array.isArray(rawChoices)) return null;
-  const rawOptions = Array.isArray(rawChoices.options) ? rawChoices.options : [];
-  const options = [];
-  for (const item of rawOptions) {
-    let label = "";
-    let text = "";
-    if (typeof item === "string") {
-      label = item.trim();
-      text = label;
-    } else if (item && typeof item === "object") {
-      label = String(item.label ?? item.text ?? item.value ?? "").trim();
-      text = String(item.text ?? item.value ?? item.label ?? "").trim();
-    }
-    if (!label || !text || text.startsWith("/")) continue;
-    options.push({ label, text });
-  }
-  if (!options.length) return null;
-  const prompt = String(rawChoices.prompt ?? rawChoices.question ?? "").trim();
-  return { prompt, options };
+  return normalizeChoicesPayload(rawChoices);
 }
 
 /**
@@ -1168,6 +1166,7 @@ export function projectNovelView(state) {
     title: typeof src.title === "string" && src.title.trim() ? src.title.trim() : "",
     rootCreatureId: typeof src.rootCreatureId === "string" ? src.rootCreatureId : "",
     rootName: typeof src.rootName === "string" ? src.rootName : "",
+    enableStoryChoices: src.enableStoryChoices !== false,
     playerMode,
     player,
     premise: typeof src.premise === "string" ? src.premise.trim() : "",
