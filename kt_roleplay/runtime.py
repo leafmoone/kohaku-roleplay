@@ -433,26 +433,51 @@ class RoleplayPlugin(BasePlugin):
             return ToolVisibility(allowed_tools=frozenset(allowed), allowed_subagents=frozenset())
         if self.novel is None:
             return None
-        allowed = frozenset()
-        if self.binding and self.binding.session_store is not None:
-            if self.mode == "npc":
-                cue = self.binding.get_state("cueScene")
-                if cue is not None and cue != self.binding.get_state("reportedScene"):
-                    allowed = frozenset({"rp_report_scene"})
-            else:
-                scene = self.story().pending
-                if scene is None and self.can_open_scene:
-                    rewrite = active_revision(self.binding)
-                    allowed = frozenset({"rp_commit_scene"})
-                    if rewrite is None:
-                        allowed |= {"rp_dispatch_scene", "rp_list_library_cards", "rp_spawn_cast_from_card", "rp_create_cast_character"}
-                    elif rewrite.mode == "full_rerun":
-                        allowed |= {"rp_dispatch_scene"}
-                elif scene is not None and scene.cues.keys() == scene.reports.keys():
-                    allowed = frozenset({"rp_commit_scene"})
-        return ToolVisibility(allowed_tools=allowed, allowed_subagents=frozenset())
+        if self.mode == "npc":
+            return ToolVisibility(allowed_tools=frozenset({"rp_report_scene"}), allowed_subagents=frozenset())
+        return ToolVisibility(
+            allowed_tools=frozenset({"rp_commit_scene", "rp_dispatch_scene", "rp_list_library_cards",
+                                     "rp_spawn_cast_from_card", "rp_create_cast_character"}),
+            allowed_subagents=frozenset(),
+        )
+
+    def _novel_phase_tools(self) -> frozenset[str]:
+        if not (self.binding and self.binding.session_store is not None):
+            return frozenset()
+        if self.mode == "npc":
+            cue = self.binding.get_state("cueScene")
+            if cue is not None and cue != self.binding.get_state("reportedScene"):
+                return frozenset({"rp_report_scene"})
+            return frozenset()
+        scene = self.story().pending
+        if scene is None and self.can_open_scene:
+            rewrite = active_revision(self.binding)
+            allowed = frozenset({"rp_commit_scene"})
+            if rewrite is None:
+                allowed |= {"rp_dispatch_scene", "rp_list_library_cards", "rp_spawn_cast_from_card", "rp_create_cast_character"}
+            elif rewrite.mode == "full_rerun":
+                allowed |= {"rp_dispatch_scene"}
+            return allowed
+        if scene is not None and scene.cues.keys() == scene.reports.keys():
+            return frozenset({"rp_commit_scene"})
+        return frozenset()
 
     async def pre_tool_dispatch(self, call, context: PluginContext):
+        if self.novel is not None:
+            allowed = self._novel_phase_tools()
+            if call.name in allowed:
+                return
+            if allowed:
+                guidance = f"Use {', '.join(sorted(allowed))} at this stage."
+            elif not (self.binding and self.binding.session_store is not None):
+                guidance = "No active novel session is attached."
+            elif self.mode == "npc":
+                guidance = "Wait for a new cue before calling rp_report_scene."
+            elif self.story().pending is not None:
+                guidance = "Wait for all invited actors to report before calling rp_commit_scene."
+            else:
+                guidance = "Wait for a new director turn."
+            raise PluginBlockError(f"Tool {call.name!r} is unavailable. {guidance}")
         visibility = self.get_tool_visibility(context)
         if visibility is not None and call.name not in visibility.allowed_tools:
             raise PluginBlockError(f"Tool {call.name!r} is unavailable to the {self.mode} narrator")

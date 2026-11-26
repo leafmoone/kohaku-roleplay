@@ -47,9 +47,7 @@ def insert_roleplay_context(messages: list[dict], content: str) -> list[dict]:
 def insert_tail_context(messages: list[dict], tail_content: str) -> list[dict]:
     if not tail_content.strip():
         return messages
-    start = _conversation_start(messages)
-    index = next((i for i in range(len(messages) - 1, start - 1, -1) if messages[i].get("role") == "user"), len(messages))
-    return [*messages[:index], {"role": "user", "content": tail_content}, *messages[index:]]
+    return [*messages, {"role": "user", "content": tail_content}]
 
 
 def mount_persona(messages: list[dict], persona: Persona) -> list[dict]:

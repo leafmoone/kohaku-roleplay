@@ -1,5 +1,9 @@
 name: kohaku-roleplay
 version: 0.6.0
+framework: '>=2.2.2,<3.0.0'
+license: LicenseRef-KohakuTerrarium-1.0
+author: leafmoone
+repository: https://github.com/leafmoone/kohaku-roleplay
 description: >-
   Tavern character cards and session-scoped roleplay for KohakuTerrarium
   (https://github.com/Kohaku-Lab/KohakuTerrarium).
